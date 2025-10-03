@@ -58,10 +58,11 @@ public class DataSeeder implements CommandLineRunner {
         logger.info("Starting data seeding...");
         seedTenants();
         seedPortfolios();
-        seedClassifications();
-        seedTenantConfigurations();
         seedContactClassifications();
         seedManagementClassifications();
+        seedClassifications();
+        migrateLegacyManagementClassifications(); // MIGRAR clasificaciones antiguas al nuevo catálogo
+        seedTenantConfigurations();
         seedCampaigns();
         logger.info("Data seeding completed successfully!");
     }
@@ -375,5 +376,151 @@ public class DataSeeder implements CommandLineRunner {
             campaignRepository.save(campaign3);
             logger.info("Created Campaign: CAMP-003");
         }
+    }
+
+    /**
+     * MIGRACIÓN: Copia las clasificaciones antiguas de management_classifications
+     * al nuevo catálogo unificado (classification_catalog)
+     */
+    private void migrateLegacyManagementClassifications() {
+        logger.info("========================================");
+        logger.info("MIGRATING Legacy Management Classifications to New Catalog");
+        logger.info("========================================");
+
+        // Obtener todas las clasificaciones antiguas
+        var legacyClassifications = managementClassificationRepository.findAll();
+        int migrated = 0;
+        int skipped = 0;
+
+        for (ManagementClassification legacy : legacyClassifications) {
+            // Verificar si ya existe en el nuevo catálogo
+            if (classificationCatalogRepository.existsByCode(legacy.getCode())) {
+                logger.debug("Skipping {} - already exists in new catalog", legacy.getCode());
+                skipped++;
+                continue;
+            }
+
+            // Crear nueva clasificación en el catálogo
+            ClassificationCatalog newClassification = new ClassificationCatalog(
+                legacy.getCode(),
+                legacy.getLabel(),
+                ClassificationCatalog.ClassificationType.MANAGEMENT_TYPE
+            );
+
+            // Mapear colores basados en tipo
+            String color = determineColorForManagementType(legacy);
+            newClassification.setColorHex(color);
+
+            // Mapear iconos basados en tipo
+            String icon = determineIconForManagementType(legacy);
+            newClassification.setIconName(icon);
+
+            // Crear metadata JSON con los campos legacy
+            String metadata = String.format(
+                "{\"requiresPayment\":%b,\"requiresSchedule\":%b,\"requiresFollowUp\":%b}",
+                legacy.getRequiresPayment(),
+                legacy.getRequiresSchedule(),
+                legacy.getRequiresFollowUp()
+            );
+            newClassification.setMetadataSchema(metadata);
+
+            // Marcar como sistema (no editable fácilmente)
+            newClassification.setIsSystem(false); // Permitir edición para que el usuario pueda personalizar
+
+            // Orden de visualización
+            newClassification.setDisplayOrder(migrated * 10);
+
+            // Guardar
+            classificationCatalogRepository.save(newClassification);
+            logger.info("✓ Migrated: {} - {}", legacy.getCode(), legacy.getLabel());
+            migrated++;
+        }
+
+        logger.info("========================================");
+        logger.info("Migration Summary:");
+        logger.info("  - Migrated: {} classifications", migrated);
+        logger.info("  - Skipped (already exist): {}", skipped);
+        logger.info("  - Total Legacy: {}", legacyClassifications.size());
+        logger.info("========================================");
+    }
+
+    /**
+     * Determina el color apropiado basado en el tipo de gestión
+     */
+    private String determineColorForManagementType(ManagementClassification legacy) {
+        String code = legacy.getCode();
+
+        // Pagos exitosos - Verde
+        if (code.startsWith("PG") || code.equals("ACP") || code.equals("PPR")) {
+            return "#10B981"; // Verde
+        }
+
+        // Pagos parciales o convenios - Naranja
+        if (code.equals("PGP") || code.startsWith("CNV") || code.startsWith("C")) {
+            return "#F59E0B"; // Naranja
+        }
+
+        // Solicitudes - Azul
+        if (code.startsWith("S")) {
+            return "#3B82F6"; // Azul
+        }
+
+        // Problemas o rechazos - Rojo
+        if (code.startsWith("N") || code.startsWith("D") || code.equals("RCL") || code.equals("FRD")) {
+            return "#EF4444"; // Rojo
+        }
+
+        // Clientes agresivos o problemas - Púrpura
+        if (code.equals("AGR") || code.equals("NBL") || code.equals("LGL")) {
+            return "#8B5CF6"; // Púrpura
+        }
+
+        // Por defecto - Gris
+        return "#64748B";
+    }
+
+    /**
+     * Determina el icono apropiado basado en el tipo de gestión
+     */
+    private String determineIconForManagementType(ManagementClassification legacy) {
+        String code = legacy.getCode();
+
+        // Pagos
+        if (code.startsWith("PG") || code.equals("PPR")) {
+            return "dollar-sign";
+        }
+
+        // Acuerdos y convenios
+        if (code.equals("ACP") || code.startsWith("CNV") || code.startsWith("C")) {
+            return "handshake";
+        }
+
+        // Solicitudes
+        if (code.startsWith("S")) {
+            return "message-square";
+        }
+
+        // Disputas y problemas
+        if (code.startsWith("D") || code.startsWith("N")) {
+            return "alert-circle";
+        }
+
+        // Reclamos
+        if (code.equals("RCL") || code.equals("FRD")) {
+            return "alert-triangle";
+        }
+
+        // Calendario (requiere agendamiento)
+        if (legacy.getRequiresSchedule()) {
+            return "calendar";
+        }
+
+        // Agresivo
+        if (code.equals("AGR") || code.equals("NBL") || code.equals("LGL")) {
+            return "shield-alert";
+        }
+
+        // Por defecto
+        return "file-text";
     }
 }
