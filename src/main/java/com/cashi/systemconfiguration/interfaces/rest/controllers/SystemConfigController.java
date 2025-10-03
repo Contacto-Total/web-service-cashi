@@ -1,8 +1,10 @@
 package com.cashi.systemconfiguration.interfaces.rest.controllers;
 
+import com.cashi.systemconfiguration.application.internal.commandservices.PortfolioCommandServiceImpl;
 import com.cashi.systemconfiguration.application.internal.queryservices.SystemConfigQueryServiceImpl;
 import com.cashi.systemconfiguration.interfaces.rest.resources.CampaignResource;
 import com.cashi.systemconfiguration.interfaces.rest.resources.ContactClassificationResource;
+import com.cashi.systemconfiguration.interfaces.rest.resources.CreatePortfolioResource;
 import com.cashi.systemconfiguration.interfaces.rest.resources.ManagementClassificationResource;
 import com.cashi.systemconfiguration.interfaces.rest.resources.PortfolioResource;
 import com.cashi.systemconfiguration.interfaces.rest.resources.TenantResource;
@@ -18,6 +20,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -29,9 +32,12 @@ import java.util.List;
 public class SystemConfigController {
 
     private final SystemConfigQueryServiceImpl queryService;
+    private final PortfolioCommandServiceImpl portfolioCommandService;
 
-    public SystemConfigController(SystemConfigQueryServiceImpl queryService) {
+    public SystemConfigController(SystemConfigQueryServiceImpl queryService,
+                                 PortfolioCommandServiceImpl portfolioCommandService) {
         this.queryService = queryService;
+        this.portfolioCommandService = portfolioCommandService;
     }
 
     @Operation(
@@ -154,5 +160,31 @@ public class SystemConfigController {
                 .map(PortfolioResourceFromEntityAssembler::toResourceFromEntity)
                 .toList();
         return ResponseEntity.ok(resources);
+    }
+
+    @Operation(summary = "Crear nuevo portfolio/cartera", description = "Crea un nuevo portfolio o subcartera para un tenant")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "201", description = "Portfolio creado exitosamente"),
+        @ApiResponse(responseCode = "400", description = "Datos inválidos o portfolio duplicado"),
+        @ApiResponse(responseCode = "404", description = "Tenant o portfolio padre no encontrado")
+    })
+    @PostMapping("/portfolios")
+    public ResponseEntity<PortfolioResource> createPortfolio(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Datos del portfolio a crear")
+            @RequestBody CreatePortfolioResource resource) {
+        try {
+            var portfolio = portfolioCommandService.createPortfolio(
+                resource.tenantId(),
+                resource.portfolioCode(),
+                resource.portfolioName(),
+                resource.portfolioType(),
+                resource.parentPortfolioId(),
+                resource.description()
+            );
+            var portfolioResource = PortfolioResourceFromEntityAssembler.toResourceFromEntity(portfolio);
+            return ResponseEntity.status(HttpStatus.CREATED).body(portfolioResource);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        }
     }
 }
