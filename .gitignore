@@ -1,0 +1,31 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+# IDE
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+.metadata/
+.recommenders/
+
+# Spring Boot
+.DS_Store
+.classpath
+.project
+.settings/
+
+# Logs
+*.log
+logs/
+
+# OS
+Thumbs.db
+
+# Application properties (sensitive data)
+**/application-local.properties
+**/application-prod.properties
