@@ -8,12 +8,12 @@ public class UpdateManagementCommandFromResourceAssembler {
     public static UpdateManagementCommand toCommandFromResource(String managementId, UpdateManagementRequest resource) {
         return new UpdateManagementCommand(
                 managementId,
-                resource.contactResultCode(),
-                resource.contactResultDescription(),
-                resource.managementTypeCode(),
-                resource.managementTypeDescription(),
-                resource.managementTypeRequiresPayment(),
-                resource.managementTypeRequiresSchedule(),
+                resource.classificationCode(),
+                resource.classificationDescription(),
+                resource.typificationCode(),
+                resource.typificationDescription(),
+                resource.typificationRequiresPayment(),
+                resource.typificationRequiresSchedule(),
                 resource.observations()
         );
     }

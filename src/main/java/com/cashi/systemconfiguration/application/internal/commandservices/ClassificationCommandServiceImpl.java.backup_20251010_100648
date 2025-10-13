@@ -49,10 +49,7 @@ public class ClassificationCommandServiceImpl {
     @Transactional
     public ClassificationCatalog createClassification(String code, String name,
                                                      ClassificationCatalog.ClassificationType type,
-                                                     Long parentId, String description,
-                                                     Integer displayOrder, String iconName,
-                                                     String colorHex, String metadataSchema,
-                                                     String createdBy) {
+                                                     Long parentId, String createdBy) {
         if (classificationCatalogRepository.existsByCode(code)) {
             throw new IllegalArgumentException("Classification code already exists: " + code);
         }
@@ -64,12 +61,6 @@ public class ClassificationCommandServiceImpl {
         }
 
         ClassificationCatalog classification = new ClassificationCatalog(code, name, type, parent, null);
-        classification.setDescription(description);
-        classification.setDisplayOrder(displayOrder);
-        classification.setIconName(iconName);
-        classification.setColorHex(colorHex);
-        classification.setMetadataSchema(metadataSchema);
-
         ClassificationCatalog saved = classificationCatalogRepository.save(classification);
 
         // Audit
@@ -81,9 +72,7 @@ public class ClassificationCommandServiceImpl {
 
     @Transactional
     public ClassificationCatalog updateClassification(Long id, String name, String description,
-                                                     String iconName, String colorHex,
-                                                     Integer displayOrder, Boolean isActive,
-                                                     String metadataSchema, String changedBy) {
+                                                     String iconName, String colorHex, String changedBy) {
         ClassificationCatalog classification = classificationCatalogRepository.findById(id)
             .orElseThrow(() -> new IllegalArgumentException("Classification not found"));
 
@@ -93,9 +82,6 @@ public class ClassificationCommandServiceImpl {
         classification.setDescription(description);
         classification.setIconName(iconName);
         classification.setColorHex(colorHex);
-        classification.setDisplayOrder(displayOrder);
-        classification.setIsActive(isActive);
-        classification.setMetadataSchema(metadataSchema);
 
         ClassificationCatalog saved = classificationCatalogRepository.save(classification);
 

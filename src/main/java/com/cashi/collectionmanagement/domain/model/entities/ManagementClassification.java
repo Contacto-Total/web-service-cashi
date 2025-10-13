@@ -15,12 +15,12 @@ import java.time.LocalDateTime;
  * ManagementClassification - Vincula gestiones con clasificaciones multinivel
  * Soporta jerarquías de N niveles (nivel 1, 2, 3, ... N)
  */
-@Entity
-@Table(name = "management_classifications", indexes = {
-    @Index(name = "idx_mgmt_class_management", columnList = "management_id"),
-    @Index(name = "idx_mgmt_class_classification", columnList = "classification_id"),
-    @Index(name = "idx_mgmt_class_level", columnList = "management_id, hierarchy_level"),
-    @Index(name = "idx_mgmt_class_unique", columnList = "management_id, hierarchy_level", unique = true)
+@Entity(name = "ManagementClassificationEntity")
+@Table(name = "clasificaciones_gestion", indexes = {
+    @Index(name = "idx_clas_gest_gestion", columnList = "id_gestion"),
+    @Index(name = "idx_clas_gest_clasificacion", columnList = "id_clasificacion"),
+    @Index(name = "idx_clas_gest_nivel", columnList = "id_gestion, nivel_jerarquia"),
+    @Index(name = "idx_clas_gest_unico", columnList = "id_gestion, nivel_jerarquia", unique = true)
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -33,18 +33,18 @@ public class ManagementClassification {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "management_id", nullable = false)
+    @JoinColumn(name = "id_gestion", nullable = false)
     private Management management;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "classification_id", nullable = false)
+    @JoinColumn(name = "id_clasificacion", nullable = false)
     private ClassificationCatalog classification;
 
-    @Column(name = "hierarchy_level", nullable = false)
+    @Column(name = "nivel_jerarquia", nullable = false)
     private Integer hierarchyLevel;
 
     @CreatedDate
-    @Column(name = "selected_at", nullable = false, updatable = false)
+    @Column(name = "seleccionado_en", nullable = false, updatable = false)
     private LocalDateTime selectedAt;
 
     public ManagementClassification(Management management, ClassificationCatalog classification,

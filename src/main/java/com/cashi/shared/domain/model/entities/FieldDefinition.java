@@ -15,9 +15,9 @@ import java.time.LocalDateTime;
  * Defines all possible fields that can be enabled per tenant
  */
 @Entity
-@Table(name = "field_definitions", indexes = {
-    @Index(name = "idx_field_code", columnList = "field_code", unique = true),
-    @Index(name = "idx_field_category", columnList = "field_category")
+@Table(name = "definiciones_campos", indexes = {
+    @Index(name = "idx_codigo_campo", columnList = "codigo_campo", unique = true),
+    @Index(name = "idx_categoria_campo", columnList = "categoria_campo")
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -29,40 +29,40 @@ public class FieldDefinition {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "field_code", unique = true, nullable = false, length = 100)
+    @Column(name = "codigo_campo", unique = true, nullable = false, length = 100)
     private String fieldCode;
 
-    @Column(name = "field_name", nullable = false, length = 255)
+    @Column(name = "nombre_campo", nullable = false, length = 255)
     private String fieldName;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "field_type", nullable = false, length = 50)
+    @Column(name = "tipo_campo", nullable = false, length = 50)
     private FieldType fieldType;
 
-    @Column(name = "field_category", length = 100)
+    @Column(name = "categoria_campo", length = 100)
     private String fieldCategory;
 
-    @Column(name = "description", columnDefinition = "TEXT")
+    @Column(name = "descripcion", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "default_value", length = 500)
+    @Column(name = "valor_predeterminado", length = 500)
     private String defaultValue;
 
-    @Column(name = "validation_rules", columnDefinition = "JSON")
+    @Column(name = "reglas_validacion", columnDefinition = "JSON")
     private String validationRules;
 
-    @Column(name = "display_order")
+    @Column(name = "orden_visualizacion")
     private Integer displayOrder;
 
-    @Column(name = "is_system_field", nullable = false)
+    @Column(name = "es_campo_sistema", nullable = false)
     private Boolean isSystemField = false;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
     public enum FieldType {

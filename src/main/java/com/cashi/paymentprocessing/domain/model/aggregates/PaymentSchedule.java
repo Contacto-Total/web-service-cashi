@@ -13,7 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "payment_schedules")
+@Table(name = "cronogramas_pago")
 @Getter
 @NoArgsConstructor
 public class PaymentSchedule extends AggregateRoot {
@@ -21,20 +21,26 @@ public class PaymentSchedule extends AggregateRoot {
     @Embedded
     private PaymentScheduleId scheduleId;
 
+    @Column(name = "id_cliente")
     private String customerId;
 
+    @Column(name = "id_gestion")
     private String managementId;
 
+    @Column(name = "monto_total")
     private BigDecimal totalAmount;
 
+    @Column(name = "numero_cuotas")
     private Integer numberOfInstallments;
 
+    @Column(name = "fecha_inicio")
     private LocalDate startDate;
 
+    @Column(name = "esta_activo")
     private Boolean isActive;
 
     @OneToMany(cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
-    @JoinColumn(name = "payment_schedule_id")
+    @JoinColumn(name = "id_cronograma_pago")
     private List<Installment> installments = new ArrayList<>();
 
     public PaymentSchedule(String customerId, String managementId, BigDecimal totalAmount, Integer numberOfInstallments, LocalDate startDate) {

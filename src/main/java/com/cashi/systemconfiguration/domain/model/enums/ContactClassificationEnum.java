@@ -1,16 +1,17 @@
 package com.cashi.systemconfiguration.domain.model.enums;
 
+import lombok.Getter;
+
+@Getter
 public enum ContactClassificationEnum {
-    CPC("CPC", "Contacto con Cliente", true),
-    CTT("CTT", "Contacto con Tercero", true),
-    NCL("NCL", "No Contesta", false),
-    BZN("BZN", "Buzón de Voz", false),
-    OCP("OCP", "Ocupado", false),
-    FTN("FTN", "Fuera de Tono", false),
-    NEQ("NEQ", "Número Equivocado", false),
-    TEL("TEL", "Teléfono Inválido", false),
-    CLG("CLG", "Cliente Colgó", false),
-    RCH("RCH", "Rechazó Llamada", false);
+    CPC("CPC", "Contacto Personal con Cliente", true),
+    CTT("CTT", "Contacto con Terceros", true),
+    NCL("NCL", "No Contacto por Línea Ocupada", false),
+    NCC("NCC", "No Contacto por Colgó", false),
+    NCN("NCN", "No Contacto por Número Equivocado", false),
+    NCB("NCB", "No Contacto por Buzón de Voz", false),
+    NCA("NCA", "No Contacto por Apagado", false),
+    BZN("BZN", "Buzón de Voz", false);
 
     private final String code;
     private final String description;
@@ -20,17 +21,5 @@ public enum ContactClassificationEnum {
         this.code = code;
         this.description = description;
         this.isSuccessful = isSuccessful;
-    }
-
-    public String getCode() {
-        return code;
-    }
-
-    public String getDescription() {
-        return description;
-    }
-
-    public Boolean getIsSuccessful() {
-        return isSuccessful;
     }
 }

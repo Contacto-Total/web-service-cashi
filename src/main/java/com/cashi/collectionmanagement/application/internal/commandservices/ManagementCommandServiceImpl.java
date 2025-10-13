@@ -9,46 +9,102 @@ import com.cashi.collectionmanagement.domain.model.valueobjects.ManagementType;
 import com.cashi.collectionmanagement.domain.model.valueobjects.PaymentMethod;
 import com.cashi.collectionmanagement.domain.services.ManagementCommandService;
 import com.cashi.collectionmanagement.infrastructure.persistence.jpa.repositories.ManagementRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
 @Service
 public class ManagementCommandServiceImpl implements ManagementCommandService {
 
     private final ManagementRepository repository;
+    private final ObjectMapper objectMapper;
 
-    public ManagementCommandServiceImpl(ManagementRepository repository) {
+    public ManagementCommandServiceImpl(ManagementRepository repository, ObjectMapper objectMapper) {
         this.repository = repository;
+        this.objectMapper = objectMapper;
     }
 
     @Override
     public Management handle(CreateManagementCommand command) {
+        System.out.println("========================================");
+        System.out.println("📝 INICIANDO CREACIÓN DE GESTIÓN");
+        System.out.println("========================================");
+        System.out.println("📋 Tabla destino: gestiones");
+        System.out.println("👤 Cliente ID: " + command.customerId());
+        System.out.println("👨‍💼 Asesor ID: " + command.advisorId());
+        System.out.println("📢 Campaña ID: " + command.campaignId());
+
         var management = new Management(
             command.customerId(),
             command.advisorId(),
             command.campaignId()
         );
 
-        if (command.contactResultCode() != null) {
-            management.setContactResult(new ContactResult(
-                command.contactResultCode(),
-                command.contactResultDescription()
-            ));
+        // Clasificación: Categoría/grupo al que pertenece la tipificación
+        if (command.classificationCode() != null) {
+            System.out.println("📁 Clasificación (Categoría):");
+            System.out.println("   - Código: " + command.classificationCode());
+            System.out.println("   - Descripción: " + command.classificationDescription());
+            System.out.println("   - Columnas BD: codigo_clasificacion, descripcion_clasificacion");
+
+            management.setClassification(
+                command.classificationCode(),
+                command.classificationDescription()
+            );
         }
 
-        if (command.managementTypeCode() != null) {
-            management.setManagementType(new ManagementType(
-                command.managementTypeCode(),
-                command.managementTypeDescription(),
-                command.managementTypeRequiresPayment(),
-                command.managementTypeRequiresSchedule()
-            ));
+        // Tipificación: Código específico/hoja (último nivel en jerarquía)
+        if (command.typificationCode() != null) {
+            System.out.println("🏷️  Tipificación (Hoja específica):");
+            System.out.println("   - Código: " + command.typificationCode());
+            System.out.println("   - Descripción: " + command.typificationDescription());
+            System.out.println("   - Requiere Pago: " + command.typificationRequiresPayment());
+            System.out.println("   - Requiere Cronograma: " + command.typificationRequiresSchedule());
+            System.out.println("   - Columnas BD: codigo_tipificacion, descripcion_tipificacion, tipificacion_requiere_pago, tipificacion_requiere_cronograma");
+
+            management.setTypification(
+                command.typificationCode(),
+                command.typificationDescription(),
+                command.typificationRequiresPayment(),
+                command.typificationRequiresSchedule()
+            );
         }
 
         if (command.observations() != null) {
+            System.out.println("💬 Observaciones: " + command.observations());
+            System.out.println("   - Columna BD: observaciones");
             management.setObservations(command.observations());
         }
 
-        return repository.save(management);
+        // Serializar campos dinámicos a JSON
+        if (command.dynamicFields() != null && !command.dynamicFields().isEmpty()) {
+            try {
+                String dynamicFieldsJson = objectMapper.writeValueAsString(command.dynamicFields());
+                System.out.println("🔧 Campos Dinámicos:");
+                System.out.println("   - Cantidad de campos: " + command.dynamicFields().size());
+                System.out.println("   - Columna BD: campos_dinamicos_json");
+                System.out.println("   - JSON guardado:");
+                System.out.println(dynamicFieldsJson);
+
+                management.setDynamicFieldsJson(dynamicFieldsJson);
+            } catch (Exception e) {
+                System.err.println("❌ Error serializando campos dinámicos: " + e.getMessage());
+                e.printStackTrace();
+            }
+        } else {
+            System.out.println("ℹ️  No hay campos dinámicos para guardar");
+        }
+
+        System.out.println("----------------------------------------");
+        System.out.println("💾 Guardando en base de datos...");
+        Management savedManagement = repository.save(management);
+
+        System.out.println("✅ GESTIÓN GUARDADA EXITOSAMENTE");
+        System.out.println("   - ID Gestión: " + savedManagement.getManagementId().getManagementId());
+        System.out.println("   - Tabla: gestiones");
+        System.out.println("   - Fecha: " + savedManagement.getManagementDate());
+        System.out.println("========================================");
+
+        return savedManagement;
     }
 
     @Override
@@ -56,19 +112,28 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
         var management = repository.findByManagementId_ManagementId(command.managementId())
             .orElseThrow(() -> new IllegalArgumentException("Management not found: " + command.managementId()));
 
-        var contactResult = new ContactResult(
-            command.contactResultCode(),
-            command.contactResultDescription()
-        );
+        // Actualizar Clasificación
+        if (command.classificationCode() != null) {
+            management.setClassification(
+                command.classificationCode(),
+                command.classificationDescription()
+            );
+        }
 
-        var managementType = new ManagementType(
-            command.managementTypeCode(),
-            command.managementTypeDescription(),
-            command.managementTypeRequiresPayment(),
-            command.managementTypeRequiresSchedule()
-        );
+        // Actualizar Tipificación
+        if (command.typificationCode() != null) {
+            management.setTypification(
+                command.typificationCode(),
+                command.typificationDescription(),
+                command.typificationRequiresPayment(),
+                command.typificationRequiresSchedule()
+            );
+        }
 
-        management.updateManagement(contactResult, managementType, command.observations());
+        // Actualizar observaciones
+        if (command.observations() != null) {
+            management.setObservations(command.observations());
+        }
 
         return repository.save(management);
     }

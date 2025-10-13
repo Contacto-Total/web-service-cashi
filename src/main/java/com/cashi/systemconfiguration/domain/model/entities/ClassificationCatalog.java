@@ -15,11 +15,11 @@ import java.time.LocalDateTime;
  * Soporta jerarquías de N niveles (nivel 1, 2, 3, ... N)
  */
 @Entity
-@Table(name = "classification_catalog", indexes = {
-    @Index(name = "idx_classification_code", columnList = "code", unique = true),
-    @Index(name = "idx_classification_type", columnList = "classification_type"),
-    @Index(name = "idx_classification_parent", columnList = "parent_classification_id"),
-    @Index(name = "idx_classification_hierarchy", columnList = "hierarchy_level, display_order")
+@Table(name = "catalogo_clasificaciones", indexes = {
+    @Index(name = "idx_codigo_clasificacion", columnList = "codigo", unique = true),
+    @Index(name = "idx_tipo_clasificacion", columnList = "tipo_clasificacion"),
+    @Index(name = "idx_clasificacion_padre", columnList = "id_clasificacion_padre"),
+    @Index(name = "idx_jerarquia_clasificacion", columnList = "nivel_jerarquia, orden_visualizacion")
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -31,56 +31,56 @@ public class ClassificationCatalog {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(unique = true, nullable = false, length = 20)
+    @Column(name = "codigo", unique = true, nullable = false, length = 20)
     private String code;
 
-    @Column(nullable = false, length = 255)
+    @Column(name = "nombre", nullable = false, length = 255)
     private String name;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "classification_type", nullable = false, length = 50)
+    @Column(name = "tipo_clasificacion", nullable = false, length = 50)
     private ClassificationType classificationType;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "parent_classification_id")
+    @JoinColumn(name = "id_clasificacion_padre")
     private ClassificationCatalog parentClassification;
 
-    @Column(name = "hierarchy_level", nullable = false)
+    @Column(name = "nivel_jerarquia", nullable = false)
     private Integer hierarchyLevel;
 
-    @Column(name = "hierarchy_path", length = 1000)
+    @Column(name = "ruta_jerarquia", length = 1000)
     private String hierarchyPath;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(name = "descripcion", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "display_order")
+    @Column(name = "orden_visualizacion")
     private Integer displayOrder;
 
-    @Column(name = "icon_name", length = 100)
+    @Column(name = "nombre_icono", length = 100)
     private String iconName;
 
-    @Column(name = "color_hex", length = 7)
+    @Column(name = "color_hexadecimal", length = 7)
     private String colorHex;
 
-    @Column(name = "is_system", nullable = false)
+    @Column(name = "es_sistema", nullable = false)
     private Boolean isSystem = false;
 
-    @Column(name = "metadata_schema", columnDefinition = "JSON")
+    @Column(name = "esquema_metadatos", columnDefinition = "JSON")
     private String metadataSchema;
 
-    @Column(name = "is_active", nullable = false)
+    @Column(name = "esta_activo", nullable = false)
     private Boolean isActive = true;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
-    @Column(name = "deleted_at")
+    @Column(name = "fecha_eliminacion")
     private LocalDateTime deletedAt;
 
     public enum ClassificationType {
@@ -88,6 +88,7 @@ public class ClassificationCatalog {
         MANAGEMENT_TYPE,     // Tipo de gestión (ACP, RCP, etc.)
         PAYMENT_TYPE,        // Tipo de pago
         COMPLAINT_TYPE,      // Tipo de reclamo
+        PAYMENT_SCHEDULE,    // Cronograma de pagos
         CUSTOM               // Personalizados por tenant
     }
 

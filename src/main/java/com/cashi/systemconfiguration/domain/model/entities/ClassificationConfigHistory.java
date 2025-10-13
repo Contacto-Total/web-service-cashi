@@ -14,11 +14,11 @@ import java.time.LocalDateTime;
  * Permite trazabilidad y rollback
  */
 @Entity
-@Table(name = "classification_config_history", indexes = {
-    @Index(name = "idx_history_entity", columnList = "entity_type, entity_id"),
-    @Index(name = "idx_history_tenant", columnList = "tenant_id"),
-    @Index(name = "idx_history_date", columnList = "created_at DESC"),
-    @Index(name = "idx_history_user", columnList = "changed_by")
+@Table(name = "historial_configuracion_clasificacion", indexes = {
+    @Index(name = "idx_historial_entidad", columnList = "tipo_entidad, id_entidad"),
+    @Index(name = "idx_historial_inquilino", columnList = "id_inquilino"),
+    @Index(name = "idx_historial_fecha", columnList = "fecha_creacion DESC"),
+    @Index(name = "idx_historial_usuario", columnList = "cambiado_por")
 })
 @Getter
 @Setter
@@ -30,43 +30,43 @@ public class ClassificationConfigHistory {
     private Long id;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "entity_type", nullable = false, length = 50)
+    @Column(name = "tipo_entidad", nullable = false, length = 50)
     private EntityType entityType;
 
-    @Column(name = "entity_id", nullable = false)
+    @Column(name = "id_entidad", nullable = false)
     private Long entityId;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "tenant_id")
+    @JoinColumn(name = "id_inquilino")
     private Tenant tenant;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "portfolio_id")
+    @JoinColumn(name = "id_cartera")
     private Portfolio portfolio;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "change_type", nullable = false, length = 50)
+    @Column(name = "tipo_cambio", nullable = false, length = 50)
     private ChangeType changeType;
 
-    @Column(name = "changed_by", nullable = false, length = 100)
+    @Column(name = "cambiado_por", nullable = false, length = 100)
     private String changedBy;
 
-    @Column(name = "previous_value", columnDefinition = "JSON")
+    @Column(name = "valor_previo", columnDefinition = "JSON")
     private String previousValue;
 
-    @Column(name = "new_value", columnDefinition = "JSON")
+    @Column(name = "valor_nuevo", columnDefinition = "JSON")
     private String newValue;
 
-    @Column(name = "change_reason", columnDefinition = "TEXT")
+    @Column(name = "razon_cambio", columnDefinition = "TEXT")
     private String changeReason;
 
-    @Column(name = "ip_address", length = 45)
+    @Column(name = "direccion_ip", length = 45)
     private String ipAddress;
 
-    @Column(name = "user_agent", length = 500)
+    @Column(name = "agente_usuario", length = 500)
     private String userAgent;
 
-    @Column(name = "created_at", nullable = false)
+    @Column(name = "fecha_creacion", nullable = false)
     private LocalDateTime createdAt;
 
     public enum EntityType {

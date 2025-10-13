@@ -12,6 +12,7 @@ public record ClassificationCatalogResource(
     Integer displayOrder,
     String iconName,
     String colorHex,
+    String metadataSchema,
     Boolean isSystem,
     Boolean isActive
 ) {}

@@ -24,5 +24,7 @@ public record CreateClassificationCommand(
 
     String iconName,
 
-    String colorHex
+    String colorHex,
+
+    String metadataSchema
 ) {}

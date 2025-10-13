@@ -8,5 +8,6 @@ public record UpdateClassificationConfigCommand(
     Boolean requiresComment,
     Integer minCommentLength,
     Boolean requiresAttachment,
-    Boolean requiresFollowupDate
+    Boolean requiresFollowupDate,
+    String metadataSchema
 ) {}

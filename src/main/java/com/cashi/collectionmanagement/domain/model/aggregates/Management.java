@@ -19,13 +19,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "managements", indexes = {
-    @Index(name = "idx_mgmt_tenant", columnList = "tenant_id"),
-    @Index(name = "idx_mgmt_portfolio", columnList = "portfolio_id"),
-    @Index(name = "idx_mgmt_campaign", columnList = "campaign_id"),
-    @Index(name = "idx_mgmt_customer", columnList = "customer_id"),
-    @Index(name = "idx_mgmt_advisor", columnList = "advisor_id"),
-    @Index(name = "idx_mgmt_date", columnList = "management_date")
+@Table(name = "gestiones", indexes = {
+    @Index(name = "idx_gest_inquilino", columnList = "id_inquilino"),
+    @Index(name = "idx_gest_cartera", columnList = "id_cartera"),
+    @Index(name = "idx_gest_campana", columnList = "id_campana"),
+    @Index(name = "idx_gest_cliente", columnList = "id_cliente"),
+    @Index(name = "idx_gest_asesor", columnList = "id_asesor"),
+    @Index(name = "idx_gest_fecha", columnList = "fecha_gestion")
 })
 @Getter
 @NoArgsConstructor
@@ -36,55 +36,65 @@ public class Management extends AggregateRoot {
 
     // Multi-tenant fields (nullable for backward compatibility)
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "tenant_id")
+    @JoinColumn(name = "id_inquilino")
     private Tenant tenant;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "portfolio_id")
+    @JoinColumn(name = "id_cartera")
     private Portfolio portfolio;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "campaign_id")
+    @JoinColumn(name = "id_campana")
     private Campaign campaign;
 
+    @Column(name = "id_cliente")
     private String customerId;
 
+    @Column(name = "id_asesor")
     private String advisorId;
 
-    @Deprecated(forRemoval = true)
-    @Column(name = "legacy_campaign_id")
+    @Column(name = "id_campana_legacy")
     private String campaignId;
 
+    @Column(name = "fecha_gestion")
     private LocalDateTime managementDate;
 
-    @Embedded
-    @AttributeOverrides({
-        @AttributeOverride(name = "code", column = @Column(name = "contact_result_code")),
-        @AttributeOverride(name = "description", column = @Column(name = "contact_result_description"))
-    })
-    private ContactResult contactResult;
+    // CLASIFICACIÓN: Categoría/grupo al que pertenece la tipificación
+    @Column(name = "codigo_clasificacion", length = 50)
+    private String classificationCode;
 
-    @Embedded
-    @AttributeOverrides({
-        @AttributeOverride(name = "code", column = @Column(name = "management_type_code")),
-        @AttributeOverride(name = "description", column = @Column(name = "management_type_description")),
-        @AttributeOverride(name = "requiresPayment", column = @Column(name = "management_type_requires_payment")),
-        @AttributeOverride(name = "requiresSchedule", column = @Column(name = "management_type_requires_schedule"))
-    })
-    private ManagementType managementType;
+    @Column(name = "descripcion_clasificacion", length = 255)
+    private String classificationDescription;
+
+    // TIPIFICACIÓN: Código específico/hoja (último nivel en jerarquía)
+    @Column(name = "codigo_tipificacion", length = 50)
+    private String typificationCode;
+
+    @Column(name = "descripcion_tipificacion", length = 255)
+    private String typificationDescription;
+
+    @Column(name = "tipificacion_requiere_pago")
+    private Boolean typificationRequiresPayment;
+
+    @Column(name = "tipificacion_requiere_cronograma")
+    private Boolean typificationRequiresSchedule;
 
     @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
-    @JoinColumn(name = "call_detail_id")
+    @JoinColumn(name = "id_detalle_llamada")
     private CallDetail callDetail;
 
     @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
-    @JoinColumn(name = "payment_detail_id")
+    @JoinColumn(name = "id_detalle_pago")
     private PaymentDetail paymentDetail;
 
-    @Column(length = 2000)
+    @Column(name = "observaciones", length = 2000)
     private String observations;
 
-    // Dynamic fields for multi-tenant support (EAV pattern)
+    // Campos dinámicos en formato JSON (más simple y flexible)
+    @Column(name = "campos_dinamicos_json", columnDefinition = "JSON")
+    private String dynamicFieldsJson;
+
+    // Dynamic fields for multi-tenant support (EAV pattern - legacy)
     @OneToMany(mappedBy = "management", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<ManagementDynamicField> dynamicFields = new ArrayList<>();
 
@@ -152,14 +162,6 @@ public class Management extends AggregateRoot {
         classifications.clear();
     }
 
-    public void setContactResult(ContactResult contactResult) {
-        this.contactResult = contactResult;
-    }
-
-    public void setManagementType(ManagementType managementType) {
-        this.managementType = managementType;
-    }
-
     public void setCallDetail(CallDetail callDetail) {
         this.callDetail = callDetail;
     }
@@ -172,9 +174,21 @@ public class Management extends AggregateRoot {
         this.observations = observations;
     }
 
-    public void updateManagement(ContactResult contactResult, ManagementType managementType, String observations) {
-        this.contactResult = contactResult;
-        this.managementType = managementType;
-        this.observations = observations;
+    public void setDynamicFieldsJson(String dynamicFieldsJson) {
+        this.dynamicFieldsJson = dynamicFieldsJson;
     }
+
+    // New setters for Classification and Typification
+    public void setClassification(String code, String description) {
+        this.classificationCode = code;
+        this.classificationDescription = description;
+    }
+
+    public void setTypification(String code, String description, Boolean requiresPayment, Boolean requiresSchedule) {
+        this.typificationCode = code;
+        this.typificationDescription = description;
+        this.typificationRequiresPayment = requiresPayment;
+        this.typificationRequiresSchedule = requiresSchedule;
+    }
+
 }

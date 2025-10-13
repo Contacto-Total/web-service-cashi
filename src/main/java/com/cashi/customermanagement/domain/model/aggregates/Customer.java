@@ -15,36 +15,36 @@ import java.time.LocalDate;
  * Customer Aggregate Root
  */
 @Entity
-@Table(name = "customers")
+@Table(name = "clientes")
 @Getter
 @NoArgsConstructor
 public class Customer extends AggregateRoot {
 
-    @Column(name = "customer_id", unique = true, nullable = false, length = 36)
+    @Column(name = "id_cliente", unique = true, nullable = false, length = 36)
     private String customerId;
 
-    @Column(name = "full_name", nullable = false)
+    @Column(name = "nombre_completo", nullable = false)
     private String fullName;
 
     @Embedded
     private DocumentNumber documentNumber;
 
-    @Column(name = "birth_date")
+    @Column(name = "fecha_nacimiento")
     private LocalDate birthDate;
 
-    @Column(name = "age")
+    @Column(name = "edad")
     private Integer age;
 
     @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY)
-    @JoinColumn(name = "contact_info_id")
+    @JoinColumn(name = "id_informacion_contacto")
     private ContactInfo contactInfo;
 
     @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY)
-    @JoinColumn(name = "account_info_id")
+    @JoinColumn(name = "id_informacion_cuenta")
     private AccountInfo accountInfo;
 
     @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY)
-    @JoinColumn(name = "debt_info_id")
+    @JoinColumn(name = "id_informacion_deuda")
     private DebtInfo debtInfo;
 
     public Customer(String customerId, String fullName, DocumentNumber documentNumber,

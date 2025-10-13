@@ -8,7 +8,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 @Entity
-@Table(name = "customer_account_info")
+@Table(name = "informacion_cuenta")
 @Getter
 @NoArgsConstructor
 public class AccountInfo {
@@ -17,22 +17,22 @@ public class AccountInfo {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "account_number", nullable = false, length = 20)
+    @Column(name = "numero_cuenta", nullable = false, length = 20)
     private String accountNumber;
 
-    @Column(name = "product_type", nullable = false)
+    @Column(name = "tipo_producto", nullable = false)
     private String productType;
 
-    @Column(name = "disbursement_date")
+    @Column(name = "fecha_desembolso")
     private LocalDate disbursementDate;
 
-    @Column(name = "original_amount", precision = 10, scale = 2)
+    @Column(name = "monto_original", precision = 10, scale = 2)
     private BigDecimal originalAmount;
 
-    @Column(name = "term_months")
+    @Column(name = "plazo_meses")
     private Integer termMonths;
 
-    @Column(name = "interest_rate", precision = 5, scale = 2)
+    @Column(name = "tasa_interes", precision = 5, scale = 2)
     private BigDecimal interestRate;
 
     public AccountInfo(String accountNumber, String productType, LocalDate disbursementDate,

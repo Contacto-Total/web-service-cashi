@@ -15,9 +15,9 @@ import java.time.LocalDateTime;
  * Multi-tenant isolation at the root level
  */
 @Entity
-@Table(name = "tenants", indexes = {
-    @Index(name = "idx_tenant_code", columnList = "tenant_code", unique = true),
-    @Index(name = "idx_tenant_active", columnList = "is_active")
+@Table(name = "inquilinos", indexes = {
+    @Index(name = "idx_codigo_inquilino", columnList = "codigo_inquilino", unique = true),
+    @Index(name = "idx_inquilino_activo", columnList = "esta_activo")
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -29,48 +29,48 @@ public class Tenant {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "tenant_code", unique = true, nullable = false, length = 50)
+    @Column(name = "codigo_inquilino", unique = true, nullable = false, length = 50)
     private String tenantCode;
 
-    @Column(name = "tenant_name", nullable = false, length = 255)
+    @Column(name = "nombre_inquilino", nullable = false, length = 255)
     private String tenantName;
 
-    @Column(name = "business_name", length = 255)
+    @Column(name = "razon_social", length = 255)
     private String businessName;
 
-    @Column(name = "tax_id", length = 50)
+    @Column(name = "numero_fiscal", length = 50)
     private String taxId;
 
-    @Column(name = "country_code", length = 3)
+    @Column(name = "codigo_pais", length = 3)
     private String countryCode;
 
-    @Column(name = "timezone", length = 50)
+    @Column(name = "zona_horaria", length = 50)
     private String timezone;
 
-    @Column(name = "is_active", nullable = false)
+    @Column(name = "esta_activo", nullable = false)
     private Boolean isActive = true;
 
-    @Column(name = "max_users")
+    @Column(name = "maximo_usuarios")
     private Integer maxUsers;
 
-    @Column(name = "max_concurrent_sessions")
+    @Column(name = "maximo_sesiones_concurrentes")
     private Integer maxConcurrentSessions;
 
-    @Column(name = "subscription_tier", length = 50)
+    @Column(name = "nivel_suscripcion", length = 50)
     private String subscriptionTier;
 
-    @Column(name = "subscription_expires_at")
+    @Column(name = "fecha_expiracion_suscripcion")
     private LocalDateTime subscriptionExpiresAt;
 
-    @Column(name = "config_json", columnDefinition = "JSON")
+    @Column(name = "configuracion_json", columnDefinition = "JSON")
     private String configJson;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
     public Tenant(String tenantCode, String tenantName) {

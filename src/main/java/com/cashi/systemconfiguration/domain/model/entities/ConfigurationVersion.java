@@ -16,11 +16,11 @@ import java.time.LocalDateTime;
  * Permite snapshots y rollback completo
  */
 @Entity
-@Table(name = "configuration_versions", indexes = {
-    @Index(name = "idx_version_tenant", columnList = "tenant_id"),
-    @Index(name = "idx_version_portfolio", columnList = "portfolio_id"),
-    @Index(name = "idx_version_number", columnList = "tenant_id, portfolio_id, version_number", unique = true),
-    @Index(name = "idx_version_active", columnList = "tenant_id, portfolio_id, is_active")
+@Table(name = "versiones_configuracion", indexes = {
+    @Index(name = "idx_version_inquilino", columnList = "id_inquilino"),
+    @Index(name = "idx_version_cartera", columnList = "id_cartera"),
+    @Index(name = "idx_version_numero", columnList = "id_inquilino, id_cartera, numero_version", unique = true),
+    @Index(name = "idx_version_activo", columnList = "id_inquilino, id_cartera, esta_activo")
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -33,39 +33,39 @@ public class ConfigurationVersion {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "tenant_id", nullable = false)
+    @JoinColumn(name = "id_inquilino", nullable = false)
     private Tenant tenant;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "portfolio_id")
+    @JoinColumn(name = "id_cartera")
     private Portfolio portfolio;
 
-    @Column(name = "version_number", nullable = false)
+    @Column(name = "numero_version", nullable = false)
     private Integer versionNumber;
 
-    @Column(name = "version_name", nullable = false, length = 255)
+    @Column(name = "nombre_version", nullable = false, length = 255)
     private String versionName;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(name = "descripcion", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "is_active", nullable = false)
+    @Column(name = "esta_activo", nullable = false)
     private Boolean isActive = false;
 
-    @Column(name = "snapshot_data", columnDefinition = "LONGTEXT")
+    @Column(name = "datos_snapshot", columnDefinition = "LONGTEXT")
     private String snapshotData;
 
-    @Column(name = "created_by", nullable = false, length = 100)
+    @Column(name = "creado_por", nullable = false, length = 100)
     private String createdBy;
 
-    @Column(name = "activated_at")
+    @Column(name = "activado_en")
     private LocalDateTime activatedAt;
 
-    @Column(name = "activated_by", length = 100)
+    @Column(name = "activado_por", length = 100)
     private String activatedBy;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     public ConfigurationVersion(Tenant tenant, Portfolio portfolio,

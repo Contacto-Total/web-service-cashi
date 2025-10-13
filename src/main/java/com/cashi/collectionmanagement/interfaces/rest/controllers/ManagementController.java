@@ -37,9 +37,39 @@ public class ManagementController {
     })
     @PostMapping
     public ResponseEntity<ManagementResource> createManagement(@RequestBody CreateManagementRequest request) {
+        System.out.println("\n");
+        System.out.println("🌐 ========================================");
+        System.out.println("🌐 REQUEST RECIBIDO EN CONTROLLER");
+        System.out.println("🌐 Endpoint: POST /api/v1/managements");
+        System.out.println("🌐 ========================================");
+        System.out.println("📦 Request Body:");
+        System.out.println("   - customerId: " + request.customerId());
+        System.out.println("   - advisorId: " + request.advisorId());
+        System.out.println("   - campaignId: " + request.campaignId());
+        System.out.println("   - classificationCode: " + request.classificationCode());
+        System.out.println("   - typificationCode: " + request.typificationCode());
+        System.out.println("   - observations: " + request.observations());
+
+        if (request.dynamicFields() != null && !request.dynamicFields().isEmpty()) {
+            System.out.println("   - dynamicFields: " + request.dynamicFields().size() + " campos");
+            request.dynamicFields().forEach((key, value) -> {
+                System.out.println("      • " + key + " = " + value);
+            });
+        } else {
+            System.out.println("   - dynamicFields: null o vacío");
+        }
+        System.out.println("🌐 ========================================\n");
+
         var command = CreateManagementCommandFromResourceAssembler.toCommandFromResource(request);
         var management = commandService.handle(command);
         var resource = ManagementResourceFromEntityAssembler.toResourceFromEntity(management);
+
+        System.out.println("🌐 ========================================");
+        System.out.println("🌐 RESPONSE ENVIADO AL FRONTEND");
+        System.out.println("🌐 HTTP Status: 201 CREATED");
+        System.out.println("🌐 Management ID: " + resource.managementId());
+        System.out.println("🌐 ========================================\n");
+
         return new ResponseEntity<>(resource, HttpStatus.CREATED);
     }
 

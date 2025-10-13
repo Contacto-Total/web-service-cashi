@@ -10,13 +10,15 @@ public class CreateManagementCommandFromResourceAssembler {
                 resource.customerId(),
                 resource.advisorId(),
                 resource.campaignId(),
-                resource.contactResultCode(),
-                resource.contactResultDescription(),
-                resource.managementTypeCode(),
-                resource.managementTypeDescription(),
-                resource.managementTypeRequiresPayment(),
-                resource.managementTypeRequiresSchedule(),
-                resource.observations()
+                // Clasificación y Tipificación
+                resource.classificationCode(),
+                resource.classificationDescription(),
+                resource.typificationCode(),
+                resource.typificationDescription(),
+                resource.typificationRequiresPayment(),
+                resource.typificationRequiresSchedule(),
+                resource.observations(),
+                resource.dynamicFields()
         );
     }
 }

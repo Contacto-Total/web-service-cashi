@@ -8,7 +8,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 @Entity
-@Table(name = "customer_debt_info")
+@Table(name = "informacion_deuda")
 @Getter
 @NoArgsConstructor
 public class DebtInfo {
@@ -17,28 +17,28 @@ public class DebtInfo {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "capital_balance", precision = 10, scale = 2)
+    @Column(name = "saldo_capital", precision = 10, scale = 2)
     private BigDecimal capitalBalance;
 
-    @Column(name = "overdue_interest", precision = 10, scale = 2)
+    @Column(name = "interes_vencido", precision = 10, scale = 2)
     private BigDecimal overdueInterest;
 
-    @Column(name = "accumulated_late_fees", precision = 10, scale = 2)
+    @Column(name = "moras_acumuladas", precision = 10, scale = 2)
     private BigDecimal accumulatedLateFees;
 
-    @Column(name = "collection_fees", precision = 10, scale = 2)
+    @Column(name = "gastos_cobranza", precision = 10, scale = 2)
     private BigDecimal collectionFees;
 
-    @Column(name = "total_balance", precision = 10, scale = 2)
+    @Column(name = "saldo_total", precision = 10, scale = 2)
     private BigDecimal totalBalance;
 
-    @Column(name = "days_overdue")
+    @Column(name = "dias_mora")
     private Integer daysOverdue;
 
-    @Column(name = "last_payment_date")
+    @Column(name = "fecha_ultimo_pago")
     private LocalDate lastPaymentDate;
 
-    @Column(name = "last_payment_amount", precision = 10, scale = 2)
+    @Column(name = "monto_ultimo_pago", precision = 10, scale = 2)
     private BigDecimal lastPaymentAmount;
 
     public DebtInfo(BigDecimal capitalBalance, BigDecimal overdueInterest,

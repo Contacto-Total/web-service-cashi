@@ -18,12 +18,12 @@ import java.time.LocalDateTime;
  * Define qué campos se requieren/muestran para cada tipificación
  */
 @Entity
-@Table(name = "classification_field_mappings", indexes = {
-    @Index(name = "idx_cfm_tenant", columnList = "tenant_id"),
-    @Index(name = "idx_cfm_portfolio", columnList = "portfolio_id"),
-    @Index(name = "idx_cfm_classification", columnList = "classification_id"),
-    @Index(name = "idx_cfm_field", columnList = "field_definition_id"),
-    @Index(name = "idx_cfm_unique", columnList = "tenant_id, portfolio_id, classification_id, field_definition_id", unique = true)
+@Table(name = "mapeos_campo_clasificacion", indexes = {
+    @Index(name = "idx_mcf_inquilino", columnList = "id_inquilino"),
+    @Index(name = "idx_mcf_cartera", columnList = "id_cartera"),
+    @Index(name = "idx_mcf_clasificacion", columnList = "id_clasificacion"),
+    @Index(name = "idx_mcf_campo", columnList = "id_definicion_campo"),
+    @Index(name = "idx_mcf_unico", columnList = "id_inquilino, id_cartera, id_clasificacion, id_definicion_campo", unique = true)
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -36,39 +36,39 @@ public class ClassificationFieldMapping {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "tenant_id", nullable = false)
+    @JoinColumn(name = "id_inquilino", nullable = false)
     private Tenant tenant;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "portfolio_id")
+    @JoinColumn(name = "id_cartera")
     private Portfolio portfolio;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "classification_id", nullable = false)
+    @JoinColumn(name = "id_clasificacion", nullable = false)
     private ClassificationCatalog classification;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "field_definition_id", nullable = false)
+    @JoinColumn(name = "id_definicion_campo", nullable = false)
     private FieldDefinition fieldDefinition;
 
-    @Column(name = "is_required", nullable = false)
+    @Column(name = "es_requerido", nullable = false)
     private Boolean isRequired = false;
 
-    @Column(name = "is_visible", nullable = false)
+    @Column(name = "es_visible", nullable = false)
     private Boolean isVisible = true;
 
-    @Column(name = "conditional_logic", columnDefinition = "JSON")
+    @Column(name = "logica_condicional", columnDefinition = "JSON")
     private String conditionalLogic;
 
-    @Column(name = "display_order")
+    @Column(name = "orden_visualizacion")
     private Integer displayOrder;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
     public ClassificationFieldMapping(Tenant tenant, Portfolio portfolio,

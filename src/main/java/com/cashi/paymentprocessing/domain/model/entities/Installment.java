@@ -10,7 +10,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 @Entity
-@Table(name = "installments")
+@Table(name = "cuotas")
 @Getter
 @NoArgsConstructor
 @AllArgsConstructor
@@ -20,18 +20,22 @@ public class Installment {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "numero_cuota")
     private Integer installmentNumber;
 
+    @Column(name = "monto")
     private BigDecimal amount;
 
+    @Column(name = "fecha_vencimiento")
     private LocalDate dueDate;
 
+    @Column(name = "fecha_pago")
     private LocalDate paidDate;
 
     @Embedded
     @AttributeOverrides({
-        @AttributeOverride(name = "status", column = @Column(name = "installment_status")),
-        @AttributeOverride(name = "description", column = @Column(name = "installment_status_description"))
+        @AttributeOverride(name = "status", column = @Column(name = "estado_cuota")),
+        @AttributeOverride(name = "description", column = @Column(name = "descripcion_estado_cuota"))
     })
     private PaymentStatus status;
 

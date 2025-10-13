@@ -15,11 +15,11 @@ import java.time.LocalDateTime;
  * Controls which fields are active for each tenant/portfolio
  */
 @Entity
-@Table(name = "tenant_field_configs", indexes = {
-    @Index(name = "idx_tenant_field_tenant", columnList = "tenant_id"),
-    @Index(name = "idx_tenant_field_portfolio", columnList = "portfolio_id"),
-    @Index(name = "idx_tenant_field_def", columnList = "field_definition_id"),
-    @Index(name = "idx_tenant_field_unique", columnList = "tenant_id, portfolio_id, field_definition_id", unique = true)
+@Table(name = "configuracion_campos_inquilino", indexes = {
+    @Index(name = "idx_config_campo_inquilino", columnList = "id_inquilino"),
+    @Index(name = "idx_config_campo_cartera", columnList = "id_cartera"),
+    @Index(name = "idx_config_campo_def", columnList = "id_definicion_campo"),
+    @Index(name = "idx_config_campo_unico", columnList = "id_inquilino, id_cartera, id_definicion_campo", unique = true)
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -32,50 +32,50 @@ public class TenantFieldConfig {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "tenant_id", nullable = false)
+    @JoinColumn(name = "id_inquilino", nullable = false)
     private Tenant tenant;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "portfolio_id")
+    @JoinColumn(name = "id_cartera")
     private Portfolio portfolio;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "field_definition_id", nullable = false)
+    @JoinColumn(name = "id_definicion_campo", nullable = false)
     private FieldDefinition fieldDefinition;
 
-    @Column(name = "is_enabled", nullable = false)
+    @Column(name = "esta_habilitado", nullable = false)
     private Boolean isEnabled = true;
 
-    @Column(name = "is_required", nullable = false)
+    @Column(name = "es_requerido", nullable = false)
     private Boolean isRequired = false;
 
-    @Column(name = "is_visible", nullable = false)
+    @Column(name = "es_visible", nullable = false)
     private Boolean isVisible = true;
 
-    @Column(name = "is_editable", nullable = false)
+    @Column(name = "es_editable", nullable = false)
     private Boolean isEditable = true;
 
-    @Column(name = "display_label", length = 255)
+    @Column(name = "etiqueta_visualizacion", length = 255)
     private String displayLabel;
 
-    @Column(name = "display_order")
+    @Column(name = "orden_visualizacion")
     private Integer displayOrder;
 
-    @Column(name = "default_value_override", length = 500)
+    @Column(name = "valor_predeterminado_sobrescrito", length = 500)
     private String defaultValueOverride;
 
-    @Column(name = "validation_rules_override", columnDefinition = "JSON")
+    @Column(name = "reglas_validacion_sobrescritas", columnDefinition = "JSON")
     private String validationRulesOverride;
 
     @Column(name = "config_json", columnDefinition = "JSON")
     private String configJson;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
     public TenantFieldConfig(Tenant tenant, FieldDefinition fieldDefinition, Boolean isEnabled) {

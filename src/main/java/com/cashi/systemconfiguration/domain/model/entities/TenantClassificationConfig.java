@@ -17,12 +17,12 @@ import java.time.LocalDateTime;
  * Permite habilitar/deshabilitar y personalizar clasificaciones
  */
 @Entity
-@Table(name = "tenant_classification_config", indexes = {
-    @Index(name = "idx_tcc_tenant", columnList = "tenant_id"),
-    @Index(name = "idx_tcc_portfolio", columnList = "portfolio_id"),
-    @Index(name = "idx_tcc_classification", columnList = "classification_id"),
-    @Index(name = "idx_tcc_enabled", columnList = "tenant_id, portfolio_id, is_enabled"),
-    @Index(name = "idx_tcc_unique", columnList = "tenant_id, portfolio_id, classification_id", unique = true)
+@Table(name = "configuracion_clasificacion_inquilino", indexes = {
+    @Index(name = "idx_config_inquilino", columnList = "id_inquilino"),
+    @Index(name = "idx_config_cartera", columnList = "id_cartera"),
+    @Index(name = "idx_config_clasificacion", columnList = "id_clasificacion"),
+    @Index(name = "idx_config_habilitado", columnList = "id_inquilino, id_cartera, esta_habilitado"),
+    @Index(name = "idx_config_clasificacion_unico", columnList = "id_inquilino, id_cartera, id_clasificacion", unique = true)
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -35,48 +35,48 @@ public class TenantClassificationConfig {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "tenant_id", nullable = false)
+    @JoinColumn(name = "id_inquilino", nullable = false)
     private Tenant tenant;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "portfolio_id")
+    @JoinColumn(name = "id_cartera")
     private Portfolio portfolio;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "classification_id", nullable = false)
+    @JoinColumn(name = "id_clasificacion", nullable = false)
     private ClassificationCatalog classification;
 
-    @Column(name = "is_enabled", nullable = false)
+    @Column(name = "esta_habilitado", nullable = false)
     private Boolean isEnabled = true;
 
-    @Column(name = "is_required", nullable = false)
+    @Column(name = "es_requerido", nullable = false)
     private Boolean isRequired = false;
 
-    @Column(name = "custom_name", length = 255)
+    @Column(name = "nombre_personalizado", length = 255)
     private String customName;
 
-    @Column(name = "custom_order")
+    @Column(name = "orden_personalizado")
     private Integer customOrder;
 
-    @Column(name = "custom_icon", length = 100)
+    @Column(name = "icono_personalizado", length = 100)
     private String customIcon;
 
-    @Column(name = "custom_color", length = 7)
+    @Column(name = "color_personalizado", length = 7)
     private String customColor;
 
-    @Column(name = "requires_comment", nullable = false)
+    @Column(name = "requiere_comentario", nullable = false)
     private Boolean requiresComment = false;
 
-    @Column(name = "min_comment_length")
+    @Column(name = "longitud_minima_comentario")
     private Integer minCommentLength;
 
-    @Column(name = "requires_attachment", nullable = false)
+    @Column(name = "requiere_adjunto", nullable = false)
     private Boolean requiresAttachment = false;
 
-    @Column(name = "requires_followup_date", nullable = false)
+    @Column(name = "requiere_fecha_seguimiento", nullable = false)
     private Boolean requiresFollowupDate = false;
 
-    @Column(name = "auto_triggers", columnDefinition = "JSON")
+    @Column(name = "disparadores_automaticos", columnDefinition = "JSON")
     private String autoTriggers;
 
     @Column(name = "validation_rules", columnDefinition = "JSON")

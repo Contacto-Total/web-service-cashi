@@ -17,11 +17,11 @@ import java.time.LocalDateTime;
  * Ejemplo: "Acepta Compromiso Pago" REQUIRES "Fecha de Pago"
  */
 @Entity
-@Table(name = "classification_dependencies", indexes = {
-    @Index(name = "idx_dep_tenant", columnList = "tenant_id"),
-    @Index(name = "idx_dep_portfolio", columnList = "portfolio_id"),
-    @Index(name = "idx_dep_parent", columnList = "parent_classification_id"),
-    @Index(name = "idx_dep_child", columnList = "child_classification_id")
+@Table(name = "dependencias_clasificacion", indexes = {
+    @Index(name = "idx_dep_inquilino", columnList = "id_inquilino"),
+    @Index(name = "idx_dep_cartera", columnList = "id_cartera"),
+    @Index(name = "idx_dep_padre", columnList = "id_clasificacion_padre"),
+    @Index(name = "idx_dep_hijo", columnList = "id_clasificacion_hijo")
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -34,40 +34,40 @@ public class ClassificationDependency {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "tenant_id", nullable = false)
+    @JoinColumn(name = "id_inquilino", nullable = false)
     private Tenant tenant;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "portfolio_id")
+    @JoinColumn(name = "id_cartera")
     private Portfolio portfolio;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "parent_classification_id", nullable = false)
+    @JoinColumn(name = "id_clasificacion_padre", nullable = false)
     private ClassificationCatalog parentClassification;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "child_classification_id", nullable = false)
+    @JoinColumn(name = "id_clasificacion_hijo", nullable = false)
     private ClassificationCatalog childClassification;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "dependency_type", nullable = false, length = 50)
+    @Column(name = "tipo_dependencia", nullable = false, length = 50)
     private DependencyType dependencyType;
 
-    @Column(name = "is_mandatory", nullable = false)
+    @Column(name = "es_obligatorio", nullable = false)
     private Boolean isMandatory = false;
 
-    @Column(name = "condition_expression", columnDefinition = "JSON")
+    @Column(name = "expresion_condicion", columnDefinition = "JSON")
     private String conditionExpression;
 
-    @Column(name = "display_order")
+    @Column(name = "orden_visualizacion")
     private Integer displayOrder;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
     public enum DependencyType {

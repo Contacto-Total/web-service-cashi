@@ -1,0 +1,1 @@
+DELETE FROM config_tenant_clasificacion WHERE clasificacion_id IN (SELECT id FROM catalogo_clasificaciones WHERE tipo_clasificacion = 'CUSTOM'); DELETE FROM catalogo_clasificaciones WHERE tipo_clasificacion = 'CUSTOM';

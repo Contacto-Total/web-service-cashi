@@ -15,11 +15,11 @@ import java.time.LocalDateTime;
  * Campaign Entity - Campaign management per tenant/portfolio
  */
 @Entity
-@Table(name = "campaigns", indexes = {
-    @Index(name = "idx_campaign_tenant", columnList = "tenant_id"),
-    @Index(name = "idx_campaign_portfolio", columnList = "portfolio_id"),
-    @Index(name = "idx_campaign_dates", columnList = "start_date, end_date"),
-    @Index(name = "idx_campaign_active", columnList = "is_active")
+@Table(name = "campañas", indexes = {
+    @Index(name = "idx_campana_inquilino", columnList = "id_inquilino"),
+    @Index(name = "idx_campana_cartera", columnList = "id_cartera"),
+    @Index(name = "idx_campana_fechas", columnList = "fecha_inicio, fecha_fin"),
+    @Index(name = "idx_campana_activo", columnList = "esta_activo")
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -32,50 +32,50 @@ public class Campaign {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "tenant_id", nullable = false)
+    @JoinColumn(name = "id_inquilino", nullable = false)
     private Tenant tenant;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "portfolio_id")
+    @JoinColumn(name = "id_cartera")
     private Portfolio portfolio;
 
-    @Column(name = "campaign_code", nullable = false, length = 50)
+    @Column(name = "codigo_campana", nullable = false, length = 50)
     private String campaignCode;
 
-    @Column(name = "campaign_name", nullable = false, length = 255)
+    @Column(name = "nombre_campana", nullable = false, length = 255)
     private String campaignName;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "campaign_type", length = 50)
+    @Column(name = "tipo_campana", length = 50)
     private CampaignType campaignType;
 
-    @Column(name = "description", columnDefinition = "TEXT")
+    @Column(name = "descripcion", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "start_date")
+    @Column(name = "fecha_inicio")
     private LocalDate startDate;
 
-    @Column(name = "end_date")
+    @Column(name = "fecha_fin")
     private LocalDate endDate;
 
-    @Column(name = "is_active", nullable = false)
+    @Column(name = "esta_activo", nullable = false)
     private Boolean isActive = true;
 
-    @Column(name = "target_accounts")
+    @Column(name = "cuentas_objetivo")
     private Integer targetAccounts;
 
-    @Column(name = "target_amount")
+    @Column(name = "monto_objetivo")
     private java.math.BigDecimal targetAmount;
 
     @Column(name = "config_json", columnDefinition = "JSON")
     private String configJson;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
     public enum CampaignType {

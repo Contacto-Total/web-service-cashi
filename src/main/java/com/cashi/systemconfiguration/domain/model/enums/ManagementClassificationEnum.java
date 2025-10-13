@@ -1,75 +1,50 @@
 package com.cashi.systemconfiguration.domain.model.enums;
 
+import lombok.Getter;
+
+@Getter
 public enum ManagementClassificationEnum {
     // Pagos y compromisos
-    ACP("ACP", "Acepta Compromiso de Pago", true, true),
-    PGR("PGR", "Pago Realizado - Completo", true, false),
-    PGP("PGP", "Pago Parcial Realizado", true, false),
-    PGT("PGT", "Pago Total de Deuda", true, false),
-    PPR("PPR", "Pago Programado", true, true),
+    ACP("ACP", "Acepta Compromiso de Pago", true, false, true),
+    PPR("PPR", "Promesa de Pago Realizada", true, false, true),
+    PGR("PGR", "Pago Realizado", true, false, false),
+    PGP("PGP", "Pago Parcial", true, false, false),
 
-    // Solicitudes especiales
-    SRP("SRP", "Solicita Refinanciamiento", false, false),
-    SQA("SQA", "Solicita Quita o Descuento", false, false),
-    SCN("SCN", "Solicita Congelamiento", false, false),
-    SPL("SPL", "Solicita Ampliación de Plazo", false, false),
+    // Convenios y acuerdos
+    CNV("CNV", "Convenio de Pago", true, true, false),
+    REF("REF", "Refinanciamiento", true, true, false),
 
-    // Disputas y problemas
-    DPD("DPD", "Disputa de Deuda", false, false),
-    NRD("NRD", "No Reconoce Deuda", false, false),
-    DIF("DIF", "Dificultad Financiera Temporal", false, false),
-    DSE("DSE", "Desempleo", false, false),
-    ENF("ENF", "Enfermedad/Incapacidad", false, false),
-    FLC("FLC", "Fallecimiento del Titular", false, false),
-    RCL("RCL", "Reclamo Registrado", false, false),
-    FRD("FRD", "Reporte de Fraude", false, false),
-    NCB("NCB", "Sin Capacidad de Pago", false, false),
+    // Solicitudes
+    SIC("SIC", "Solicita Información de Cuenta", false, false, false),
+    SCR("SCR", "Solicita Cronograma de Pagos", false, false, false),
+    SEP("SEP", "Solicita Estado de Cuenta", false, false, false),
 
-    // Seguimiento
-    VJE("VJE", "Viaje/Fuera del País", false, true),
-    SLL("SLL", "Solicita Llamar Después", false, true),
-    NIN("NIN", "No está Interesado", false, false),
-    AGR("AGR", "Cliente Agresivo/Hostil", false, false),
-    NBL("NBL", "No Desea Ser Contactado", false, false),
-    LGL("LGL", "Amenaza Legal", false, false),
+    // Rechazos y problemas
+    NPC("NPC", "No Puede/No tiene para Pagar", false, false, true),
+    DIS("DIS", "Disputa de Deuda", false, false, true),
+    DES("DES", "Desconoce la Deuda", false, false, false),
 
-    // Convenios y cronogramas
-    CNV("CNV", "Acepta Convenio de Pago", false, true),
-    CRO("CRO", "Solicita Cronograma de Pagos", false, true),
-    CPP("CPP", "Convenio con Pago Parcial Inicial", true, true),
-    CTT_CONV("CTT", "Convenio a Plazo Total", false, true),
-    CCG("CCG", "Convenio con Congelamiento", false, true),
-    CRF("CRF", "Convenio con Refinanciamiento", false, true),
-    CQT("CQT", "Convenio con Quita/Descuento", true, true),
-    CAP("CAP", "Convenio Aprobado por Supervisor", false, true),
-    CRC("CRC", "Cliente Rechaza Convenio Propuesto", false, false),
-    CEV("CEV", "Convenio en Evaluación", false, true);
+    // Reclamos
+    RCL("RCL", "Presenta Reclamo", false, false, true),
+    FRD("FRD", "Reporta Fraude", false, false, true),
+
+    // Situaciones especiales
+    AGR("AGR", "Cliente Agresivo", false, false, false),
+    NBL("NBL", "No Blow (Cliente difícil)", false, false, false),
+    LGL("LGL", "Remite a Legal", false, false, true);
 
     private final String code;
     private final String description;
     private final Boolean requiresPayment;
     private final Boolean requiresSchedule;
+    private final Boolean requiresFollowUp;
 
-    ManagementClassificationEnum(String code, String description, Boolean requiresPayment, Boolean requiresSchedule) {
+    ManagementClassificationEnum(String code, String description, Boolean requiresPayment,
+                                  Boolean requiresSchedule, Boolean requiresFollowUp) {
         this.code = code;
         this.description = description;
         this.requiresPayment = requiresPayment;
         this.requiresSchedule = requiresSchedule;
-    }
-
-    public String getCode() {
-        return code;
-    }
-
-    public String getDescription() {
-        return description;
-    }
-
-    public Boolean getRequiresPayment() {
-        return requiresPayment;
-    }
-
-    public Boolean getRequiresSchedule() {
-        return requiresSchedule;
+        this.requiresFollowUp = requiresFollowUp;
     }
 }

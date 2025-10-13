@@ -15,10 +15,10 @@ import java.time.LocalDateTime;
  * Supports portfolio types and sub-portfolios
  */
 @Entity
-@Table(name = "portfolios", indexes = {
-    @Index(name = "idx_portfolio_tenant", columnList = "tenant_id"),
-    @Index(name = "idx_portfolio_parent", columnList = "parent_portfolio_id"),
-    @Index(name = "idx_portfolio_code", columnList = "tenant_id, portfolio_code", unique = true)
+@Table(name = "carteras", indexes = {
+    @Index(name = "idx_cartera_inquilino", columnList = "id_inquilino"),
+    @Index(name = "idx_cartera_padre", columnList = "id_cartera_padre"),
+    @Index(name = "idx_codigo_cartera", columnList = "id_inquilino, codigo_cartera", unique = true)
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -31,44 +31,44 @@ public class Portfolio {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "tenant_id", nullable = false)
+    @JoinColumn(name = "id_inquilino", nullable = false)
     private Tenant tenant;
 
-    @Column(name = "portfolio_code", nullable = false, length = 50)
+    @Column(name = "codigo_cartera", nullable = false, length = 50)
     private String portfolioCode;
 
-    @Column(name = "portfolio_name", nullable = false, length = 255)
+    @Column(name = "nombre_cartera", nullable = false, length = 255)
     private String portfolioName;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "portfolio_type", length = 50)
+    @Column(name = "tipo_cartera", length = 50)
     private PortfolioType portfolioType;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "parent_portfolio_id")
+    @JoinColumn(name = "id_cartera_padre")
     private Portfolio parentPortfolio;
 
-    @Column(name = "hierarchy_level")
+    @Column(name = "nivel_jerarquia")
     private Integer hierarchyLevel;
 
-    @Column(name = "hierarchy_path", length = 500)
+    @Column(name = "ruta_jerarquia", length = 500)
     private String hierarchyPath;
 
-    @Column(name = "description", columnDefinition = "TEXT")
+    @Column(name = "descripcion", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "is_active", nullable = false)
+    @Column(name = "esta_activo", nullable = false)
     private Boolean isActive = true;
 
-    @Column(name = "config_json", columnDefinition = "JSON")
+    @Column(name = "configuracion_json", columnDefinition = "JSON")
     private String configJson;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
     public enum PortfolioType {

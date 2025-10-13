@@ -8,7 +8,7 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "call_details")
+@Table(name = "detalles_llamada")
 @Getter
 @NoArgsConstructor
 @AllArgsConstructor
@@ -18,12 +18,16 @@ public class CallDetail {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "numero_telefono")
     private String phoneNumber;
 
+    @Column(name = "hora_inicio")
     private LocalDateTime startTime;
 
+    @Column(name = "hora_fin")
     private LocalDateTime endTime;
 
+    @Column(name = "duracion_segundos")
     private Integer durationSeconds;
 
     public CallDetail(String phoneNumber, LocalDateTime startTime) {

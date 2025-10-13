@@ -15,11 +15,11 @@ import java.time.LocalDateTime;
  * Configures which strategy classes to use for different operations per tenant
  */
 @Entity
-@Table(name = "processing_strategies", indexes = {
-    @Index(name = "idx_strategy_tenant", columnList = "tenant_id"),
-    @Index(name = "idx_strategy_portfolio", columnList = "portfolio_id"),
-    @Index(name = "idx_strategy_type", columnList = "strategy_type"),
-    @Index(name = "idx_strategy_unique", columnList = "tenant_id, portfolio_id, strategy_type", unique = true)
+@Table(name = "estrategias_procesamiento", indexes = {
+    @Index(name = "idx_estrategia_inquilino", columnList = "id_inquilino"),
+    @Index(name = "idx_estrategia_cartera", columnList = "id_cartera"),
+    @Index(name = "idx_estrategia_tipo", columnList = "tipo_estrategia"),
+    @Index(name = "idx_estrategia_unico", columnList = "id_inquilino, id_cartera, tipo_estrategia", unique = true)
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -32,41 +32,41 @@ public class ProcessingStrategy {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "tenant_id", nullable = false)
+    @JoinColumn(name = "id_inquilino", nullable = false)
     private Tenant tenant;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "portfolio_id")
+    @JoinColumn(name = "id_cartera")
     private Portfolio portfolio;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "strategy_type", nullable = false, length = 100)
+    @Column(name = "tipo_estrategia", nullable = false, length = 100)
     private StrategyType strategyType;
 
-    @Column(name = "strategy_implementation", nullable = false, length = 500)
+    @Column(name = "implementacion_estrategia", nullable = false, length = 500)
     private String strategyImplementation;
 
-    @Column(name = "strategy_name", length = 255)
+    @Column(name = "nombre_estrategia", length = 255)
     private String strategyName;
 
-    @Column(name = "description", columnDefinition = "TEXT")
+    @Column(name = "descripcion", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "is_active", nullable = false)
+    @Column(name = "esta_activo", nullable = false)
     private Boolean isActive = true;
 
-    @Column(name = "priority")
+    @Column(name = "prioridad")
     private Integer priority;
 
     @Column(name = "config_json", columnDefinition = "JSON")
     private String configJson;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
     public enum StrategyType {

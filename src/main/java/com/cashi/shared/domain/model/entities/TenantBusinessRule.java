@@ -15,11 +15,11 @@ import java.time.LocalDateTime;
  * Implements Strategy pattern configuration for validation rules
  */
 @Entity
-@Table(name = "tenant_business_rules", indexes = {
-    @Index(name = "idx_rule_tenant", columnList = "tenant_id"),
-    @Index(name = "idx_rule_portfolio", columnList = "portfolio_id"),
-    @Index(name = "idx_rule_code", columnList = "rule_code"),
-    @Index(name = "idx_rule_unique", columnList = "tenant_id, portfolio_id, rule_code", unique = true)
+@Table(name = "reglas_negocio_inquilino", indexes = {
+    @Index(name = "idx_regla_inquilino", columnList = "id_inquilino"),
+    @Index(name = "idx_regla_cartera", columnList = "id_cartera"),
+    @Index(name = "idx_regla_codigo", columnList = "codigo_regla"),
+    @Index(name = "idx_regla_unico", columnList = "id_inquilino, id_cartera, codigo_regla", unique = true)
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -32,53 +32,53 @@ public class TenantBusinessRule {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "tenant_id", nullable = false)
+    @JoinColumn(name = "id_inquilino", nullable = false)
     private Tenant tenant;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "portfolio_id")
+    @JoinColumn(name = "id_cartera")
     private Portfolio portfolio;
 
-    @Column(name = "rule_code", nullable = false, length = 100)
+    @Column(name = "codigo_regla", nullable = false, length = 100)
     private String ruleCode;
 
-    @Column(name = "rule_name", nullable = false, length = 255)
+    @Column(name = "nombre_regla", nullable = false, length = 255)
     private String ruleName;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "rule_type", nullable = false, length = 50)
+    @Column(name = "tipo_regla", nullable = false, length = 50)
     private RuleType ruleType;
 
-    @Column(name = "rule_category", length = 100)
+    @Column(name = "categoria_regla", length = 100)
     private String ruleCategory;
 
-    @Column(name = "description", columnDefinition = "TEXT")
+    @Column(name = "descripcion", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "is_active", nullable = false)
+    @Column(name = "esta_activo", nullable = false)
     private Boolean isActive = true;
 
-    @Column(name = "priority")
+    @Column(name = "prioridad")
     private Integer priority;
 
-    @Column(name = "condition_expression", columnDefinition = "TEXT")
+    @Column(name = "expresion_condicion", columnDefinition = "TEXT")
     private String conditionExpression;
 
-    @Column(name = "action_expression", columnDefinition = "TEXT")
+    @Column(name = "expresion_accion", columnDefinition = "TEXT")
     private String actionExpression;
 
-    @Column(name = "validation_json", columnDefinition = "JSON")
+    @Column(name = "json_validacion", columnDefinition = "JSON")
     private String validationJson;
 
-    @Column(name = "error_message", length = 500)
+    @Column(name = "mensaje_error", length = 500)
     private String errorMessage;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
     public enum RuleType {

@@ -17,12 +17,12 @@ public interface ManagementClassificationRepository extends JpaRepository<Manage
 
     Optional<ManagementClassification> findByManagementAndHierarchyLevel(Management management, Integer hierarchyLevel);
 
-    @Query("SELECT mc FROM ManagementClassification mc " +
+    @Query("SELECT mc FROM ManagementClassificationEntity mc " +
            "WHERE mc.management = :management " +
            "ORDER BY mc.hierarchyLevel ASC")
     List<ManagementClassification> findByManagementOrderedByLevel(@Param("management") Management management);
 
-    @Query("SELECT mc FROM ManagementClassification mc " +
+    @Query("SELECT mc FROM ManagementClassificationEntity mc " +
            "WHERE mc.management.id = :managementId AND mc.hierarchyLevel = :level")
     Optional<ManagementClassification> findByManagementIdAndLevel(
         @Param("managementId") Long managementId, @Param("level") Integer level
@@ -30,6 +30,6 @@ public interface ManagementClassificationRepository extends JpaRepository<Manage
 
     void deleteByManagement(Management management);
 
-    @Query("SELECT COUNT(mc) FROM ManagementClassification mc WHERE mc.management = :management")
+    @Query("SELECT COUNT(mc) FROM ManagementClassificationEntity mc WHERE mc.management = :management")
     long countByManagement(@Param("management") Management management);
 }

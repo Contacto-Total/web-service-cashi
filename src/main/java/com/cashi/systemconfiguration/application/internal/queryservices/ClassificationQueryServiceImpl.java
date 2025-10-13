@@ -6,6 +6,7 @@ import com.cashi.shared.infrastructure.persistence.jpa.repositories.PortfolioRep
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.TenantRepository;
 import com.cashi.systemconfiguration.domain.model.entities.ClassificationCatalog;
 import com.cashi.systemconfiguration.domain.model.entities.ClassificationConfigHistory;
+import com.cashi.systemconfiguration.domain.model.entities.ClassificationFieldMapping;
 import com.cashi.systemconfiguration.domain.model.entities.ConfigurationVersion;
 import com.cashi.systemconfiguration.domain.model.entities.TenantClassificationConfig;
 import com.cashi.systemconfiguration.infrastructure.persistence.jpa.repositories.*;
@@ -151,5 +152,44 @@ public class ClassificationQueryServiceImpl {
             .orElseThrow(() -> new IllegalArgumentException("Portfolio not found")) : null;
 
         return versionRepository.findActiveVersion(tenant, portfolio);
+    }
+
+    /**
+     * Obtiene todos los campos configurados para una clasificación específica
+     * Solo las clasificaciones "hoja" (sin hijos) deberían tener campos asociados
+     */
+    public List<ClassificationFieldMapping> getClassificationFields(
+            Long tenantId, Long portfolioId, Long classificationId) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+            .orElseThrow(() -> new IllegalArgumentException("Tenant not found"));
+        Portfolio portfolio = portfolioId != null ? portfolioRepository.findById(portfolioId)
+            .orElseThrow(() -> new IllegalArgumentException("Portfolio not found")) : null;
+
+        return classificationFieldMappingRepository.findByTenantPortfolioAndClassification(
+            tenant, portfolio, classificationId);
+    }
+
+    /**
+     * Obtiene solo los campos visibles para una clasificación
+     */
+    public List<ClassificationFieldMapping> getVisibleClassificationFields(
+            Long tenantId, Long portfolioId, Long classificationId) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+            .orElseThrow(() -> new IllegalArgumentException("Tenant not found"));
+        Portfolio portfolio = portfolioId != null ? portfolioRepository.findById(portfolioId)
+            .orElseThrow(() -> new IllegalArgumentException("Portfolio not found")) : null;
+
+        return classificationFieldMappingRepository.findVisibleFieldsByClassification(
+            tenant, portfolio, classificationId);
+    }
+
+    /**
+     * Verifica si una clasificación es "hoja" (no tiene hijos habilitados)
+     * Solo las clasificaciones hoja deberían mostrar formularios
+     */
+    public boolean isLeafClassification(Long tenantId, Long portfolioId, Long classificationId) {
+        List<TenantClassificationConfig> children = getChildClassificationsByParent(
+            tenantId, portfolioId, classificationId);
+        return children.isEmpty();
     }
 }

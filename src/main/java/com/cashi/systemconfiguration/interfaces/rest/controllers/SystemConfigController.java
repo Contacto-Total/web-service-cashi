@@ -1,22 +1,15 @@
 package com.cashi.systemconfiguration.interfaces.rest.controllers;
 
 import com.cashi.systemconfiguration.application.internal.commandservices.PortfolioCommandServiceImpl;
-import com.cashi.systemconfiguration.application.internal.queryservices.SystemConfigQueryServiceImpl;
-import com.cashi.systemconfiguration.interfaces.rest.resources.CampaignResource;
-import com.cashi.systemconfiguration.interfaces.rest.resources.ContactClassificationResource;
 import com.cashi.systemconfiguration.interfaces.rest.resources.CreatePortfolioResource;
-import com.cashi.systemconfiguration.interfaces.rest.resources.ManagementClassificationResource;
 import com.cashi.systemconfiguration.interfaces.rest.resources.PortfolioResource;
 import com.cashi.systemconfiguration.interfaces.rest.resources.TenantResource;
-import com.cashi.systemconfiguration.interfaces.rest.transform.CampaignResourceFromEntityAssembler;
-import com.cashi.systemconfiguration.interfaces.rest.transform.ContactClassificationResourceFromEntityAssembler;
-import com.cashi.systemconfiguration.interfaces.rest.transform.ManagementClassificationResourceFromEntityAssembler;
 import com.cashi.systemconfiguration.interfaces.rest.transform.PortfolioResourceFromEntityAssembler;
 import com.cashi.systemconfiguration.interfaces.rest.transform.TenantResourceFromEntityAssembler;
+import com.cashi.shared.infrastructure.persistence.jpa.repositories.PortfolioRepository;
+import com.cashi.shared.infrastructure.persistence.jpa.repositories.TenantRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.media.Content;
-import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -28,110 +21,20 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/system-config")
-@Tag(name = "System Configuration", description = "Gestión de configuración del sistema, campañas y tipificaciones")
+@Tag(name = "System Configuration", description = "Gestión de configuración del sistema, tenants y portafolios")
 public class SystemConfigController {
 
-    private final SystemConfigQueryServiceImpl queryService;
+    private final TenantRepository tenantRepository;
+    private final PortfolioRepository portfolioRepository;
     private final PortfolioCommandServiceImpl portfolioCommandService;
 
-    public SystemConfigController(SystemConfigQueryServiceImpl queryService,
-                                 PortfolioCommandServiceImpl portfolioCommandService) {
-        this.queryService = queryService;
+    public SystemConfigController(
+            TenantRepository tenantRepository,
+            PortfolioRepository portfolioRepository,
+            PortfolioCommandServiceImpl portfolioCommandService) {
+        this.tenantRepository = tenantRepository;
+        this.portfolioRepository = portfolioRepository;
         this.portfolioCommandService = portfolioCommandService;
-    }
-
-    @Operation(
-        summary = "Obtener tipificaciones de contacto",
-        description = "Retorna todas las tipificaciones de contacto disponibles (CPC, NCL, BZN, etc.)"
-    )
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Lista de tipificaciones obtenida exitosamente",
-            content = @Content(schema = @Schema(implementation = ContactClassificationResource.class)))
-    })
-    @GetMapping("/contact-classifications")
-    public ResponseEntity<List<ContactClassificationResource>> getAllContactClassifications() {
-        var classifications = queryService.getAllContactClassifications();
-        var resources = classifications.stream()
-                .map(ContactClassificationResourceFromEntityAssembler::toResourceFromEntity)
-                .toList();
-        return ResponseEntity.ok(resources);
-    }
-
-    @Operation(
-        summary = "Obtener tipificaciones de gestión",
-        description = "Retorna todas las tipificaciones de gestión disponibles (ACP, PGR, CNV, etc.)"
-    )
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Lista de tipificaciones obtenida exitosamente",
-            content = @Content(schema = @Schema(implementation = ManagementClassificationResource.class)))
-    })
-    @GetMapping("/management-classifications")
-    public ResponseEntity<List<ManagementClassificationResource>> getAllManagementClassifications() {
-        var classifications = queryService.getAllManagementClassifications();
-        var resources = classifications.stream()
-                .map(ManagementClassificationResourceFromEntityAssembler::toResourceFromEntity)
-                .toList();
-        return ResponseEntity.ok(resources);
-    }
-
-    @GetMapping("/management-classifications/requires-payment")
-    public ResponseEntity<List<ManagementClassificationResource>> getManagementClassificationsByPayment(
-            @RequestParam(defaultValue = "true") Boolean requiresPayment) {
-        var classifications = queryService.getManagementClassificationsByPaymentRequirement(requiresPayment);
-        var resources = classifications.stream()
-                .map(ManagementClassificationResourceFromEntityAssembler::toResourceFromEntity)
-                .toList();
-        return ResponseEntity.ok(resources);
-    }
-
-    @GetMapping("/management-classifications/requires-schedule")
-    public ResponseEntity<List<ManagementClassificationResource>> getManagementClassificationsBySchedule(
-            @RequestParam(defaultValue = "true") Boolean requiresSchedule) {
-        var classifications = queryService.getManagementClassificationsByScheduleRequirement(requiresSchedule);
-        var resources = classifications.stream()
-                .map(ManagementClassificationResourceFromEntityAssembler::toResourceFromEntity)
-                .toList();
-        return ResponseEntity.ok(resources);
-    }
-
-    @Operation(summary = "Obtener todas las campañas", description = "Retorna lista completa de campañas")
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Lista de campañas obtenida exitosamente")
-    })
-    @GetMapping("/campaigns")
-    public ResponseEntity<List<CampaignResource>> getAllCampaigns() {
-        var campaigns = queryService.getAllCampaigns();
-        var resources = campaigns.stream()
-                .map(CampaignResourceFromEntityAssembler::toResourceFromEntity)
-                .toList();
-        return ResponseEntity.ok(resources);
-    }
-
-    @Operation(summary = "Obtener campañas activas", description = "Retorna solo las campañas activas")
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Lista de campañas activas obtenida exitosamente")
-    })
-    @GetMapping("/campaigns/active")
-    public ResponseEntity<List<CampaignResource>> getActiveCampaigns() {
-        var campaigns = queryService.getActiveCampaigns();
-        var resources = campaigns.stream()
-                .map(CampaignResourceFromEntityAssembler::toResourceFromEntity)
-                .toList();
-        return ResponseEntity.ok(resources);
-    }
-
-    @Operation(summary = "Obtener campaña por ID", description = "Retorna una campaña específica por su ID")
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Campaña encontrada"),
-        @ApiResponse(responseCode = "404", description = "Campaña no encontrada")
-    })
-    @GetMapping("/campaigns/{campaignId}")
-    public ResponseEntity<CampaignResource> getCampaignById(
-            @Parameter(description = "ID de la campaña", example = "CAMP-001")
-            @PathVariable String campaignId) {
-        return queryService.getCampaignById(campaignId)
-                .map(campaign -> ResponseEntity.ok(CampaignResourceFromEntityAssembler.toResourceFromEntity(campaign)))
-                .orElse(ResponseEntity.notFound().build());
     }
 
     @Operation(summary = "Obtener todos los tenants activos", description = "Retorna la lista de todos los clientes/tenants activos en el sistema")
@@ -140,7 +43,9 @@ public class SystemConfigController {
     })
     @GetMapping("/tenants")
     public ResponseEntity<List<TenantResource>> getAllTenants() {
-        var tenants = queryService.getAllActiveTenants();
+        var tenants = tenantRepository.findAll().stream()
+            .filter(t -> t.getIsActive())
+            .toList();
         var resources = tenants.stream()
                 .map(TenantResourceFromEntityAssembler::toResourceFromEntity)
                 .toList();
@@ -155,7 +60,11 @@ public class SystemConfigController {
     public ResponseEntity<List<PortfolioResource>> getPortfoliosByTenant(
             @Parameter(description = "ID del tenant", example = "1")
             @PathVariable Long tenantId) {
-        var portfolios = queryService.getPortfoliosByTenantId(tenantId);
+        var tenantOpt = tenantRepository.findById(tenantId);
+        if (tenantOpt.isEmpty()) {
+            return ResponseEntity.ok(List.of());
+        }
+        var portfolios = portfolioRepository.findByTenantOrderedByHierarchy(tenantOpt.get());
         var resources = portfolios.stream()
                 .map(PortfolioResourceFromEntityAssembler::toResourceFromEntity)
                 .toList();

@@ -8,8 +8,6 @@ import com.cashi.systemconfiguration.domain.model.entities.ConfigurationVersion;
 import com.cashi.systemconfiguration.domain.model.entities.TenantClassificationConfig;
 import com.cashi.systemconfiguration.interfaces.rest.resources.*;
 import com.cashi.systemconfiguration.interfaces.rest.transform.ClassificationResourceAssembler;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -17,7 +15,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -103,35 +100,11 @@ public class ClassificationManagementController {
             command.name(),
             type,
             command.parentClassificationId(),
-            command.description(),
-            command.displayOrder(),
-            command.iconName(),
-            command.colorHex(),
-            command.metadataSchema(),
             userId
         );
 
         return ResponseEntity.status(HttpStatus.CREATED)
             .body(ClassificationResourceAssembler.toResourceFromEntity(created));
-    }
-
-    @PutMapping("/classifications/{id}")
-    public ResponseEntity<ClassificationCatalogResource> updateClassification(
-            @PathVariable Long id,
-            @Valid @RequestBody UpdateClassificationCommand command,
-            @RequestHeader(value = "X-User-Id", defaultValue = "system") String userId) {
-        ClassificationCatalog updated = commandService.updateClassification(
-            id,
-            command.name(),
-            command.description(),
-            command.iconName(),
-            command.colorHex(),
-            command.displayOrder(),
-            command.isActive() != null ? command.isActive() : true,
-            command.metadataSchema(),
-            userId
-        );
-        return ResponseEntity.ok(ClassificationResourceAssembler.toResourceFromEntity(updated));
     }
 
     @DeleteMapping("/classifications/{id}")
@@ -312,177 +285,4 @@ public class ClassificationManagementController {
         List<ClassificationConfigHistory> history = queryService.getEntityHistory(type, entityId);
         return ResponseEntity.ok(history);
     }
-
-    // ========================================
-    // CLASSIFICATION FIELDS (Dynamic Forms)
-    // ========================================
-
-    /**
-     * Obtiene los campos dinámicos configurados para una clasificación específica
-     * Solo las clasificaciones "hoja" (sin hijos) deberían tener campos asociados
-     */
-    @GetMapping("/tenants/{tenantId}/classifications/{classificationId}/fields")
-    public ResponseEntity<ClassificationFieldsResponse> getClassificationFields(
-            @PathVariable Long tenantId,
-            @RequestParam(required = false) Long portfolioId,
-            @PathVariable Long classificationId) {
-
-        boolean isLeaf = queryService.isLeafClassification(tenantId, portfolioId, classificationId);
-        List<ClassificationFieldResource> fieldResources = new ArrayList<>();
-
-        // Primero intentar obtener desde field mappings (tabla mapeos_campo_clasificacion)
-        var mappedFields = queryService.getVisibleClassificationFields(tenantId, portfolioId, classificationId);
-
-        if (!mappedFields.isEmpty()) {
-            // Si hay mappings configurados, usarlos
-            fieldResources = mappedFields.stream()
-                .map(this::toFieldResource)
-                .collect(Collectors.toList());
-        } else {
-            // Si no hay mappings, intentar obtener desde metadataSchema del catálogo
-            var classificationOpt = queryService.getClassificationById(classificationId);
-            if (classificationOpt.isPresent() && classificationOpt.get().getMetadataSchema() != null) {
-                fieldResources = parseMetadataSchemaToFields(classificationOpt.get().getMetadataSchema());
-            }
-        }
-
-        var response = new ClassificationFieldsResponse(
-            classificationId,
-            isLeaf,
-            fieldResources
-        );
-
-        return ResponseEntity.ok(response);
-    }
-
-    private List<ClassificationFieldResource> parseMetadataSchemaToFields(String metadataSchemaJson) {
-        List<ClassificationFieldResource> fields = new ArrayList<>();
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            JsonNode root = mapper.readTree(metadataSchemaJson);
-            JsonNode fieldsNode = root.get("fields");
-
-            if (fieldsNode != null && fieldsNode.isArray()) {
-                int index = 0;
-                for (JsonNode fieldNode : fieldsNode) {
-                    String id = fieldNode.has("id") ? fieldNode.get("id").asText() : "field_" + index;
-                    String label = fieldNode.has("label") ? fieldNode.get("label").asText() : "Campo";
-                    String type = fieldNode.has("type") ? fieldNode.get("type").asText().toUpperCase() : "TEXT";
-                    boolean required = fieldNode.has("required") && fieldNode.get("required").asBoolean();
-                    String placeholder = fieldNode.has("placeholder") ? fieldNode.get("placeholder").asText() : null;
-                    String helpText = fieldNode.has("helpText") ? fieldNode.get("helpText").asText() : null;
-                    int displayOrder = fieldNode.has("displayOrder") ? fieldNode.get("displayOrder").asInt() : index;
-
-                    // Parse columns for TABLE type
-                    List<TableColumnResource> columns = null;
-                    Integer minRows = null;
-                    Integer maxRows = null;
-                    Boolean allowAddRow = null;
-                    Boolean allowDeleteRow = null;
-
-                    if ("TABLE".equalsIgnoreCase(type) && fieldNode.has("columns")) {
-                        columns = new ArrayList<>();
-                        JsonNode columnsNode = fieldNode.get("columns");
-                        if (columnsNode.isArray()) {
-                            for (JsonNode colNode : columnsNode) {
-                                String colId = colNode.has("id") ? colNode.get("id").asText() : "col_" + columns.size();
-                                String colLabel = colNode.has("label") ? colNode.get("label").asText() : "Columna";
-                                String colType = colNode.has("type") ? colNode.get("type").asText().toUpperCase() : "TEXT";
-                                boolean colRequired = colNode.has("required") && colNode.get("required").asBoolean();
-
-                                columns.add(new TableColumnResource(colId, colLabel, colType, colRequired));
-                            }
-                        }
-
-                        minRows = fieldNode.has("minRows") ? fieldNode.get("minRows").asInt() : 0;
-                        maxRows = fieldNode.has("maxRows") ? fieldNode.get("maxRows").asInt() : null;
-                        allowAddRow = fieldNode.has("allowAddRow") ? fieldNode.get("allowAddRow").asBoolean() : true;
-                        allowDeleteRow = fieldNode.has("allowDeleteRow") ? fieldNode.get("allowDeleteRow").asBoolean() : true;
-                    }
-
-                    fields.add(new ClassificationFieldResource(
-                        (long) index,
-                        id,
-                        label,
-                        type,
-                        null, // category
-                        helpText,
-                        null, // defaultValue
-                        null, // validationRules
-                        required,
-                        true, // visible
-                        displayOrder,
-                        null,  // conditionalLogic
-                        columns,
-                        minRows,
-                        maxRows,
-                        allowAddRow,
-                        allowDeleteRow
-                    ));
-                    index++;
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("Error parsing metadataSchema: " + e.getMessage());
-            e.printStackTrace();
-        }
-        return fields;
-    }
-
-    private ClassificationFieldResource toFieldResource(com.cashi.systemconfiguration.domain.model.entities.ClassificationFieldMapping mapping) {
-        var fieldDef = mapping.getFieldDefinition();
-        return new ClassificationFieldResource(
-            fieldDef.getId(),
-            fieldDef.getFieldCode(),
-            fieldDef.getFieldName(),
-            fieldDef.getFieldType().name(),
-            fieldDef.getFieldCategory(),
-            fieldDef.getDescription(),
-            fieldDef.getDefaultValue(),
-            fieldDef.getValidationRules(),
-            mapping.getIsRequired(),
-            mapping.getIsVisible(),
-            mapping.getDisplayOrder(),
-            mapping.getConditionalLogic(),
-            null,  // columns - TODO: implement from mapping if needed
-            null,  // minRows
-            null,  // maxRows
-            null,  // allowAddRow
-            null   // allowDeleteRow
-        );
-    }
-
-    // Response DTOs (inner records for convenience)
-    public record ClassificationFieldsResponse(
-        Long classificationId,
-        boolean isLeaf,
-        List<ClassificationFieldResource> fields
-    ) {}
-
-    public record ClassificationFieldResource(
-        Long id,
-        String fieldCode,
-        String fieldName,
-        String fieldType,
-        String fieldCategory,
-        String description,
-        String defaultValue,
-        String validationRules,
-        Boolean isRequired,
-        Boolean isVisible,
-        Integer displayOrder,
-        String conditionalLogic,
-        List<TableColumnResource> columns,  // Para campos tipo TABLE
-        Integer minRows,
-        Integer maxRows,
-        Boolean allowAddRow,
-        Boolean allowDeleteRow
-    ) {}
-
-    public record TableColumnResource(
-        String id,
-        String label,
-        String type,
-        Boolean required
-    ) {}
 }

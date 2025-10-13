@@ -13,7 +13,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "payments")
+@Table(name = "pagos")
 @Getter
 @NoArgsConstructor
 public class Payment extends AggregateRoot {
@@ -21,33 +21,41 @@ public class Payment extends AggregateRoot {
     @Embedded
     private PaymentId paymentId;
 
+    @Column(name = "id_cliente")
     private String customerId;
 
+    @Column(name = "id_gestion")
     private String managementId;
 
+    @Column(name = "monto")
     private BigDecimal amount;
 
+    @Column(name = "fecha_pago")
     private LocalDate paymentDate;
 
+    @Column(name = "metodo_pago")
     private String paymentMethod;
 
     @Embedded
     @AttributeOverrides({
-        @AttributeOverride(name = "status", column = @Column(name = "payment_status")),
-        @AttributeOverride(name = "description", column = @Column(name = "payment_status_description"))
+        @AttributeOverride(name = "status", column = @Column(name = "estado_pago")),
+        @AttributeOverride(name = "description", column = @Column(name = "descripcion_estado_pago"))
     })
     private PaymentStatus status;
 
     @Embedded
     private TransactionId transactionId;
 
+    @Column(name = "numero_voucher")
     private String voucherNumber;
 
+    @Column(name = "nombre_banco")
     private String bankName;
 
+    @Column(name = "confirmado_en")
     private LocalDateTime confirmedAt;
 
-    @Column(length = 1000)
+    @Column(name = "notas", length = 1000)
     private String notes;
 
     public Payment(String customerId, String managementId, BigDecimal amount, LocalDate paymentDate, String paymentMethod) {

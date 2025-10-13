@@ -5,7 +5,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table(name = "customer_contact_info")
+@Table(name = "informacion_contacto")
 @Getter
 @NoArgsConstructor
 public class ContactInfo {
@@ -14,19 +14,19 @@ public class ContactInfo {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "primary_phone", length = 20)
+    @Column(name = "telefono_principal", length = 20)
     private String primaryPhone;
 
-    @Column(name = "alternative_phone", length = 20)
+    @Column(name = "telefono_alternativo", length = 20)
     private String alternativePhone;
 
-    @Column(name = "work_phone", length = 20)
+    @Column(name = "telefono_trabajo", length = 20)
     private String workPhone;
 
-    @Column(length = 100)
+    @Column(name = "correo_electronico", length = 100)
     private String email;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(name = "direccion", columnDefinition = "TEXT")
     private String address;
 
     public ContactInfo(String primaryPhone, String alternativePhone, String workPhone,

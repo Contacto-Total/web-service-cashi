@@ -17,10 +17,10 @@ import java.time.LocalDateTime;
  * Stores tenant-specific dynamic field values for managements
  */
 @Entity
-@Table(name = "management_dynamic_fields", indexes = {
-    @Index(name = "idx_mgmt_dynamic_management", columnList = "management_id"),
-    @Index(name = "idx_mgmt_dynamic_field", columnList = "field_definition_id"),
-    @Index(name = "idx_mgmt_dynamic_unique", columnList = "management_id, field_definition_id", unique = true)
+@Table(name = "campos_dinamicos_gestion", indexes = {
+    @Index(name = "idx_campo_din_gestion", columnList = "id_gestion"),
+    @Index(name = "idx_campo_din_campo", columnList = "id_definicion_campo"),
+    @Index(name = "idx_campo_din_unico", columnList = "id_gestion, id_definicion_campo", unique = true)
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -33,34 +33,34 @@ public class ManagementDynamicField {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "management_id", nullable = false)
+    @JoinColumn(name = "id_gestion", nullable = false)
     private Management management;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "field_definition_id", nullable = false)
+    @JoinColumn(name = "id_definicion_campo", nullable = false)
     private FieldDefinition fieldDefinition;
 
-    @Column(name = "field_value", columnDefinition = "TEXT")
+    @Column(name = "valor_campo", columnDefinition = "TEXT")
     private String fieldValue;
 
-    @Column(name = "field_value_numeric")
+    @Column(name = "valor_campo_numerico")
     private java.math.BigDecimal fieldValueNumeric;
 
-    @Column(name = "field_value_date")
+    @Column(name = "valor_campo_fecha")
     private LocalDateTime fieldValueDate;
 
-    @Column(name = "field_value_boolean")
+    @Column(name = "valor_campo_booleano")
     private Boolean fieldValueBoolean;
 
-    @Column(name = "field_value_json", columnDefinition = "JSON")
+    @Column(name = "valor_campo_json", columnDefinition = "JSON")
     private String fieldValueJson;
 
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
     public ManagementDynamicField(Management management, FieldDefinition fieldDefinition, String fieldValue) {

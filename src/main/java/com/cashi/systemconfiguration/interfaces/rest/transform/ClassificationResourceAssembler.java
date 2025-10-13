@@ -20,6 +20,7 @@ public class ClassificationResourceAssembler {
             entity.getDisplayOrder(),
             entity.getIconName(),
             entity.getColorHex(),
+            entity.getMetadataSchema(),
             entity.getIsSystem(),
             entity.getIsActive()
         );

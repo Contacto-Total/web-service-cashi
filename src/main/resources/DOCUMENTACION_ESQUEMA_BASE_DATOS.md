@@ -1,0 +1,1501 @@
+# Documentación Completa del Esquema de Base de Datos
+
+## Sistema de Gestión de Cobranza Multi-Tenant - Cashi
+
+**Versión:** 1.0
+**Fecha:** 2025-10-07
+**Base de Datos:** MySQL/MariaDB
+**Framework:** Spring Boot 3.2.1 + JPA/Hibernate
+
+---
+
+## Índice
+
+1. [Resumen Ejecutivo](#resumen-ejecutivo)
+2. [Arquitectura General](#arquitectura-general)
+3. [Módulo Shared - Entidades Compartidas](#1-módulo-shared---entidades-compartidas)
+4. [Módulo System Configuration - Configuración del Sistema](#2-módulo-system-configuration---configuración-del-sistema)
+5. [Módulo Collection Management - Gestión de Cobranza](#3-módulo-collection-management---gestión-de-cobranza)
+6. [Módulo Customer Management - Gestión de Clientes](#4-módulo-customer-management---gestión-de-clientes)
+7. [Módulo Payment Processing - Procesamiento de Pagos](#5-módulo-payment-processing---procesamiento-de-pagos)
+8. [Patrones de Diseño Implementados](#patrones-de-diseño-implementados)
+9. [Convenciones y Estándares](#convenciones-y-estándares)
+10. [Estadísticas del Esquema](#estadísticas-del-esquema)
+
+---
+
+## Resumen Ejecutivo
+
+Este documento describe la estructura completa de la base de datos del sistema Cashi, una plataforma multi-tenant para gestión de cobranza. El esquema está diseñado con los siguientes principios:
+
+- **Multi-Tenancy**: Aislamiento completo de datos por inquilino
+- **Configurabilidad**: Campos dinámicos y clasificaciones jerárquicas
+- **Extensibilidad**: Patrón Strategy para lógica de negocio personalizable
+- **Auditoría**: Trazabilidad completa de cambios
+- **Versionado**: Snapshots y rollback de configuraciones
+
+### Estadísticas Generales
+
+- **Total de Tablas**: 26
+- **Total de Índices**: 60+
+- **Idioma**: Español (nombres de tablas y columnas)
+- **Código Fuente**: Inglés (nombres de propiedades Java)
+
+---
+
+## Arquitectura General
+
+### Jerarquía Multi-Tenant
+
+```
+Inquilino (Tenant)
+    └── Cartera (Portfolio) ← Soporta jerarquía padre-hijo
+        └── Campaña (Campaign)
+            └── Gestión (Management)
+```
+
+### Módulos del Sistema
+
+1. **Shared**: Entidades compartidas entre módulos (Tenant, Portfolio, Campaign, FieldDefinition, etc.)
+2. **System Configuration**: Configuración de clasificaciones y catálogos
+3. **Collection Management**: Gestión de cobranza y tipificaciones
+4. **Customer Management**: Información de clientes
+5. **Payment Processing**: Procesamiento de pagos y cronogramas
+
+---
+
+## 1. MÓDULO SHARED - ENTIDADES COMPARTIDAS
+
+### 1.1. inquilinos (Tenant)
+
+**Descripción**: Entidad raíz que representa las empresas cliente del sistema. Proporciona aislamiento multi-tenant.
+
+**Clase Java**: `com.cashi.shared.domain.model.entities.Tenant`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `codigo_inquilino` | VARCHAR(50) | NOT NULL, UNIQUE | Código único del inquilino |
+| `nombre_inquilino` | VARCHAR(255) | NOT NULL | Nombre del inquilino |
+| `razon_social` | VARCHAR(255) | | Razón social de la empresa |
+| `numero_fiscal` | VARCHAR(50) | | Número de identificación fiscal |
+| `codigo_pais` | VARCHAR(3) | | Código del país (ISO 3) |
+| `zona_horaria` | VARCHAR(50) | | Zona horaria |
+| `esta_activo` | BOOLEAN | NOT NULL, DEFAULT TRUE | Indica si el inquilino está activo |
+| `maximo_usuarios` | INT | | Máximo de usuarios permitidos |
+| `maximo_sesiones_concurrentes` | INT | | Máximo de sesiones concurrentes |
+| `nivel_suscripcion` | VARCHAR(50) | | Nivel de suscripción |
+| `fecha_expiracion_suscripcion` | DATETIME | | Fecha de expiración de suscripción |
+| `configuracion_json` | JSON | | Configuración adicional en formato JSON |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación (auditoría) |
+| `fecha_actualizacion` | DATETIME | | Fecha de última actualización |
+
+#### Índices
+
+- `idx_codigo_inquilino` - UNIQUE en `codigo_inquilino`
+- `idx_inquilino_activo` - en `esta_activo`
+
+#### Relaciones
+
+- **Ninguna** (Entidad raíz del sistema)
+
+#### Propiedad Java
+
+```java
+@Entity
+@Table(name = "inquilinos")
+public class Tenant {
+    @Column(name = "codigo_inquilino", unique = true, nullable = false, length = 50)
+    private String tenantCode;
+
+    @Column(name = "nombre_inquilino", nullable = false, length = 255)
+    private String tenantName;
+    // ...
+}
+```
+
+---
+
+### 1.2. carteras (Portfolio)
+
+**Descripción**: Representa las carteras de clientes con soporte jerárquico. Permite organizar carteras en estructuras multinivel (cartera padre → cartera hija → sub-cartera).
+
+**Clase Java**: `com.cashi.shared.domain.model.entities.Portfolio`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_inquilino` | BIGINT | NOT NULL, FK → inquilinos | Inquilino propietario |
+| `codigo_cartera` | VARCHAR(50) | NOT NULL | Código de la cartera |
+| `nombre_cartera` | VARCHAR(255) | NOT NULL | Nombre de la cartera |
+| `tipo_cartera` | VARCHAR(50) | | Tipo de cartera (ENUM) |
+| `id_cartera_padre` | BIGINT | FK → carteras | Cartera padre (jerarquía) |
+| `nivel_jerarquia` | INT | | Nivel en la jerarquía (0=raíz, 1=hijo, 2=nieto, etc.) |
+| `ruta_jerarquia` | VARCHAR(500) | | Ruta completa jerárquica (ej: /1/5/12) |
+| `descripcion` | TEXT | | Descripción de la cartera |
+| `esta_activo` | BOOLEAN | NOT NULL, DEFAULT TRUE | Indica si está activa |
+| `configuracion_json` | JSON | | Configuración adicional |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `fecha_actualizacion` | DATETIME | | Fecha de actualización |
+
+#### Índices
+
+- `idx_cartera_inquilino` - en `id_inquilino`
+- `idx_cartera_padre` - en `id_cartera_padre`
+- `idx_codigo_cartera` - UNIQUE en (`id_inquilino`, `codigo_cartera`)
+
+#### Relaciones
+
+- **@ManyToOne** → `inquilinos` (id_inquilino)
+- **@ManyToOne** → `carteras` (id_cartera_padre) - Autorreferencia para jerarquía
+
+#### Tipos de Cartera (PortfolioType ENUM)
+
+```
+CREDIT_CARD       - Tarjeta de crédito
+PERSONAL_LOAN     - Préstamo personal
+MORTGAGE          - Hipoteca
+AUTO_LOAN         - Préstamo automotriz
+COMMERCIAL        - Comercial
+RETAIL            - Retail
+TELECOM           - Telecomunicaciones
+UTILITIES         - Servicios públicos
+EDUCATION         - Educación
+OTHER             - Otros
+```
+
+---
+
+### 1.3. campañas (Campaign)
+
+**Descripción**: Gestión de campañas de cobranza por inquilino/cartera.
+
+**Clase Java**: `com.cashi.shared.domain.model.entities.Campaign`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_inquilino` | BIGINT | NOT NULL, FK → inquilinos | Inquilino propietario |
+| `id_cartera` | BIGINT | FK → carteras | Cartera asociada |
+| `codigo_campana` | VARCHAR(50) | NOT NULL | Código de campaña |
+| `nombre_campana` | VARCHAR(255) | NOT NULL | Nombre de campaña |
+| `tipo_campana` | VARCHAR(50) | | Tipo de campaña (ENUM) |
+| `descripcion` | TEXT | | Descripción |
+| `fecha_inicio` | DATE | | Fecha de inicio |
+| `fecha_fin` | DATE | | Fecha de fin |
+| `esta_activo` | BOOLEAN | NOT NULL, DEFAULT TRUE | Indica si está activa |
+| `cuentas_objetivo` | INT | | Número de cuentas objetivo |
+| `monto_objetivo` | DECIMAL(15,2) | | Monto objetivo |
+| `config_json` | JSON | | Configuración adicional |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `fecha_actualizacion` | DATETIME | | Fecha de actualización |
+
+#### Índices
+
+- `idx_campana_inquilino` - en `id_inquilino`
+- `idx_campana_cartera` - en `id_cartera`
+- `idx_campana_fechas` - en (`fecha_inicio`, `fecha_fin`)
+- `idx_campana_activo` - en `esta_activo`
+
+#### Relaciones
+
+- **@ManyToOne** → `inquilinos` (id_inquilino)
+- **@ManyToOne** → `carteras` (id_cartera)
+
+#### Tipos de Campaña (CampaignType ENUM)
+
+```
+EARLY_COLLECTION   - Cobranza temprana
+LATE_COLLECTION    - Cobranza tardía
+RECOVERY           - Recuperación
+RETENTION          - Retención
+CUSTOMER_SERVICE   - Servicio al cliente
+SALES              - Ventas
+SURVEY             - Encuesta
+OTHER              - Otros
+```
+
+---
+
+### 1.4. definiciones_campos (FieldDefinition)
+
+**Descripción**: Catálogo maestro de campos dinámicos disponibles. Define todos los campos posibles que pueden ser habilitados por inquilino (patrón EAV).
+
+**Clase Java**: `com.cashi.shared.domain.model.entities.FieldDefinition`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `codigo_campo` | VARCHAR(100) | NOT NULL, UNIQUE | Código único del campo |
+| `nombre_campo` | VARCHAR(255) | NOT NULL | Nombre del campo |
+| `tipo_campo` | VARCHAR(50) | NOT NULL | Tipo de dato del campo (ENUM) |
+| `categoria_campo` | VARCHAR(100) | | Categoría del campo |
+| `descripcion` | TEXT | | Descripción |
+| `valor_predeterminado` | VARCHAR(500) | | Valor predeterminado |
+| `reglas_validacion` | JSON | | Reglas de validación en JSON |
+| `orden_visualizacion` | INT | | Orden de visualización |
+| `es_campo_sistema` | BOOLEAN | NOT NULL, DEFAULT FALSE | Indica si es campo de sistema (no editable) |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `fecha_actualizacion` | DATETIME | | Fecha de actualización |
+
+#### Índices
+
+- `idx_codigo_campo` - UNIQUE en `codigo_campo`
+- `idx_categoria_campo` - en `categoria_campo`
+
+#### Tipos de Campo (FieldType ENUM)
+
+```
+TEXT           - Texto libre
+NUMBER         - Número entero
+DECIMAL        - Número decimal
+DATE           - Fecha
+DATETIME       - Fecha y hora
+BOOLEAN        - Verdadero/Falso
+SELECT         - Lista de selección única
+MULTI_SELECT   - Lista de selección múltiple
+JSON           - Objeto JSON
+PHONE          - Número telefónico
+EMAIL          - Correo electrónico
+URL            - URL
+CURRENCY       - Moneda
+```
+
+---
+
+### 1.5. configuracion_campos_inquilino (TenantFieldConfig)
+
+**Descripción**: Configuración específica de campos dinámicos por inquilino/cartera. Controla qué campos están activos, visibles, requeridos, etc.
+
+**Clase Java**: `com.cashi.shared.domain.model.entities.TenantFieldConfig`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_inquilino` | BIGINT | NOT NULL, FK → inquilinos | Inquilino |
+| `id_cartera` | BIGINT | FK → carteras | Cartera (opcional para configuración específica) |
+| `id_definicion_campo` | BIGINT | NOT NULL, FK → definiciones_campos | Definición del campo |
+| `esta_habilitado` | BOOLEAN | NOT NULL, DEFAULT TRUE | Indica si está habilitado |
+| `es_requerido` | BOOLEAN | NOT NULL, DEFAULT FALSE | Indica si es campo requerido |
+| `es_visible` | BOOLEAN | NOT NULL, DEFAULT TRUE | Indica si es visible en UI |
+| `es_editable` | BOOLEAN | NOT NULL, DEFAULT TRUE | Indica si es editable |
+| `etiqueta_visualizacion` | VARCHAR(255) | | Etiqueta personalizada para UI |
+| `orden_visualizacion` | INT | | Orden personalizado de visualización |
+| `valor_predeterminado_sobrescrito` | VARCHAR(500) | | Valor predeterminado sobrescrito |
+| `reglas_validacion_sobrescritas` | JSON | | Reglas de validación personalizadas |
+| `config_json` | JSON | | Configuración adicional |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `fecha_actualizacion` | DATETIME | | Fecha de actualización |
+
+#### Índices
+
+- `idx_config_campo_inquilino` - en `id_inquilino`
+- `idx_config_campo_cartera` - en `id_cartera`
+- `idx_config_campo_def` - en `id_definicion_campo`
+- `idx_config_campo_unico` - UNIQUE en (`id_inquilino`, `id_cartera`, `id_definicion_campo`)
+
+#### Relaciones
+
+- **@ManyToOne** → `inquilinos` (id_inquilino)
+- **@ManyToOne** → `carteras` (id_cartera)
+- **@ManyToOne** → `definiciones_campos` (id_definicion_campo)
+
+---
+
+### 1.6. reglas_negocio_inquilino (TenantBusinessRule)
+
+**Descripción**: Reglas de negocio y validaciones específicas por inquilino. Implementa configuración para reglas personalizadas de validación y lógica de negocio.
+
+**Clase Java**: `com.cashi.shared.domain.model.entities.TenantBusinessRule`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_inquilino` | BIGINT | NOT NULL, FK → inquilinos | Inquilino |
+| `id_cartera` | BIGINT | FK → carteras | Cartera (opcional) |
+| `codigo_regla` | VARCHAR(100) | NOT NULL | Código de la regla |
+| `nombre_regla` | VARCHAR(255) | NOT NULL | Nombre de la regla |
+| `tipo_regla` | VARCHAR(50) | NOT NULL | Tipo de regla (ENUM) |
+| `categoria_regla` | VARCHAR(100) | | Categoría de la regla |
+| `descripcion` | TEXT | | Descripción |
+| `esta_activo` | BOOLEAN | NOT NULL, DEFAULT TRUE | Indica si está activa |
+| `prioridad` | INT | | Prioridad de ejecución (menor = mayor prioridad) |
+| `expresion_condicion` | TEXT | | Expresión de condición (lenguaje de expresiones) |
+| `expresion_accion` | TEXT | | Expresión de acción |
+| `json_validacion` | JSON | | Configuración de validación en JSON |
+| `mensaje_error` | VARCHAR(500) | | Mensaje de error a mostrar |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `fecha_actualizacion` | DATETIME | | Fecha de actualización |
+
+#### Índices
+
+- `idx_regla_inquilino` - en `id_inquilino`
+- `idx_regla_cartera` - en `id_cartera`
+- `idx_regla_codigo` - en `codigo_regla`
+- `idx_regla_unico` - UNIQUE en (`id_inquilino`, `id_cartera`, `codigo_regla`)
+
+#### Relaciones
+
+- **@ManyToOne** → `inquilinos` (id_inquilino)
+- **@ManyToOne** → `carteras` (id_cartera)
+
+#### Tipos de Regla (RuleType ENUM)
+
+```
+FIELD_VALIDATION         - Validación de campo individual
+WORKFLOW_VALIDATION      - Validación de flujo de trabajo
+AUTHORIZATION_RULE       - Regla de autorización
+CALCULATION_RULE         - Regla de cálculo
+CONDITIONAL_FIELD        - Campo condicional (mostrar/ocultar)
+AUTO_FILL                - Auto-completado de campos
+CROSS_FIELD_VALIDATION   - Validación cruzada entre campos
+BUSINESS_LOGIC           - Lógica de negocio personalizada
+```
+
+---
+
+### 1.7. estrategias_procesamiento (ProcessingStrategy)
+
+**Descripción**: Implementación del patrón Strategy para procesamiento específico por inquilino. Configura qué clases de estrategia usar para diferentes operaciones del sistema.
+
+**Clase Java**: `com.cashi.shared.domain.model.entities.ProcessingStrategy`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_inquilino` | BIGINT | NOT NULL, FK → inquilinos | Inquilino |
+| `id_cartera` | BIGINT | FK → carteras | Cartera (opcional) |
+| `tipo_estrategia` | VARCHAR(100) | NOT NULL | Tipo de estrategia (ENUM) |
+| `implementacion_estrategia` | VARCHAR(500) | NOT NULL | Nombre completo de la clase de implementación |
+| `nombre_estrategia` | VARCHAR(255) | | Nombre descriptivo de la estrategia |
+| `descripcion` | TEXT | | Descripción |
+| `esta_activo` | BOOLEAN | NOT NULL, DEFAULT TRUE | Indica si está activa |
+| `prioridad` | INT | | Prioridad (si hay múltiples estrategias) |
+| `config_json` | JSON | | Configuración adicional para la estrategia |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `fecha_actualizacion` | DATETIME | | Fecha de actualización |
+
+#### Índices
+
+- `idx_estrategia_inquilino` - en `id_inquilino`
+- `idx_estrategia_cartera` - en `id_cartera`
+- `idx_estrategia_tipo` - en `tipo_estrategia`
+- `idx_estrategia_unico` - UNIQUE en (`id_inquilino`, `id_cartera`, `tipo_estrategia`)
+
+#### Relaciones
+
+- **@ManyToOne** → `inquilinos` (id_inquilino)
+- **@ManyToOne** → `carteras` (id_cartera)
+
+#### Tipos de Estrategia (StrategyType ENUM)
+
+```
+VALIDATION_STRATEGY          - Estrategia de validación
+FIELD_GENERATION_STRATEGY    - Estrategia de generación de campos
+PAYMENT_PROCESSING_STRATEGY  - Estrategia de procesamiento de pagos
+SCHEDULE_CALCULATION_STRATEGY - Estrategia de cálculo de cronogramas
+NOTIFICATION_STRATEGY        - Estrategia de notificaciones
+AUTHORIZATION_STRATEGY       - Estrategia de autorización
+SCORING_STRATEGY             - Estrategia de scoring/puntuación
+WORKFLOW_STRATEGY            - Estrategia de flujo de trabajo
+```
+
+---
+
+## 2. MÓDULO SYSTEM CONFIGURATION - CONFIGURACIÓN DEL SISTEMA
+
+### 2.1. catalogo_clasificaciones (ClassificationCatalog)
+
+**Descripción**: Catálogo unificado de TODAS las tipificaciones del sistema. Soporta jerarquías de N niveles (nivel 1 → nivel 2 → nivel 3 → ... → nivel N). Esta es la tabla central para clasificaciones de contacto, tipos de gestión, tipos de pago, quejas, y clasificaciones personalizadas.
+
+**Clase Java**: `com.cashi.systemconfiguration.domain.model.entities.ClassificationCatalog`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `codigo` | VARCHAR(20) | NOT NULL, UNIQUE | Código único de clasificación (ej: "CPC", "ACP", "NCL") |
+| `nombre` | VARCHAR(255) | NOT NULL | Nombre de la clasificación |
+| `tipo_clasificacion` | VARCHAR(50) | NOT NULL | Tipo de clasificación (ENUM) |
+| `id_clasificacion_padre` | BIGINT | FK → catalogo_clasificaciones | Clasificación padre (para jerarquía) |
+| `nivel_jerarquia` | INT | NOT NULL | Nivel en la jerarquía (1=raíz, 2=hijo, 3=nieto, etc.) |
+| `ruta_jerarquia` | VARCHAR(1000) | | Ruta completa jerárquica (ej: "/1/5/12") |
+| `descripcion` | TEXT | | Descripción detallada |
+| `orden_visualizacion` | INT | | Orden de visualización en UI |
+| `nombre_icono` | VARCHAR(100) | | Nombre del icono (para UI) |
+| `color_hexadecimal` | VARCHAR(7) | | Color en hexadecimal (ej: "#FF5733") |
+| `es_sistema` | BOOLEAN | NOT NULL, DEFAULT FALSE | Indica si es clasificación de sistema (no eliminable) |
+| `esquema_metadatos` | JSON | | Esquema de metadatos adicionales |
+| `esta_activo` | BOOLEAN | NOT NULL, DEFAULT TRUE | Indica si está activa |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `fecha_actualizacion` | DATETIME | | Fecha de actualización |
+| `fecha_eliminacion` | DATETIME | | Fecha de eliminación (soft delete) |
+
+#### Índices
+
+- `idx_codigo_clasificacion` - UNIQUE en `codigo`
+- `idx_tipo_clasificacion` - en `tipo_clasificacion`
+- `idx_clasificacion_padre` - en `id_clasificacion_padre`
+- `idx_jerarquia_clasificacion` - en (`nivel_jerarquia`, `orden_visualizacion`)
+
+#### Relaciones
+
+- **@ManyToOne** → `catalogo_clasificaciones` (id_clasificacion_padre) - Autorreferencia para jerarquía
+
+#### Tipos de Clasificación (ClassificationType ENUM)
+
+```
+CONTACT_RESULT      - Resultado de contacto (CPC, CTT, NCL, etc.)
+MANAGEMENT_TYPE     - Tipo de gestión (ACP, PGR, CNV, etc.)
+PAYMENT_TYPE        - Tipo de pago
+COMPLAINT_TYPE      - Tipo de queja
+PAYMENT_SCHEDULE    - Clasificación de cronograma de pago
+CUSTOM              - Clasificación personalizada por inquilino
+```
+
+#### Ejemplos de Clasificaciones
+
+**Resultados de Contacto** (CONTACT_RESULT):
+- `CPC` - Contacto Personal con el Cliente
+- `CTT` - Contacto con Terceros
+- `NCL` - No Contacto por Línea ocupada
+- `NCC` - No Contacto por Colgó
+- `NCN` - No Contacto por Número equivocado
+
+**Tipos de Gestión** (MANAGEMENT_TYPE):
+- `ACP` - Acepta Compromiso de Pago
+- `PGR` - Promesa Gestión de Reclamo
+- `CNV` - Convenio de Pago
+- `REF` - Refinanciamiento
+- `NPC` - No Puede/No tiene para Pagar
+
+---
+
+### 2.2. configuracion_clasificacion_inquilino (TenantClassificationConfig)
+
+**Descripción**: Configuración de clasificaciones por tenant/portfolio. Permite habilitar/deshabilitar clasificaciones, personalizar nombres, íconos, colores, y definir requisitos adicionales (comentarios, adjuntos, fecha de seguimiento).
+
+**Clase Java**: `com.cashi.systemconfiguration.domain.model.entities.TenantClassificationConfig`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_inquilino` | BIGINT | NOT NULL, FK → inquilinos | Inquilino |
+| `id_cartera` | BIGINT | FK → carteras | Cartera (opcional para config específica) |
+| `id_clasificacion` | BIGINT | NOT NULL, FK → catalogo_clasificaciones | Clasificación del catálogo |
+| `esta_habilitado` | BOOLEAN | NOT NULL, DEFAULT TRUE | Indica si está habilitada para el tenant |
+| `es_requerido` | BOOLEAN | NOT NULL, DEFAULT FALSE | Indica si es requerida en el flujo |
+| `nombre_personalizado` | VARCHAR(255) | | Nombre personalizado (sobrescribe el del catálogo) |
+| `orden_personalizado` | INT | | Orden personalizado de visualización |
+| `icono_personalizado` | VARCHAR(100) | | Ícono personalizado |
+| `color_personalizado` | VARCHAR(7) | | Color personalizado en hexadecimal |
+| `requiere_comentario` | BOOLEAN | NOT NULL, DEFAULT FALSE | Requiere comentario al seleccionar |
+| `longitud_minima_comentario` | INT | | Longitud mínima del comentario |
+| `requiere_adjunto` | BOOLEAN | NOT NULL, DEFAULT FALSE | Requiere adjunto al seleccionar |
+| `requiere_fecha_seguimiento` | BOOLEAN | NOT NULL, DEFAULT FALSE | Requiere fecha de seguimiento |
+| `disparadores_automaticos` | JSON | | Disparadores automáticos al seleccionar |
+| `validation_rules` | JSON | | Reglas de validación adicionales |
+| `ui_config` | JSON | | Configuración de UI específica |
+| `created_by` | VARCHAR(100) | | Usuario que creó la configuración |
+| `created_at` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `updated_at` | DATETIME | | Fecha de actualización |
+
+#### Índices
+
+- `idx_config_inquilino` - en `id_inquilino`
+- `idx_config_cartera` - en `id_cartera`
+- `idx_config_clasificacion` - en `id_clasificacion`
+- `idx_config_habilitado` - en (`id_inquilino`, `id_cartera`, `esta_habilitado`)
+- `idx_config_clasificacion_unico` - UNIQUE en (`id_inquilino`, `id_cartera`, `id_clasificacion`)
+
+#### Relaciones
+
+- **@ManyToOne** → `inquilinos` (id_inquilino)
+- **@ManyToOne** → `carteras` (id_cartera)
+- **@ManyToOne** → `catalogo_clasificaciones` (id_clasificacion)
+
+---
+
+### 2.3. mapeos_campo_clasificacion (ClassificationFieldMapping)
+
+**Descripción**: Mapea campos dinámicos a clasificaciones. Define qué campos se requieren/muestran cuando se selecciona una clasificación específica. Por ejemplo, si se selecciona "ACP - Acepta Compromiso de Pago", se pueden requerir campos como "Fecha de Pago" y "Monto Comprometido".
+
+**Clase Java**: `com.cashi.systemconfiguration.domain.model.entities.ClassificationFieldMapping`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_inquilino` | BIGINT | NOT NULL, FK → inquilinos | Inquilino |
+| `id_cartera` | BIGINT | FK → carteras | Cartera (opcional) |
+| `id_clasificacion` | BIGINT | NOT NULL, FK → catalogo_clasificaciones | Clasificación |
+| `id_definicion_campo` | BIGINT | NOT NULL, FK → definiciones_campos | Campo dinámico |
+| `es_requerido` | BOOLEAN | NOT NULL, DEFAULT FALSE | Campo es requerido para esta clasificación |
+| `es_visible` | BOOLEAN | NOT NULL, DEFAULT TRUE | Campo es visible en UI |
+| `logica_condicional` | JSON | | Lógica condicional para mostrar/requerir campo |
+| `orden_visualizacion` | INT | | Orden de visualización del campo |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `fecha_actualizacion` | DATETIME | | Fecha de actualización |
+
+#### Índices
+
+- `idx_mcf_inquilino` - en `id_inquilino`
+- `idx_mcf_cartera` - en `id_cartera`
+- `idx_mcf_clasificacion` - en `id_clasificacion`
+- `idx_mcf_campo` - en `id_definicion_campo`
+- `idx_mcf_unico` - UNIQUE en (`id_inquilino`, `id_cartera`, `id_clasificacion`, `id_definicion_campo`)
+
+#### Relaciones
+
+- **@ManyToOne** → `inquilinos` (id_inquilino)
+- **@ManyToOne** → `carteras` (id_cartera)
+- **@ManyToOne** → `catalogo_clasificaciones` (id_clasificacion)
+- **@ManyToOne** → `definiciones_campos` (id_definicion_campo)
+
+#### Ejemplo de Uso
+
+```
+Clasificación: "ACP - Acepta Compromiso de Pago"
+  ├── Campo Requerido: "Fecha de Pago"
+  ├── Campo Requerido: "Monto Comprometido"
+  └── Campo Opcional: "Método de Pago"
+
+Clasificación: "PGR - Promesa Gestión de Reclamo"
+  ├── Campo Requerido: "Número de Reclamo"
+  └── Campo Requerido: "Tipo de Reclamo"
+```
+
+---
+
+### 2.4. dependencias_clasificacion (ClassificationDependency)
+
+**Descripción**: Define dependencias entre clasificaciones. Permite crear reglas como "Si se selecciona A, entonces B es obligatorio" o "Si se selecciona X, entonces Y se habilita". Fundamental para flujos de clasificación complejos.
+
+**Clase Java**: `com.cashi.systemconfiguration.domain.model.entities.ClassificationDependency`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_inquilino` | BIGINT | NOT NULL, FK → inquilinos | Inquilino |
+| `id_cartera` | BIGINT | FK → carteras | Cartera (opcional) |
+| `id_clasificacion_padre` | BIGINT | NOT NULL, FK → catalogo_clasificaciones | Clasificación padre (origen) |
+| `id_clasificacion_hijo` | BIGINT | NOT NULL, FK → catalogo_clasificaciones | Clasificación hijo (destino) |
+| `tipo_dependencia` | VARCHAR(50) | NOT NULL | Tipo de dependencia (ENUM) |
+| `es_obligatorio` | BOOLEAN | NOT NULL, DEFAULT FALSE | Indica si es obligatorio cumplir dependencia |
+| `expresion_condicion` | JSON | | Expresión de condición (para lógica compleja) |
+| `orden_visualizacion` | INT | | Orden de visualización del hijo |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `fecha_actualizacion` | DATETIME | | Fecha de actualización |
+
+#### Índices
+
+- `idx_dep_inquilino` - en `id_inquilino`
+- `idx_dep_cartera` - en `id_cartera`
+- `idx_dep_padre` - en `id_clasificacion_padre`
+- `idx_dep_hijo` - en `id_clasificacion_hijo`
+
+#### Relaciones
+
+- **@ManyToOne** → `inquilinos` (id_inquilino)
+- **@ManyToOne** → `carteras` (id_cartera)
+- **@ManyToOne** → `catalogo_clasificaciones` (id_clasificacion_padre)
+- **@ManyToOne** → `catalogo_clasificaciones` (id_clasificacion_hijo)
+
+#### Tipos de Dependencia (DependencyType ENUM)
+
+```
+REQUIRES  - Padre REQUIERE hijo obligatorio
+            Ejemplo: "ACP" REQUIERE "Fecha de Pago"
+
+SUGGESTS  - Padre SUGIERE hijo (opcional pero recomendado)
+            Ejemplo: "CNV" SUGIERE "Número de Convenio"
+
+BLOCKS    - Padre BLOQUEA hijo (no se puede seleccionar)
+            Ejemplo: "NPC" BLOQUEA "Fecha de Pago"
+
+ENABLES   - Padre HABILITA hijo (solo se muestra si padre está seleccionado)
+            Ejemplo: "PGR" HABILITA "Tipo de Reclamo"
+```
+
+#### Ejemplos de Dependencias
+
+```
+"ACP - Acepta Compromiso de Pago" REQUIRES "Fecha de Pago"
+"ACP - Acepta Compromiso de Pago" REQUIRES "Monto Comprometido"
+"NPC - No Puede Pagar" BLOCKS "Fecha de Pago"
+"PGR - Promesa Gestión de Reclamo" ENABLES "Tipo de Reclamo"
+```
+
+---
+
+### 2.5. versiones_configuracion (ConfigurationVersion)
+
+**Descripción**: Versionado de configuraciones completas. Permite crear snapshots de toda la configuración (clasificaciones, campos, dependencias) y realizar rollback completo a versiones anteriores.
+
+**Clase Java**: `com.cashi.systemconfiguration.domain.model.entities.ConfigurationVersion`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_inquilino` | BIGINT | NOT NULL, FK → inquilinos | Inquilino |
+| `id_cartera` | BIGINT | FK → carteras | Cartera (opcional) |
+| `numero_version` | INT | NOT NULL | Número de versión (secuencial) |
+| `nombre_version` | VARCHAR(255) | NOT NULL | Nombre descriptivo de la versión |
+| `descripcion` | TEXT | | Descripción de cambios en esta versión |
+| `esta_activo` | BOOLEAN | NOT NULL, DEFAULT FALSE | Indica si esta versión está activa |
+| `datos_snapshot` | LONGTEXT | | Snapshot completo de configuración en JSON |
+| `creado_por` | VARCHAR(100) | NOT NULL | Usuario que creó la versión |
+| `activado_en` | DATETIME | | Fecha y hora de activación |
+| `activado_por` | VARCHAR(100) | | Usuario que activó la versión |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+
+#### Índices
+
+- `idx_version_inquilino` - en `id_inquilino`
+- `idx_version_cartera` - en `id_cartera`
+- `idx_version_numero` - UNIQUE en (`id_inquilino`, `id_cartera`, `numero_version`)
+- `idx_version_activo` - en (`id_inquilino`, `id_cartera`, `esta_activo`)
+
+#### Relaciones
+
+- **@ManyToOne** → `inquilinos` (id_inquilino)
+- **@ManyToOne** → `carteras` (id_cartera)
+
+#### Flujo de Versionado
+
+```
+1. Usuario crea snapshot → Se guarda configuración actual en datos_snapshot
+2. Usuario realiza cambios → Los cambios se aplican en tiempo real
+3. Usuario crea nuevo snapshot → Nueva versión con cambios
+4. Usuario activa versión anterior → Rollback completo a snapshot anterior
+```
+
+---
+
+### 2.6. historial_configuracion_clasificacion (ClassificationConfigHistory)
+
+**Descripción**: Auditoría completa de cambios en configuración. Registra TODOS los cambios realizados en clasificaciones, configuraciones, dependencias, y mapeos. Permite trazabilidad completa y análisis de cambios.
+
+**Clase Java**: `com.cashi.systemconfiguration.domain.model.entities.ClassificationConfigHistory`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `tipo_entidad` | VARCHAR(50) | NOT NULL | Tipo de entidad modificada (ENUM) |
+| `id_entidad` | BIGINT | NOT NULL | ID de la entidad modificada |
+| `id_inquilino` | BIGINT | FK → inquilinos | Inquilino (si aplica) |
+| `id_cartera` | BIGINT | FK → carteras | Cartera (si aplica) |
+| `tipo_cambio` | VARCHAR(50) | NOT NULL | Tipo de cambio realizado (ENUM) |
+| `cambiado_por` | VARCHAR(100) | NOT NULL | Usuario que realizó el cambio |
+| `valor_previo` | JSON | | Valor previo (JSON completo del objeto) |
+| `valor_nuevo` | JSON | | Valor nuevo (JSON completo del objeto) |
+| `razon_cambio` | TEXT | | Razón o comentario del cambio |
+| `direccion_ip` | VARCHAR(45) | | Dirección IP del usuario |
+| `agente_usuario` | VARCHAR(500) | | User Agent del navegador |
+| `fecha_creacion` | DATETIME | NOT NULL | Fecha y hora del cambio |
+
+#### Índices
+
+- `idx_historial_entidad` - en (`tipo_entidad`, `id_entidad`)
+- `idx_historial_inquilino` - en `id_inquilino`
+- `idx_historial_fecha` - en `fecha_creacion DESC`
+- `idx_historial_usuario` - en `cambiado_por`
+
+#### Relaciones
+
+- **@ManyToOne** → `inquilinos` (id_inquilino)
+- **@ManyToOne** → `carteras` (id_cartera)
+
+#### Tipos de Entidad (EntityType ENUM)
+
+```
+CLASSIFICATION  - Catálogo de clasificaciones
+CONFIG          - Configuración de clasificación por tenant
+DEPENDENCY      - Dependencia entre clasificaciones
+FIELD_MAPPING   - Mapeo de campos a clasificaciones
+VERSION         - Versión de configuración
+```
+
+#### Tipos de Cambio (ChangeType ENUM)
+
+```
+CREATE   - Creación de nuevo registro
+UPDATE   - Actualización de registro existente
+DELETE   - Eliminación de registro
+ENABLE   - Habilitación de registro
+DISABLE  - Deshabilitación de registro
+RESTORE  - Restauración desde versión anterior
+```
+
+---
+
+
+**Estado**: ⚠️ DEPRECATED - Reemplazado por `catalogo_clasificaciones`
+
+**Descripción**: Tabla legacy para tipos de gestión (ACP, PGR, CNV, etc.). Esta tabla está marcada para eliminación. Toda nueva funcionalidad debe usar `catalogo_clasificaciones` con `tipo_clasificacion = 'MANAGEMENT_TYPE'`.
+
+**Clase Java**: `com.cashi.systemconfiguration.domain.model.entities.ManagementClassification` (systemconfiguration package)
+
+---
+
+## 3. MÓDULO COLLECTION MANAGEMENT - GESTIÓN DE COBRANZA
+
+### 3.1. gestiones (Management) - AGGREGATE ROOT
+
+**Descripción**: Aggregate Root que representa una gestión de cobranza completa. Incluye información del contacto, tipificaciones jerárquicas, campos dinámicos, detalle de llamada y detalle de pago. Esta es la entidad central del módulo de cobranza.
+
+**Clase Java**: `com.cashi.collectionmanagement.domain.model.aggregates.Management`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_gestion` | VARCHAR(36) | | ID único de gestión (UUID) |
+| `id_inquilino` | BIGINT | FK → inquilinos | Inquilino |
+| `id_cartera` | BIGINT | FK → carteras | Cartera |
+| `id_campana` | BIGINT | FK → campañas | Campaña |
+| `id_cliente` | VARCHAR(36) | | ID del cliente gestionado |
+| `id_asesor` | VARCHAR(36) | | ID del asesor que realizó la gestión |
+| `id_campana_legacy` | VARCHAR(36) | DEPRECATED | ID de campaña legacy (a eliminar) |
+| `fecha_gestion` | DATETIME | | Fecha y hora de la gestión |
+| `codigo_resultado_contacto` | VARCHAR(20) | | Código de resultado de contacto (ej: "CPC") |
+| `descripcion_resultado_contacto` | VARCHAR(255) | | Descripción del resultado (ej: "Contacto Personal") |
+| `codigo_tipo_gestion` | VARCHAR(20) | | Código de tipo de gestión (ej: "ACP") |
+| `descripcion_tipo_gestion` | VARCHAR(255) | | Descripción del tipo (ej: "Acepta Compromiso Pago") |
+| `tipo_gestion_requiere_pago` | BOOLEAN | | Indica si tipo de gestión requiere pago |
+| `tipo_gestion_requiere_cronograma` | BOOLEAN | | Indica si tipo de gestión requiere cronograma |
+| `id_detalle_llamada` | BIGINT | FK → detalles_llamada | Detalle de la llamada telefónica |
+| `id_detalle_pago` | BIGINT | FK → detalles_pago | Detalle del pago prometido/acordado |
+| `observaciones` | VARCHAR(2000) | | Observaciones adicionales |
+| `created_at` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `updated_at` | DATETIME | | Fecha de actualización |
+
+#### Índices
+
+- `idx_gest_inquilino` - en `id_inquilino`
+- `idx_gest_cartera` - en `id_cartera`
+- `idx_gest_campana` - en `id_campana`
+- `idx_gest_cliente` - en `id_cliente`
+- `idx_gest_asesor` - en `id_asesor`
+- `idx_gest_fecha` - en `fecha_gestion`
+
+#### Relaciones
+
+- **@ManyToOne** → `inquilinos` (id_inquilino)
+- **@ManyToOne** → `carteras` (id_cartera)
+- **@ManyToOne** → `campañas` (id_campana)
+- **@OneToOne** → `detalles_llamada` (id_detalle_llamada) - CASCADE ALL, ORPHAN REMOVAL
+- **@OneToOne** → `detalles_pago` (id_detalle_pago) - CASCADE ALL, ORPHAN REMOVAL
+- **@OneToMany** → `campos_dinamicos_gestion` (Collection) - CASCADE ALL, ORPHAN REMOVAL
+- **@OneToMany** → `clasificaciones_gestion` (Collection) - CASCADE ALL, ORPHAN REMOVAL
+
+#### Value Objects Embebidos
+
+```
+ManagementId          - ID único de gestión
+ContactResult         - Resultado de contacto (código y descripción)
+ManagementType        - Tipo de gestión (código, descripción, flags)
+```
+
+---
+
+### 3.2. clasificaciones_gestion (ManagementClassification)
+
+**Descripción**: Vincula gestiones con clasificaciones multinivel. Permite registrar jerarquías completas de tipificaciones (Nivel 1 → Nivel 2 → Nivel 3 → ... → Nivel N) para cada gestión.
+
+**Clase Java**: `com.cashi.collectionmanagement.domain.model.entities.ManagementClassification`
+
+**Entity Name**: `ManagementClassificationEntity` (para evitar conflictos con entity deprecated)
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_gestion` | BIGINT | NOT NULL, FK → gestiones | Gestión a la que pertenece |
+| `id_clasificacion` | BIGINT | NOT NULL, FK → catalogo_clasificaciones | Clasificación seleccionada |
+| `nivel_jerarquia` | INT | NOT NULL | Nivel jerárquico (1, 2, 3, ..., N) |
+| `seleccionado_en` | DATETIME | NOT NULL, NO UPDATE | Fecha y hora de selección |
+
+#### Índices
+
+- `idx_clas_gest_gestion` - en `id_gestion`
+- `idx_clas_gest_clasificacion` - en `id_clasificacion`
+- `idx_clas_gest_nivel` - en (`id_gestion`, `nivel_jerarquia`)
+- `idx_clas_gest_unico` - UNIQUE en (`id_gestion`, `nivel_jerarquia`)
+
+#### Relaciones
+
+- **@ManyToOne** → `gestiones` (id_gestion)
+- **@ManyToOne** → `catalogo_clasificaciones` (id_clasificacion)
+
+#### Ejemplo de Jerarquía
+
+```
+Gestión ID: 12345
+
+clasificaciones_gestion:
+├── Nivel 1: "CPC - Contacto Personal con el Cliente"
+├── Nivel 2: "ACP - Acepta Compromiso de Pago"
+└── Nivel 3: "PAR - Pago Parcial"
+
+Cada nivel es un registro separado en esta tabla
+```
+
+---
+
+### 3.3. campos_dinamicos_gestion (ManagementDynamicField)
+
+**Descripción**: Implementación del patrón EAV (Entity-Attribute-Value). Almacena valores de campos dinámicos específicos por inquilino para gestiones. Permite extensibilidad sin modificar el esquema de base de datos.
+
+**Clase Java**: `com.cashi.collectionmanagement.domain.model.entities.ManagementDynamicField`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_gestion` | BIGINT | NOT NULL, FK → gestiones | Gestión a la que pertenece |
+| `id_definicion_campo` | BIGINT | NOT NULL, FK → definiciones_campos | Definición del campo |
+| `valor_campo` | TEXT | | Valor como texto (para tipos TEXT, PHONE, EMAIL, etc.) |
+| `valor_campo_numerico` | DECIMAL(18,6) | | Valor numérico (para tipos NUMBER, DECIMAL, CURRENCY) |
+| `valor_campo_fecha` | DATETIME | | Valor fecha (para tipos DATE, DATETIME) |
+| `valor_campo_booleano` | BOOLEAN | | Valor booleano (para tipo BOOLEAN) |
+| `valor_campo_json` | JSON | | Valor JSON (para tipos JSON, SELECT, MULTI_SELECT) |
+| `fecha_creacion` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `fecha_actualizacion` | DATETIME | | Fecha de actualización |
+
+#### Índices
+
+- `idx_campo_din_gestion` - en `id_gestion`
+- `idx_campo_din_campo` - en `id_definicion_campo`
+- `idx_campo_din_unico` - UNIQUE en (`id_gestion`, `id_definicion_campo`)
+
+#### Relaciones
+
+- **@ManyToOne** → `gestiones` (id_gestion)
+- **@ManyToOne** → `definiciones_campos` (id_definicion_campo)
+
+#### Estrategia de Almacenamiento
+
+```
+Según el tipo de campo, se usa una columna específica:
+
+TEXT, PHONE, EMAIL, URL        → valor_campo
+NUMBER                          → valor_campo_numerico (sin decimales)
+DECIMAL, CURRENCY               → valor_campo_numerico (con decimales)
+DATE, DATETIME                  → valor_campo_fecha
+BOOLEAN                         → valor_campo_booleano
+JSON, SELECT, MULTI_SELECT      → valor_campo_json
+```
+
+#### Ejemplo de Uso
+
+```
+Gestión ID: 12345
+Clasificación: "ACP - Acepta Compromiso de Pago"
+
+campos_dinamicos_gestion:
+├── Campo: "Fecha de Pago" → valor_campo_fecha = '2025-10-15'
+├── Campo: "Monto Comprometido" → valor_campo_numerico = 1500.00
+└── Campo: "Método de Pago" → valor_campo_json = '{"type":"TRANSFER","bank":"BCP"}'
+```
+
+---
+
+### 3.4. detalles_llamada (CallDetail)
+
+**Descripción**: Almacena detalles específicos de llamadas telefónicas en gestiones. Incluye información de duración, números marcados, y tiempos.
+
+**Clase Java**: `com.cashi.collectionmanagement.domain.model.entities.CallDetail`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `numero_telefono` | VARCHAR(20) | | Número de teléfono marcado |
+| `hora_inicio` | DATETIME | | Hora de inicio de la llamada |
+| `hora_fin` | DATETIME | | Hora de fin de la llamada |
+| `duracion_segundos` | INT | | Duración total en segundos |
+
+#### Relaciones
+
+- Referenciada por `gestiones` vía @OneToOne
+
+---
+
+### 3.5. detalles_pago (PaymentDetail)
+
+**Descripción**: Almacena detalles de pagos prometidos o acordados durante gestiones. Incluye información del monto, fecha programada, método de pago, y datos bancarios.
+
+**Clase Java**: `com.cashi.collectionmanagement.domain.model.entities.PaymentDetail`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `monto` | DECIMAL(10,2) | | Monto del pago prometido |
+| `fecha_programada` | DATE | | Fecha programada de pago |
+| `type` | VARCHAR(50) | | Tipo de método de pago (Value Object) |
+| `details` | VARCHAR(255) | | Detalles del método de pago |
+| `numero_voucher` | VARCHAR(50) | | Número de voucher o comprobante |
+| `nombre_banco` | VARCHAR(100) | | Nombre del banco |
+
+#### Relaciones
+
+- Referenciada por `gestiones` vía @OneToOne
+
+#### Value Objects Embebidos
+
+```
+PaymentMethod - Método de pago (type, details)
+```
+
+---
+
+## 4. MÓDULO CUSTOMER MANAGEMENT - GESTIÓN DE CLIENTES
+
+### 4.1. clientes (Customer) - AGGREGATE ROOT
+
+**Descripción**: Aggregate Root que representa un cliente del sistema. Incluye información personal, documentos, contacto, cuenta, y deuda.
+
+**Clase Java**: `com.cashi.customermanagement.domain.model.aggregates.Customer`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_cliente` | VARCHAR(36) | NOT NULL, UNIQUE | ID único del cliente (UUID) |
+| `nombre_completo` | VARCHAR(255) | NOT NULL | Nombre completo del cliente |
+| `document_type` | VARCHAR(10) | NOT NULL | Tipo de documento (DNI, RUC, CE, etc.) |
+| `document_number` | VARCHAR(20) | NOT NULL | Número de documento |
+| `fecha_nacimiento` | DATE | | Fecha de nacimiento |
+| `edad` | INT | | Edad calculada |
+| `id_informacion_contacto` | BIGINT | FK → informacion_contacto | Información de contacto |
+| `id_informacion_cuenta` | BIGINT | FK → informacion_cuenta | Información de cuenta financiera |
+| `id_informacion_deuda` | BIGINT | FK → informacion_deuda | Información de deuda |
+| `created_at` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `updated_at` | DATETIME | | Fecha de actualización |
+
+#### Relaciones
+
+- **@OneToOne** → `informacion_contacto` (id_informacion_contacto) - CASCADE ALL
+- **@OneToOne** → `informacion_cuenta` (id_informacion_cuenta) - CASCADE ALL
+- **@OneToOne** → `informacion_deuda` (id_informacion_deuda) - CASCADE ALL
+
+#### Value Objects Embebidos
+
+```
+DocumentNumber - Número de documento (type, number)
+```
+
+---
+
+### 4.2. informacion_contacto (ContactInfo)
+
+**Descripción**: Almacena información de contacto del cliente (teléfonos, email, dirección).
+
+**Clase Java**: `com.cashi.customermanagement.domain.model.entities.ContactInfo`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `telefono_principal` | VARCHAR(20) | | Teléfono principal |
+| `telefono_alternativo` | VARCHAR(20) | | Teléfono alternativo |
+| `telefono_trabajo` | VARCHAR(20) | | Teléfono de trabajo |
+| `correo_electronico` | VARCHAR(100) | | Correo electrónico |
+| `direccion` | TEXT | | Dirección completa |
+
+#### Relaciones
+
+- Referenciada por `clientes` vía @OneToOne
+
+---
+
+### 4.3. informacion_cuenta (AccountInfo)
+
+**Descripción**: Almacena información de la cuenta financiera del cliente (número de cuenta, producto, términos).
+
+**Clase Java**: `com.cashi.customermanagement.domain.model.entities.AccountInfo`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `numero_cuenta` | VARCHAR(20) | NOT NULL | Número de cuenta |
+| `tipo_producto` | VARCHAR(50) | NOT NULL | Tipo de producto financiero |
+| `fecha_desembolso` | DATE | | Fecha de desembolso del crédito |
+| `monto_original` | DECIMAL(10,2) | | Monto original del crédito |
+| `plazo_meses` | INT | | Plazo en meses |
+| `tasa_interes` | DECIMAL(5,2) | | Tasa de interés (%) |
+
+#### Relaciones
+
+- Referenciada por `clientes` vía @OneToOne
+
+---
+
+### 4.4. informacion_deuda (DebtInfo)
+
+**Descripción**: Almacena información detallada de la deuda del cliente (saldos, moras, pagos).
+
+**Clase Java**: `com.cashi.customermanagement.domain.model.entities.DebtInfo`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `saldo_capital` | DECIMAL(10,2) | | Saldo de capital pendiente |
+| `interes_vencido` | DECIMAL(10,2) | | Interés vencido acumulado |
+| `moras_acumuladas` | DECIMAL(10,2) | | Moras acumuladas |
+| `gastos_cobranza` | DECIMAL(10,2) | | Gastos de cobranza |
+| `saldo_total` | DECIMAL(10,2) | | Saldo total (suma de todos los conceptos) |
+| `dias_mora` | INT | | Días de mora actuales |
+| `fecha_ultimo_pago` | DATE | | Fecha del último pago realizado |
+| `monto_ultimo_pago` | DECIMAL(10,2) | | Monto del último pago |
+
+#### Relaciones
+
+- Referenciada por `clientes` vía @OneToOne
+
+---
+
+## 5. MÓDULO PAYMENT PROCESSING - PROCESAMIENTO DE PAGOS
+
+### 5.1. pagos (Payment) - AGGREGATE ROOT
+
+**Descripción**: Aggregate Root que representa un pago realizado o registrado en el sistema.
+
+**Clase Java**: `com.cashi.paymentprocessing.domain.model.aggregates.Payment`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_pago` | VARCHAR(36) | | ID único del pago (UUID - Value Object) |
+| `id_cliente` | VARCHAR(36) | | ID del cliente que realizó el pago |
+| `id_gestion` | VARCHAR(36) | | ID de la gestión asociada |
+| `monto` | DECIMAL(10,2) | | Monto del pago |
+| `fecha_pago` | DATE | | Fecha del pago |
+| `metodo_pago` | VARCHAR(50) | | Método de pago utilizado |
+| `estado_pago` | VARCHAR(50) | | Estado del pago (Value Object) |
+| `descripcion_estado_pago` | VARCHAR(255) | | Descripción del estado |
+| `id_transaccion` | VARCHAR(100) | | ID de transacción (Value Object) |
+| `numero_voucher` | VARCHAR(50) | | Número de voucher |
+| `nombre_banco` | VARCHAR(100) | | Nombre del banco |
+| `confirmado_en` | DATETIME | | Fecha y hora de confirmación |
+| `notas` | VARCHAR(1000) | | Notas adicionales |
+| `created_at` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `updated_at` | DATETIME | | Fecha de actualización |
+
+#### Value Objects Embebidos
+
+```
+PaymentId        - ID único del pago
+PaymentStatus    - Estado del pago (status, description)
+TransactionId    - ID de transacción
+```
+
+---
+
+### 5.2. cronogramas_pago (PaymentSchedule) - AGGREGATE ROOT
+
+**Descripción**: Aggregate Root que representa un cronograma de pagos acordado (convenio de pago).
+
+**Clase Java**: `com.cashi.paymentprocessing.domain.model.aggregates.PaymentSchedule`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `id_cronograma` | VARCHAR(36) | | ID único del cronograma (UUID - Value Object) |
+| `id_cliente` | VARCHAR(36) | | ID del cliente |
+| `id_gestion` | VARCHAR(36) | | ID de la gestión que generó el cronograma |
+| `monto_total` | DECIMAL(10,2) | | Monto total del cronograma |
+| `numero_cuotas` | INT | | Número de cuotas |
+| `fecha_inicio` | DATE | | Fecha de inicio del cronograma |
+| `esta_activo` | BOOLEAN | | Indica si el cronograma está activo |
+| `created_at` | DATETIME | NOT NULL, NO UPDATE | Fecha de creación |
+| `updated_at` | DATETIME | | Fecha de actualización |
+
+#### Relaciones
+
+- **@OneToMany** → `cuotas` (Collection) - CASCADE ALL, ORPHAN REMOVAL
+
+#### Value Objects Embebidos
+
+```
+PaymentScheduleId - ID único del cronograma
+```
+
+---
+
+### 5.3. cuotas (Installment)
+
+**Descripción**: Representa una cuota individual dentro de un cronograma de pagos.
+
+**Clase Java**: `com.cashi.paymentprocessing.domain.model.entities.Installment`
+
+#### Estructura de Columnas
+
+| Columna | Tipo | Constraints | Descripción |
+|---------|------|-------------|-------------|
+| `id` | BIGINT | PK, AUTO_INCREMENT | Identificador único |
+| `numero_cuota` | INT | | Número de cuota (1, 2, 3, ...) |
+| `monto` | DECIMAL(10,2) | | Monto de la cuota |
+| `fecha_vencimiento` | DATE | | Fecha de vencimiento |
+| `fecha_pago` | DATE | | Fecha de pago efectivo (si ya se pagó) |
+| `estado_cuota` | VARCHAR(50) | | Estado de la cuota (Value Object) |
+| `descripcion_estado_cuota` | VARCHAR(255) | | Descripción del estado |
+
+#### Relaciones
+
+- Referenciada por `cronogramas_pago` vía @OneToMany
+
+#### Value Objects Embebidos
+
+```
+PaymentStatus - Estado de la cuota (status, description)
+```
+
+#### Estados Típicos
+
+```
+PENDING     - Pendiente de pago
+PAID        - Pagada
+OVERDUE     - Vencida
+PARTIAL     - Parcialmente pagada
+CANCELLED   - Cancelada
+```
+
+---
+
+## PATRONES DE DISEÑO IMPLEMENTADOS
+
+### 1. Multi-Tenancy Pattern
+
+**Propósito**: Aislamiento completo de datos por inquilino/cartera
+
+**Implementación**:
+- Todas las entidades principales tienen relación con `inquilinos` y opcionalmente con `carteras`
+- Filtrado automático por tenant en queries
+- Jerarquía: Inquilino → Cartera → Campaña → Gestión
+
+### 2. Aggregate Root Pattern (DDD)
+
+**Propósito**: Mantener consistencia transaccional y encapsular lógica de negocio
+
+**Aggregate Roots**:
+- `Management` - Gestión de cobranza (con clasificaciones y campos dinámicos)
+- `Customer` - Cliente (con contacto, cuenta, y deuda)
+- `Payment` - Pago
+- `PaymentSchedule` - Cronograma de pagos (con cuotas)
+
+**Características**:
+- Solo los aggregate roots tienen repositorios
+- Las entidades hijas solo se acceden a través del aggregate root
+- Cascade operations y orphan removal configurados
+
+### 3. Entity-Attribute-Value (EAV) Pattern
+
+**Propósito**: Permitir campos dinámicos sin modificar esquema de BD
+
+**Implementación**:
+- `definiciones_campos` - Catálogo de campos disponibles
+- `configuracion_campos_inquilino` - Habilitación por tenant
+- `campos_dinamicos_gestion` - Valores reales en gestiones
+- Múltiples columnas tipadas (texto, numérico, fecha, booleano, JSON)
+
+### 4. Strategy Pattern
+
+**Propósito**: Comportamiento configurable por inquilino
+
+**Implementación**:
+- `estrategias_procesamiento` - Configuración de clases de estrategia
+- `reglas_negocio_inquilino` - Reglas personalizables
+- Permite diferentes implementaciones de validación, procesamiento, notificaciones, etc.
+
+### 5. Hierarchical Data Pattern
+
+**Propósito**: Soportar jerarquías de N niveles
+
+**Implementación**:
+- `carteras` - Jerarquía de carteras (padre-hijo-nieto-...)
+- `catalogo_clasificaciones` - Jerarquía de clasificaciones (nivel 1-2-3-...)
+- Columnas: `id_padre`, `nivel_jerarquia`, `ruta_jerarquia`
+
+### 6. Configuration Pattern
+
+**Propósito**: Configuración flexible por tenant/portfolio
+
+**Implementación**:
+- Catálogos globales (definiciones_campos, catalogo_clasificaciones)
+- Configuraciones por tenant (configuracion_campos_inquilino, configuracion_clasificacion_inquilino)
+- Herencia de configuración: Tenant → Portfolio
+
+### 7. Soft Delete Pattern
+
+**Propósito**: Eliminación lógica para auditoría
+
+**Implementación**:
+- `catalogo_clasificaciones.fecha_eliminacion`
+- Registros eliminados se marcan con timestamp
+- Queries excluyen registros eliminados por default
+
+### 8. Audit Trail Pattern
+
+**Propósito**: Trazabilidad completa de cambios
+
+**Implementación**:
+- Timestamps automáticos: `created_at`, `updated_at`
+- Tabla de auditoría: `historial_configuracion_clasificacion`
+- Versionado: `versiones_configuracion`
+
+### 9. Dependency Management Pattern
+
+**Propósito**: Relaciones complejas entre entidades
+
+**Implementación**:
+- `dependencias_clasificacion` - REQUIRES, SUGGESTS, BLOCKS, ENABLES
+- `mapeos_campo_clasificacion` - Campos requeridos por clasificación
+- Permite flujos de tipificación complejos
+
+### 10. Value Object Pattern (DDD)
+
+**Propósito**: Objetos inmutables sin identidad propia
+
+**Value Objects**:
+- `ManagementId` - ID único de gestión
+- `PaymentId` - ID único de pago
+- `DocumentNumber` - Número de documento (tipo + número)
+- `ContactResult` - Resultado de contacto
+- `ManagementType` - Tipo de gestión
+- `PaymentStatus` - Estado de pago
+- `PaymentMethod` - Método de pago
+
+---
+
+## CONVENCIONES Y ESTÁNDARES
+
+### Nomenclatura de Base de Datos
+
+**Tablas**:
+- Nombres en español, plural, snake_case
+- Ejemplos: `inquilinos`, `gestiones`, `campos_dinamicos_gestion`
+
+**Columnas**:
+- Nombres en español, singular, snake_case
+- Prefijos comunes:
+  - `id_` para foreign keys (ej: `id_inquilino`)
+  - `codigo_` para códigos únicos (ej: `codigo_campo`)
+  - `nombre_` para nombres (ej: `nombre_campo`)
+  - `es_` para booleanos de estado (ej: `es_requerido`)
+  - `esta_` para booleanos de estado (ej: `esta_activo`)
+  - `fecha_` para fechas (ej: `fecha_creacion`)
+  - `numero_` para números (ej: `numero_telefono`)
+  - `monto_` para montos (ej: `monto_total`)
+
+**Índices**:
+- Formato: `idx_<tabla>_<columna(s)>` o `idx_<abreviatura>_<columna(s)>`
+- Ejemplos: `idx_codigo_campo`, `idx_gest_inquilino`
+- UNIQUE indexes incluyen el constraint directamente en columna cuando es simple
+
+### Nomenclatura de Código Java
+
+**Clases**:
+- Nombres en inglés, PascalCase
+- Ejemplos: `Tenant`, `Management`, `ClassificationCatalog`
+
+**Propiedades**:
+- Nombres en inglés, camelCase
+- Ejemplos: `tenantCode`, `isActive`, `createdAt`
+
+**Mapeo JPA**:
+```java
+@Column(name = "nombre_inquilino") // Español en BD
+private String tenantName;          // Inglés en código
+```
+
+### Tipos de Datos
+
+**Montos**:
+- Siempre usar `DECIMAL` (nunca `FLOAT` o `DOUBLE`)
+- Precisión típica: `DECIMAL(10,2)` para montos generales
+- Precisión extendida: `DECIMAL(15,2)` para objetivos de campaña
+
+**Fechas**:
+- `DATE` para fechas sin hora
+- `DATETIME` para timestamps completos
+- Java: `LocalDate` y `LocalDateTime`
+
+**Textos**:
+- `VARCHAR(n)` para textos con límite conocido
+- `TEXT` para textos largos sin límite específico
+- `LONGTEXT` para snapshots y datos muy grandes
+- `JSON` para datos estructurados dinámicos
+
+**Booleanos**:
+- Siempre NOT NULL con DEFAULT
+- Columna: `BOOLEAN NOT NULL DEFAULT TRUE/FALSE`
+- Java: Usar `Boolean` (object) para nullability cuando sea necesario
+
+**IDs**:
+- Primary Keys: `BIGINT AUTO_INCREMENT`
+- UUIDs: `VARCHAR(36)` para IDs distribuidos
+- Foreign Keys: `BIGINT` con índice
+
+### Auditoría Estándar
+
+Todas las entidades principales incluyen:
+```sql
+created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+updated_at     DATETIME ON UPDATE CURRENT_TIMESTAMP
+```
+
+Entidades de configuración también incluyen:
+```sql
+created_by     VARCHAR(100),
+updated_by     VARCHAR(100)
+```
+
+### Soft Delete
+
+Cuando se requiere eliminación lógica:
+```sql
+deleted_at     DATETIME NULL,
+deleted_by     VARCHAR(100) NULL
+```
+
+Queries deben filtrar: `WHERE deleted_at IS NULL`
+
+---
+
+## ESTADÍSTICAS DEL ESQUEMA
+
+### Resumen de Tablas por Módulo
+
+| Módulo | Tablas Activas | Tablas Deprecated | Total |
+|--------|----------------|-------------------|-------|
+| Shared | 7 | 0 | 7 |
+| System Configuration | 5 | 3 | 8 |
+| Collection Management | 5 | 0 | 5 |
+| Customer Management | 4 | 0 | 4 |
+| Payment Processing | 3 | 0 | 3 |
+| **TOTAL** | **24** | **3** | **27** |
+
+### Estadísticas de Columnas
+
+- **Total de columnas**: ~290+
+- **Columnas JSON**: 23 (configuraciones dinámicas)
+- **Foreign Keys**: ~40
+- **Columnas de auditoría**: Todas las tablas principales
+
+### Estadísticas de Índices
+
+- **Índices simples**: ~45
+- **Índices compuestos**: ~20
+- **Índices UNIQUE**: ~12
+- **Total**: ~77 índices
+
+### Relaciones
+
+- **@ManyToOne**: ~35 relaciones
+- **@OneToOne**: 7 relaciones
+- **@OneToMany**: 4 relaciones
+- **Autorreferencias**: 2 (Portfolio, ClassificationCatalog)
+
+### Aggregate Roots
+
+```
+1. Management (Gestión de cobranza)
+   ├── ManagementClassification (N clasificaciones)
+   ├── ManagementDynamicField (N campos dinámicos)
+   ├── CallDetail (1 detalle de llamada)
+   └── PaymentDetail (1 detalle de pago)
+
+2. Customer (Cliente)
+   ├── ContactInfo (1 información de contacto)
+   ├── AccountInfo (1 información de cuenta)
+   └── DebtInfo (1 información de deuda)
+
+3. Payment (Pago)
+   └── (Sin entidades hijas)
+
+4. PaymentSchedule (Cronograma de pago)
+   └── Installment (N cuotas)
+```
+
+### Patrones Utilizados
+
+1. ✅ Multi-Tenancy
+2. ✅ Aggregate Root (DDD)
+3. ✅ Value Object (DDD)
+4. ✅ Entity-Attribute-Value (EAV)
+5. ✅ Strategy Pattern
+6. ✅ Hierarchical Data
+7. ✅ Configuration Pattern
+8. ✅ Soft Delete
+9. ✅ Audit Trail
+10. ✅ Dependency Management
+
+### Características Especiales
+
+**Jerarquías Ilimitadas**:
+- Carteras: N niveles
+- Clasificaciones: N niveles
+
+**Configuración Multi-Nivel**:
+- Global (catálogos maestros)
+- Por Tenant
+- Por Portfolio
+
+**Extensibilidad**:
+- Campos dinámicos (EAV)
+- Estrategias personalizables
+- Reglas de negocio configurables
+
+**Auditoría Completa**:
+- Timestamps automáticos
+- Historial de cambios
+- Versionado con rollback
+
+---
+
+
+**Fin de la Documentación**
+
+Para consultas o actualizaciones, contactar al equipo de desarrollo.

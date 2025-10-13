@@ -22,7 +22,7 @@ public interface TenantClassificationConfigRepository extends JpaRepository<Tena
     @Query("SELECT tcc FROM TenantClassificationConfig tcc " +
            "LEFT JOIN FETCH tcc.classification " +
            "WHERE tcc.tenant = :tenant " +
-           "AND (tcc.portfolio = :portfolio OR (tcc.portfolio IS NULL AND :portfolio IS NOT NULL) OR :portfolio IS NULL) " +
+           "AND (:portfolio IS NULL OR tcc.portfolio = :portfolio OR tcc.portfolio IS NULL) " +
            "AND tcc.isEnabled = true " +
            "ORDER BY tcc.customOrder, tcc.classification.displayOrder")
     List<TenantClassificationConfig> findEnabledByTenantAndPortfolio(
@@ -32,7 +32,7 @@ public interface TenantClassificationConfigRepository extends JpaRepository<Tena
     @Query("SELECT tcc FROM TenantClassificationConfig tcc " +
            "LEFT JOIN FETCH tcc.classification " +
            "WHERE tcc.tenant = :tenant " +
-           "AND (tcc.portfolio = :portfolio OR (tcc.portfolio IS NULL AND :portfolio IS NOT NULL) OR :portfolio IS NULL) " +
+           "AND (:portfolio IS NULL OR tcc.portfolio = :portfolio OR tcc.portfolio IS NULL) " +
            "AND tcc.classification.classificationType = :type AND tcc.isEnabled = true " +
            "ORDER BY tcc.customOrder, tcc.classification.displayOrder")
     List<TenantClassificationConfig> findEnabledByTenantPortfolioAndType(
@@ -44,7 +44,7 @@ public interface TenantClassificationConfigRepository extends JpaRepository<Tena
     @Query("SELECT tcc FROM TenantClassificationConfig tcc " +
            "LEFT JOIN FETCH tcc.classification " +
            "WHERE tcc.tenant = :tenant " +
-           "AND (tcc.portfolio = :portfolio OR (tcc.portfolio IS NULL AND :portfolio IS NOT NULL) OR :portfolio IS NULL) " +
+           "AND (:portfolio IS NULL OR tcc.portfolio = :portfolio OR tcc.portfolio IS NULL) " +
            "AND tcc.classification.hierarchyLevel = :level AND tcc.isEnabled = true " +
            "ORDER BY tcc.customOrder, tcc.classification.displayOrder")
     List<TenantClassificationConfig> findEnabledByTenantPortfolioAndLevel(
@@ -56,7 +56,7 @@ public interface TenantClassificationConfigRepository extends JpaRepository<Tena
     @Query("SELECT tcc FROM TenantClassificationConfig tcc " +
            "LEFT JOIN FETCH tcc.classification " +
            "WHERE tcc.tenant = :tenant " +
-           "AND (tcc.portfolio = :portfolio OR (tcc.portfolio IS NULL AND :portfolio IS NOT NULL) OR :portfolio IS NULL) " +
+           "AND (:portfolio IS NULL OR tcc.portfolio = :portfolio OR tcc.portfolio IS NULL) " +
            "AND tcc.classification.parentClassification.id = :parentId AND tcc.isEnabled = true " +
            "ORDER BY tcc.customOrder, tcc.classification.displayOrder")
     List<TenantClassificationConfig> findEnabledChildrenByParent(
@@ -66,6 +66,8 @@ public interface TenantClassificationConfigRepository extends JpaRepository<Tena
     );
 
     List<TenantClassificationConfig> findByTenantAndPortfolio(Tenant tenant, Portfolio portfolio);
+
+    List<TenantClassificationConfig> findByTenant(Tenant tenant);
 
     @Query("SELECT COUNT(tcc) FROM TenantClassificationConfig tcc " +
            "WHERE tcc.tenant = :tenant AND tcc.portfolio = :portfolio AND tcc.isEnabled = true")
