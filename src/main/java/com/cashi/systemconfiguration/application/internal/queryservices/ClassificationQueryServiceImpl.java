@@ -85,6 +85,35 @@ public class ClassificationQueryServiceImpl {
         return tenantClassificationConfigRepository.findEnabledByTenantAndPortfolio(tenant, portfolio);
     }
 
+    /**
+     * Obtiene TODAS las clasificaciones del tenant (habilitadas y deshabilitadas)
+     * Útil para pantallas de mantenimiento donde se necesita ver todo
+     */
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public List<TenantClassificationConfig> getAllTenantClassifications(Long tenantId, Long portfolioId) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+            .orElseThrow(() -> new IllegalArgumentException("Tenant not found"));
+        Portfolio portfolio = portfolioId != null ? portfolioRepository.findById(portfolioId)
+            .orElseThrow(() -> new IllegalArgumentException("Portfolio not found")) : null;
+
+        List<TenantClassificationConfig> configs = tenantClassificationConfigRepository.findByTenantAndPortfolio(tenant, portfolio);
+
+        // Force eager loading of all lazy relationships
+        configs.forEach(config -> {
+            if (config.getClassification() != null) {
+                var classification = config.getClassification();
+                classification.getName(); // Touch the lazy proxy to initialize it
+
+                // Also initialize the classificationTypeCatalog relationship
+                if (classification.getClassificationTypeCatalog() != null) {
+                    classification.getClassificationTypeCatalog().getName();
+                }
+            }
+        });
+
+        return configs;
+    }
+
     public List<TenantClassificationConfig> getEnabledClassificationsByType(
             Long tenantId, Long portfolioId, ClassificationCatalog.ClassificationType type) {
         Tenant tenant = tenantRepository.findById(tenantId)

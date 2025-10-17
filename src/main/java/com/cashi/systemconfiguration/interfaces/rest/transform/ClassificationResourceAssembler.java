@@ -8,6 +8,8 @@ import com.cashi.systemconfiguration.interfaces.rest.resources.TenantClassificat
 public class ClassificationResourceAssembler {
 
     public static ClassificationCatalogResource toResourceFromEntity(ClassificationCatalog entity) {
+        var classificationType = entity.getClassificationTypeCatalog();
+
         return new ClassificationCatalogResource(
             entity.getId(),
             entity.getCode(),
@@ -22,7 +24,11 @@ public class ClassificationResourceAssembler {
             entity.getColorHex(),
             entity.getMetadataSchema(),
             entity.getIsSystem(),
-            entity.getIsActive()
+            entity.getIsActive(),
+            // Campos del tipo de clasificación
+            classificationType != null ? classificationType.getSuggestsFullAmount() : null,
+            classificationType != null ? classificationType.getAllowsInstallmentSelection() : null,
+            classificationType != null ? classificationType.getRequiresManualAmount() : null
         );
     }
 
@@ -31,6 +37,7 @@ public class ClassificationResourceAssembler {
             config.getId(),
             config.getTenant().getId(),
             config.getPortfolio() != null ? config.getPortfolio().getId() : null,
+            config.getClassification().getId(),
             toResourceFromEntity(config.getClassification()),
             config.getIsEnabled(),
             config.getIsRequired(),

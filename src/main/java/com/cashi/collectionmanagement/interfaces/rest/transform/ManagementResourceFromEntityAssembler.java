@@ -31,26 +31,36 @@ public class ManagementResourceFromEntityAssembler {
     }
 
     private static CallDetailResource toCallDetailResource(Management entity) {
-        if (entity.getCallDetail() == null) return null;
-        var call = entity.getCallDetail();
-        return new CallDetailResource(
-                call.getPhoneNumber(),
-                call.getStartTime(),
-                call.getEndTime(),
-                call.getDurationSeconds()
-        );
+        try {
+            if (entity.getCallDetail() == null) return null;
+            var call = entity.getCallDetail();
+            return new CallDetailResource(
+                    call.getPhoneNumber(),
+                    call.getStartTime(),
+                    call.getEndTime(),
+                    call.getDurationSeconds()
+            );
+        } catch (Exception e) {
+            // Manejo de lazy loading exception - retornar null si no se puede cargar
+            return null;
+        }
     }
 
     private static PaymentDetailResource toPaymentDetailResource(Management entity) {
-        if (entity.getPaymentDetail() == null) return null;
-        var payment = entity.getPaymentDetail();
-        return new PaymentDetailResource(
-                payment.getAmount(),
-                payment.getScheduledDate(),
-                payment.getPaymentMethod() != null ? payment.getPaymentMethod().getType() : null,
-                payment.getPaymentMethod() != null ? payment.getPaymentMethod().getDetails() : null,
-                payment.getVoucherNumber(),
-                payment.getBankName()
-        );
+        try {
+            if (entity.getPaymentDetail() == null) return null;
+            var payment = entity.getPaymentDetail();
+            return new PaymentDetailResource(
+                    payment.getAmount(),
+                    payment.getScheduledDate(),
+                    payment.getPaymentMethod() != null ? payment.getPaymentMethod().getType() : null,
+                    payment.getPaymentMethod() != null ? payment.getPaymentMethod().getDetails() : null,
+                    payment.getVoucherNumber(),
+                    payment.getBankName()
+            );
+        } catch (Exception e) {
+            // Manejo de lazy loading exception - retornar null si no se puede cargar
+            return null;
+        }
     }
 }

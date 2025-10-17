@@ -1,0 +1,899 @@
+{
+  "tenantCode": "FIN-OH",
+  "tenantName": "Financiera Oh",
+  "businessName": "Financiera Oh S.A.",
+  "description": "Configuración de tipificaciones y campos dinámicos para Financiera Oh",
+
+  "customerDataMapping": {
+    "importSourceType": "EXCEL",
+    "sourceTableName": "ASIG_TEMP",
+    "columnMapping": {
+      "CODIGO_DOCUMENTO": "documentCode",
+      "NOMBRE": "fullName",
+      "NRO_CUENTA": "accountNumber",
+      "CELULAR": "mobilePhone",
+      "TELEFONO1": "primaryPhone",
+      "TELEFONO2": "alternativePhone",
+      "CORREO": "email",
+      "DIRECCION": "address",
+      "DEUDA_ACTUAL": "currentDebt",
+      "DIAS_MORA": "daysOverdue",
+      "FECHA_DESEMBOLSO": "disbursementDate",
+      "MONTO_PRESTAMO": "originalAmount",
+      "PLAZO": "termMonths",
+      "PRODUCTO": "productType",
+      "ESTADO": "status"
+    },
+    "customerDisplayConfig": {
+      "title": "Información del Cliente",
+      "sections": [
+        {
+          "sectionTitle": "Datos Personales",
+          "fields": [
+            { "field": "documentCode", "label": "DNI/Documento", "displayOrder": 1 },
+            { "field": "fullName", "label": "Nombre Completo", "displayOrder": 2 },
+            { "field": "email", "label": "Correo Electrónico", "displayOrder": 3 }
+          ]
+        },
+        {
+          "sectionTitle": "Información de Contacto",
+          "fields": [
+            { "field": "mobilePhone", "label": "Celular", "displayOrder": 1, "highlight": true },
+            { "field": "primaryPhone", "label": "Teléfono 1", "displayOrder": 2 },
+            { "field": "alternativePhone", "label": "Teléfono 2", "displayOrder": 3 },
+            { "field": "address", "label": "Dirección", "displayOrder": 4 }
+          ]
+        },
+        {
+          "sectionTitle": "Información de Deuda",
+          "colorClass": "danger",
+          "fields": [
+            { "field": "currentDebt", "label": "Deuda Actual", "displayOrder": 1, "format": "currency", "highlight": true },
+            { "field": "daysOverdue", "label": "Días de Mora", "displayOrder": 2, "format": "number", "highlight": true },
+            { "field": "accountNumber", "label": "Nro. Cuenta", "displayOrder": 3 }
+          ]
+        },
+        {
+          "sectionTitle": "Información del Crédito",
+          "fields": [
+            { "field": "productType", "label": "Producto", "displayOrder": 1 },
+            { "field": "originalAmount", "label": "Monto Original", "displayOrder": 2, "format": "currency" },
+            { "field": "disbursementDate", "label": "Fecha Desembolso", "displayOrder": 3, "format": "date" },
+            { "field": "termMonths", "label": "Plazo (meses)", "displayOrder": 4 }
+          ]
+        }
+      ]
+    }
+  },
+
+  "classifications": [
+    {
+      "code": "RP",
+      "label": "Resultado Positivo",
+      "hierarchyLevel": 1,
+      "parentCode": null,
+      "colorHex": "#10B981",
+      "iconName": "check-circle",
+      "displayOrder": 1,
+      "businessRules": {
+        "isSuccessful": true,
+        "mainCategory": "RESULTADO_POSITIVO",
+        "requiresPayment": false,
+        "requiresSchedule": false,
+        "requiresFollowUp": false,
+        "allowDuplicates": true
+      }
+    },
+    {
+      "code": "PC",
+      "label": "Pago Confirmado",
+      "hierarchyLevel": 2,
+      "parentCode": "RP",
+      "colorHex": "#059669",
+      "iconName": "dollar-sign",
+      "displayOrder": 1,
+      "businessRules": {
+        "requiresPayment": true,
+        "requiresSchedule": false,
+        "requiresFollowUp": false,
+        "allowDuplicates": true,
+        "validatePaymentAmount": true
+      }
+    },
+    {
+      "code": "PT",
+      "label": "Pago Total",
+      "hierarchyLevel": 3,
+      "parentCode": "PC",
+      "colorHex": "#10B981",
+      "iconName": "check-circle",
+      "displayOrder": 1,
+      "businessRules": {
+        "requiresPayment": true,
+        "closesAccount": true,
+        "allowDuplicates": false,
+        "validatePaymentAmount": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "monto_pagado",
+          "fieldName": "Monto Pagado",
+          "fieldType": "currency",
+          "isRequired": true,
+          "description": "Monto total pagado",
+          "displayOrder": 1,
+          "validationRules": {
+            "min": 0,
+            "mustMatchDebtAmount": true
+          }
+        },
+        {
+          "fieldCode": "metodo_pago",
+          "fieldName": "Método de Pago",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 2,
+          "options": ["Efectivo", "Transferencia Bancaria", "Depósito", "Tarjeta", "POS", "Yape", "Plin", "Otros"]
+        },
+        {
+          "fieldCode": "numero_operacion",
+          "fieldName": "Número de Operación",
+          "fieldType": "text",
+          "isRequired": true,
+          "description": "Número de comprobante o referencia",
+          "displayOrder": 3,
+          "validationRules": {
+            "minLength": 4,
+            "maxLength": 50
+          }
+        },
+        {
+          "fieldCode": "fecha_pago",
+          "fieldName": "Fecha de Pago",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 4,
+          "validationRules": {
+            "maxDate": "today",
+            "minDate": "2020-01-01"
+          }
+        },
+        {
+          "fieldCode": "banco_origen",
+          "fieldName": "Banco de Origen",
+          "fieldType": "text",
+          "isRequired": false,
+          "displayOrder": 5
+        },
+        {
+          "fieldCode": "observaciones_pago",
+          "fieldName": "Observaciones",
+          "fieldType": "textarea",
+          "isRequired": false,
+          "displayOrder": 6
+        }
+      ]
+    },
+    {
+      "code": "PP",
+      "label": "Pago Parcial",
+      "hierarchyLevel": 3,
+      "parentCode": "PC",
+      "colorHex": "#34D399",
+      "iconName": "circle-half",
+      "displayOrder": 2,
+      "businessRules": {
+        "requiresPayment": true,
+        "requiresSchedule": false,
+        "requiresFollowUp": true,
+        "allowDuplicates": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "monto_pagado",
+          "fieldName": "Monto Pagado",
+          "fieldType": "currency",
+          "isRequired": true,
+          "displayOrder": 1
+        },
+        {
+          "fieldCode": "saldo_pendiente",
+          "fieldName": "Saldo Pendiente",
+          "fieldType": "currency",
+          "isRequired": true,
+          "displayOrder": 2
+        },
+        {
+          "fieldCode": "metodo_pago",
+          "fieldName": "Método de Pago",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 3,
+          "options": ["Efectivo", "Transferencia", "Depósito", "Tarjeta", "Yape", "Plin"]
+        },
+        {
+          "fieldCode": "numero_operacion",
+          "fieldName": "Nº Operación",
+          "fieldType": "text",
+          "isRequired": true,
+          "displayOrder": 4
+        },
+        {
+          "fieldCode": "fecha_pago",
+          "fieldName": "Fecha de Pago",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 5
+        },
+        {
+          "fieldCode": "compromiso_saldo",
+          "fieldName": "Fecha Compromiso Saldo",
+          "fieldType": "date",
+          "isRequired": false,
+          "displayOrder": 6
+        }
+      ]
+    },
+    {
+      "code": "PPT",
+      "label": "Pago por Tercero",
+      "hierarchyLevel": 3,
+      "parentCode": "PC",
+      "colorHex": "#6EE7B7",
+      "iconName": "users",
+      "displayOrder": 3,
+      "businessRules": {
+        "requiresPayment": true,
+        "requiresThirdPartyInfo": true,
+        "allowDuplicates": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "nombre_tercero",
+          "fieldName": "Nombre del Tercero",
+          "fieldType": "text",
+          "isRequired": true,
+          "displayOrder": 1
+        },
+        {
+          "fieldCode": "relacion_tercero",
+          "fieldName": "Relación con Cliente",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 2,
+          "options": ["Familiar", "Cónyuge", "Hijo/a", "Padre/Madre", "Hermano/a", "Aval", "Amigo", "Empresa", "Otro"]
+        },
+        {
+          "fieldCode": "telefono_tercero",
+          "fieldName": "Teléfono del Tercero",
+          "fieldType": "phone",
+          "isRequired": false,
+          "displayOrder": 3
+        },
+        {
+          "fieldCode": "monto_pagado",
+          "fieldName": "Monto Pagado",
+          "fieldType": "currency",
+          "isRequired": true,
+          "displayOrder": 4
+        },
+        {
+          "fieldCode": "metodo_pago",
+          "fieldName": "Método de Pago",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 5,
+          "options": ["Efectivo", "Transferencia", "Depósito", "Yape", "Plin"]
+        },
+        {
+          "fieldCode": "numero_operacion",
+          "fieldName": "Nº Operación",
+          "fieldType": "text",
+          "isRequired": true,
+          "displayOrder": 6
+        },
+        {
+          "fieldCode": "fecha_pago",
+          "fieldName": "Fecha de Pago",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 7
+        }
+      ]
+    },
+    {
+      "code": "PDP",
+      "label": "Promesa de Pago",
+      "hierarchyLevel": 2,
+      "parentCode": "RP",
+      "colorHex": "#F59E0B",
+      "iconName": "handshake",
+      "displayOrder": 2,
+      "businessRules": {
+        "requiresPayment": false,
+        "requiresSchedule": false,
+        "requiresFollowUp": true,
+        "allowDuplicates": true,
+        "createsFollowUpTask": true
+      }
+    },
+    {
+      "code": "PU",
+      "label": "Pago Único",
+      "hierarchyLevel": 3,
+      "parentCode": "PDP",
+      "colorHex": "#FBBF24",
+      "iconName": "calendar-check",
+      "displayOrder": 1,
+      "businessRules": {
+        "requiresSchedule": false,
+        "requiresFollowUp": true,
+        "allowDuplicates": true,
+        "createsFollowUpTask": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "monto_comprometido",
+          "fieldName": "Monto Comprometido",
+          "fieldType": "currency",
+          "isRequired": true,
+          "displayOrder": 1
+        },
+        {
+          "fieldCode": "fecha_compromiso",
+          "fieldName": "Fecha de Compromiso",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 2,
+          "validationRules": {
+            "minDate": "today"
+          }
+        },
+        {
+          "fieldCode": "hora_aproximada",
+          "fieldName": "Hora Aproximada",
+          "fieldType": "text",
+          "isRequired": false,
+          "displayOrder": 3
+        },
+        {
+          "fieldCode": "metodo_pago_prometido",
+          "fieldName": "Método de Pago Prometido",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 4,
+          "options": ["Efectivo", "Transferencia", "Depósito", "Tarjeta", "Yape", "Plin", "Agente", "Otros"]
+        },
+        {
+          "fieldCode": "origen_fondos",
+          "fieldName": "Origen de los Fondos",
+          "fieldType": "select",
+          "isRequired": false,
+          "displayOrder": 5,
+          "options": ["Sueldo/Salario", "Negocio Propio", "Préstamo Familiar", "Venta de Activo", "Ahorros", "Otros"]
+        },
+        {
+          "fieldCode": "nivel_confianza",
+          "fieldName": "Nivel de Confianza",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 6,
+          "options": ["Alto", "Medio", "Bajo"]
+        }
+      ]
+    },
+    {
+      "code": "PF",
+      "label": "Pago Fraccionado",
+      "hierarchyLevel": 3,
+      "parentCode": "PDP",
+      "colorHex": "#FCD34D",
+      "iconName": "calendar-days",
+      "displayOrder": 2,
+      "businessRules": {
+        "requiresSchedule": true,
+        "requiresFollowUp": true,
+        "allowDuplicates": false,
+        "preventDuplicateSchedule": true,
+        "createsFollowUpTask": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "numero_cuotas",
+          "fieldName": "Número de Cuotas",
+          "fieldType": "number",
+          "isRequired": true,
+          "displayOrder": 1,
+          "validationRules": {
+            "min": 2,
+            "max": 24
+          }
+        },
+        {
+          "fieldCode": "monto_cuota",
+          "fieldName": "Monto por Cuota",
+          "fieldType": "currency",
+          "isRequired": true,
+          "displayOrder": 2
+        },
+        {
+          "fieldCode": "frecuencia_pago",
+          "fieldName": "Frecuencia de Pago",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 3,
+          "options": ["Semanal", "Quincenal", "Mensual", "Cada 45 días"]
+        },
+        {
+          "fieldCode": "fecha_primera_cuota",
+          "fieldName": "Fecha Primera Cuota",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 4,
+          "validationRules": {
+            "minDate": "today"
+          }
+        },
+        {
+          "fieldCode": "nivel_confianza",
+          "fieldName": "Nivel de Confianza",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 5,
+          "options": ["Alto", "Medio", "Bajo"]
+        }
+      ]
+    },
+    {
+      "code": "CF",
+      "label": "Convenio Formal",
+      "hierarchyLevel": 3,
+      "parentCode": "PDP",
+      "colorHex": "#FDE68A",
+      "iconName": "file-signature",
+      "displayOrder": 3,
+      "businessRules": {
+        "requiresSchedule": true,
+        "requiresFollowUp": true,
+        "requiresApproval": true,
+        "allowDuplicates": false,
+        "preventDuplicateSchedule": true,
+        "createsFollowUpTask": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "numero_convenio",
+          "fieldName": "Número de Convenio",
+          "fieldType": "text",
+          "isRequired": true,
+          "displayOrder": 1
+        },
+        {
+          "fieldCode": "fecha_convenio",
+          "fieldName": "Fecha del Convenio",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 2
+        },
+        {
+          "fieldCode": "monto_inicial",
+          "fieldName": "Monto Inicial",
+          "fieldType": "currency",
+          "isRequired": false,
+          "displayOrder": 3
+        },
+        {
+          "fieldCode": "numero_cuotas",
+          "fieldName": "Número de Cuotas",
+          "fieldType": "number",
+          "isRequired": true,
+          "displayOrder": 4
+        },
+        {
+          "fieldCode": "monto_cuota",
+          "fieldName": "Monto por Cuota",
+          "fieldType": "currency",
+          "isRequired": true,
+          "displayOrder": 5
+        },
+        {
+          "fieldCode": "frecuencia_pago",
+          "fieldName": "Frecuencia",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 6,
+          "options": ["Semanal", "Quincenal", "Mensual"]
+        },
+        {
+          "fieldCode": "fecha_primera_cuota",
+          "fieldName": "Primera Cuota",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 7
+        },
+        {
+          "fieldCode": "responsable_autorizacion",
+          "fieldName": "Responsable Autorización",
+          "fieldType": "text",
+          "isRequired": true,
+          "displayOrder": 8
+        }
+      ]
+    },
+    {
+      "code": "EA",
+      "label": "Excepción Autorizada",
+      "hierarchyLevel": 2,
+      "parentCode": "RP",
+      "colorHex": "#8B5CF6",
+      "iconName": "shield-check",
+      "displayOrder": 3,
+      "businessRules": {
+        "requiresApproval": true,
+        "requiresDocumentation": true,
+        "requiresFollowUp": true,
+        "allowDuplicates": false
+      }
+    },
+    {
+      "code": "EA_ENF",
+      "label": "Enfermedad",
+      "hierarchyLevel": 3,
+      "parentCode": "EA",
+      "colorHex": "#A78BFA",
+      "iconName": "heart-pulse",
+      "displayOrder": 1,
+      "businessRules": {
+        "requiresApproval": true,
+        "requiresDocumentation": true,
+        "requiresFollowUp": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "tipo_enfermedad",
+          "fieldName": "Tipo de Enfermedad",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 1,
+          "options": ["Hospitalización", "Enfermedad Crónica", "Accidente", "Cirugía", "Tratamiento Médico", "Otros"]
+        },
+        {
+          "fieldCode": "persona_afectada",
+          "fieldName": "Persona Afectada",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 2,
+          "options": ["Cliente", "Familiar Directo", "Hijo/a", "Cónyuge", "Padre/Madre"]
+        },
+        {
+          "fieldCode": "fecha_inicio",
+          "fieldName": "Fecha Inicio Enfermedad",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 3
+        },
+        {
+          "fieldCode": "duracion_estimada",
+          "fieldName": "Duración Estimada",
+          "fieldType": "text",
+          "isRequired": false,
+          "displayOrder": 4
+        },
+        {
+          "fieldCode": "requiere_documentacion",
+          "fieldName": "¿Requiere Documentación Médica?",
+          "fieldType": "checkbox",
+          "isRequired": false,
+          "defaultValue": true,
+          "displayOrder": 5
+        },
+        {
+          "fieldCode": "fecha_revision",
+          "fieldName": "Fecha de Revisión",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 6
+        }
+      ]
+    },
+    {
+      "code": "EA_DES",
+      "label": "Desempleo",
+      "hierarchyLevel": 3,
+      "parentCode": "EA",
+      "colorHex": "#C4B5FD",
+      "iconName": "briefcase-off",
+      "displayOrder": 2,
+      "businessRules": {
+        "requiresApproval": true,
+        "requiresDocumentation": true,
+        "requiresFollowUp": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "fecha_cese",
+          "fieldName": "Fecha de Cese",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 1
+        },
+        {
+          "fieldCode": "motivo_cese",
+          "fieldName": "Motivo del Cese",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 2,
+          "options": ["Despido", "Renuncia", "Fin de Contrato", "Cierre de Empresa", "Reducción de Personal", "Otros"]
+        },
+        {
+          "fieldCode": "busca_empleo",
+          "fieldName": "¿Está Buscando Empleo?",
+          "fieldType": "checkbox",
+          "isRequired": false,
+          "defaultValue": true,
+          "displayOrder": 3
+        },
+        {
+          "fieldCode": "tiempo_estimado_reincorporacion",
+          "fieldName": "Tiempo Estimado Reincorporación",
+          "fieldType": "text",
+          "isRequired": false,
+          "displayOrder": 4
+        },
+        {
+          "fieldCode": "fecha_revision",
+          "fieldName": "Fecha de Revisión",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 5
+        }
+      ]
+    },
+    {
+      "code": "EA_LEG",
+      "label": "Situación Legal",
+      "hierarchyLevel": 3,
+      "parentCode": "EA",
+      "colorHex": "#DDD6FE",
+      "iconName": "gavel",
+      "displayOrder": 3,
+      "businessRules": {
+        "requiresApproval": true,
+        "requiresDocumentation": true,
+        "requiresLegalReview": true
+      }
+    },
+    {
+      "code": "CSA",
+      "label": "Contacto sin Acuerdo",
+      "hierarchyLevel": 1,
+      "parentCode": null,
+      "colorHex": "#EF4444",
+      "iconName": "x-circle",
+      "displayOrder": 2,
+      "businessRules": {
+        "isSuccessful": false,
+        "mainCategory": "CONTACTO_SIN_ACUERDO",
+        "requiresFollowUp": true
+      }
+    },
+    {
+      "code": "CN",
+      "label": "Cliente se Niega",
+      "hierarchyLevel": 2,
+      "parentCode": "CSA",
+      "colorHex": "#DC2626",
+      "iconName": "ban",
+      "displayOrder": 1,
+      "businessRules": {
+        "requiresFollowUp": true,
+        "escalationRequired": true
+      }
+    },
+    {
+      "code": "CD",
+      "label": "Cliente con Dificultad",
+      "hierarchyLevel": 2,
+      "parentCode": "CSA",
+      "colorHex": "#FB923C",
+      "iconName": "alert-circle",
+      "displayOrder": 2,
+      "businessRules": {
+        "requiresFollowUp": true,
+        "allowNegotiation": true
+      }
+    },
+    {
+      "code": "CD_SMT",
+      "label": "Solicita más tiempo",
+      "hierarchyLevel": 3,
+      "parentCode": "CD",
+      "colorHex": "#FED7AA",
+      "iconName": "clock",
+      "displayOrder": 2,
+      "businessRules": {
+        "requiresFollowUp": true,
+        "createsFollowUpTask": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "motivo_solicitud",
+          "fieldName": "Motivo de la Solicitud",
+          "fieldType": "textarea",
+          "isRequired": true,
+          "displayOrder": 1
+        },
+        {
+          "fieldCode": "tiempo_adicional_solicitado",
+          "fieldName": "Tiempo Adicional Solicitado",
+          "fieldType": "text",
+          "isRequired": true,
+          "displayOrder": 2
+        },
+        {
+          "fieldCode": "nueva_fecha_compromiso",
+          "fieldName": "Nueva Fecha de Compromiso",
+          "fieldType": "date",
+          "isRequired": true,
+          "displayOrder": 3
+        },
+        {
+          "fieldCode": "monto_comprometido",
+          "fieldName": "Monto Comprometido",
+          "fieldType": "currency",
+          "isRequired": false,
+          "displayOrder": 4
+        }
+      ]
+    },
+    {
+      "code": "PI",
+      "label": "Promesa Incumplida",
+      "hierarchyLevel": 2,
+      "parentCode": "CSA",
+      "colorHex": "#DC2626",
+      "iconName": "calendar-x",
+      "displayOrder": 3,
+      "businessRules": {
+        "requiresFollowUp": true,
+        "escalationRequired": true,
+        "affectsCustomerScore": true
+      }
+    },
+    {
+      "code": "SC",
+      "label": "Sin Contacto",
+      "hierarchyLevel": 1,
+      "parentCode": null,
+      "colorHex": "#64748B",
+      "iconName": "phone-off",
+      "displayOrder": 3,
+      "businessRules": {
+        "isSuccessful": false,
+        "mainCategory": "SIN_CONTACTO",
+        "requiresFollowUp": true,
+        "requiresRetry": true
+      }
+    },
+    {
+      "code": "GA",
+      "label": "Gestión Administrativa",
+      "hierarchyLevel": 1,
+      "parentCode": null,
+      "colorHex": "#3B82F6",
+      "iconName": "clipboard-list",
+      "displayOrder": 4,
+      "businessRules": {
+        "mainCategory": "GESTION_ADMINISTRATIVA",
+        "requiresDataUpdate": true
+      }
+    },
+    {
+      "code": "AD",
+      "label": "Actualización de Datos",
+      "hierarchyLevel": 2,
+      "parentCode": "GA",
+      "colorHex": "#2563EB",
+      "iconName": "edit",
+      "displayOrder": 1,
+      "businessRules": {
+        "requiresDataUpdate": true
+      }
+    },
+    {
+      "code": "AD_NT",
+      "label": "Nuevo teléfono",
+      "hierarchyLevel": 3,
+      "parentCode": "AD",
+      "colorHex": "#60A5FA",
+      "iconName": "phone-plus",
+      "displayOrder": 1,
+      "businessRules": {
+        "requiresDataUpdate": true,
+        "updatesCustomerPhone": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "nuevo_telefono",
+          "fieldName": "Nuevo Teléfono",
+          "fieldType": "phone",
+          "isRequired": true,
+          "displayOrder": 1
+        },
+        {
+          "fieldCode": "tipo_telefono",
+          "fieldName": "Tipo de Teléfono",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 2,
+          "options": ["Celular Personal", "Celular Trabajo", "Casa", "Oficina", "Referencia"]
+        },
+        {
+          "fieldCode": "prioridad",
+          "fieldName": "Prioridad de Contacto",
+          "fieldType": "select",
+          "isRequired": true,
+          "displayOrder": 3,
+          "options": ["Principal", "Secundario", "Alternativo"],
+          "defaultValue": "Principal"
+        }
+      ]
+    },
+    {
+      "code": "AD_ND",
+      "label": "Nueva dirección",
+      "hierarchyLevel": 3,
+      "parentCode": "AD",
+      "colorHex": "#93C5FD",
+      "iconName": "map-pin",
+      "displayOrder": 2,
+      "businessRules": {
+        "requiresDataUpdate": true,
+        "updatesCustomerAddress": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "nueva_direccion",
+          "fieldName": "Nueva Dirección Completa",
+          "fieldType": "textarea",
+          "isRequired": true,
+          "displayOrder": 1
+        },
+        {
+          "fieldCode": "distrito",
+          "fieldName": "Distrito",
+          "fieldType": "text",
+          "isRequired": true,
+          "displayOrder": 2
+        },
+        {
+          "fieldCode": "provincia",
+          "fieldName": "Provincia",
+          "fieldType": "text",
+          "isRequired": true,
+          "displayOrder": 3
+        },
+        {
+          "fieldCode": "referencia",
+          "fieldName": "Referencia",
+          "fieldType": "text",
+          "isRequired": false,
+          "displayOrder": 4
+        }
+      ]
+    },
+    {
+      "code": "ESC",
+      "label": "Escalamiento",
+      "hierarchyLevel": 2,
+      "parentCode": "GA",
+      "colorHex": "#1E40AF",
+      "iconName": "arrow-up-circle",
+      "displayOrder": 2,
+      "businessRules": {
+        "requiresApproval": true,
+        "escalationRequired": true
+      }
+    }
+  ]
+}

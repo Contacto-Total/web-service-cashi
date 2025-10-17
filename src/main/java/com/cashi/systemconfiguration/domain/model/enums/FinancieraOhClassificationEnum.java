@@ -147,6 +147,16 @@ public enum FinancieraOhClassificationEnum {
     }
 
     /**
+     * Determina si esta clasificación aplica pagos a cronogramas pendientes
+     * Cuando se registra un pago con estas clasificaciones, el sistema busca automáticamente
+     * cronogramas pendientes del cliente y aplica el pago a las cuotas en orden
+     */
+    public Boolean appliesPaymentToSchedule() {
+        // PC (Pago Confirmado), PT (Pago Total), PP (Pago Parcial), PPT (Pago por Tercero)
+        return code.equals("PC") || code.equals("PT") || code.equals("PP") || code.equals("PPT");
+    }
+
+    /**
      * Obtiene la categoría principal de esta clasificación
      */
     public String getMainCategory() {

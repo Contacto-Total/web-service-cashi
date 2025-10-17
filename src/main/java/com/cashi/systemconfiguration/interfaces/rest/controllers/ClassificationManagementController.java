@@ -157,9 +157,11 @@ public class ClassificationManagementController {
     @GetMapping("/tenants/{tenantId}/classifications")
     public ResponseEntity<List<TenantClassificationConfigResource>> getTenantClassifications(
             @PathVariable Long tenantId,
-            @RequestParam(required = false) Long portfolioId) {
-        List<TenantClassificationConfig> configs =
-            queryService.getEnabledClassifications(tenantId, portfolioId);
+            @RequestParam(required = false) Long portfolioId,
+            @RequestParam(required = false, defaultValue = "false") Boolean includeDisabled) {
+        List<TenantClassificationConfig> configs = includeDisabled
+            ? queryService.getAllTenantClassifications(tenantId, portfolioId)
+            : queryService.getEnabledClassifications(tenantId, portfolioId);
         List<TenantClassificationConfigResource> resources = configs.stream()
             .map(ClassificationResourceAssembler::toResourceFromConfig)
             .collect(Collectors.toList());
@@ -365,13 +367,38 @@ public class ClassificationManagementController {
             if (fieldsNode != null && fieldsNode.isArray()) {
                 int index = 0;
                 for (JsonNode fieldNode : fieldsNode) {
-                    String id = fieldNode.has("id") ? fieldNode.get("id").asText() : "field_" + index;
-                    String label = fieldNode.has("label") ? fieldNode.get("label").asText() : "Campo";
-                    String type = fieldNode.has("type") ? fieldNode.get("type").asText().toUpperCase() : "TEXT";
-                    boolean required = fieldNode.has("required") && fieldNode.get("required").asBoolean();
+                    // Soportar ambos formatos: estándar (id/label/type) y tenant config (fieldCode/fieldName/fieldType)
+                    String id = fieldNode.has("fieldCode") ? fieldNode.get("fieldCode").asText() :
+                               (fieldNode.has("id") ? fieldNode.get("id").asText() : "field_" + index);
+                    String label = fieldNode.has("fieldName") ? fieldNode.get("fieldName").asText() :
+                                  (fieldNode.has("label") ? fieldNode.get("label").asText() : "Campo");
+                    // Mantener en lowercase para coincidir con los typeCode en la tabla field_types
+                    String type = fieldNode.has("fieldType") ? fieldNode.get("fieldType").asText().toLowerCase() :
+                                 (fieldNode.has("type") ? fieldNode.get("type").asText().toLowerCase() : "text");
+                    boolean required = (fieldNode.has("isRequired") && fieldNode.get("isRequired").asBoolean()) ||
+                                      (fieldNode.has("required") && fieldNode.get("required").asBoolean());
                     String placeholder = fieldNode.has("placeholder") ? fieldNode.get("placeholder").asText() : null;
-                    String helpText = fieldNode.has("helpText") ? fieldNode.get("helpText").asText() : null;
+                    String helpText = fieldNode.has("description") ? fieldNode.get("description").asText() :
+                                     (fieldNode.has("helpText") ? fieldNode.get("helpText").asText() : null);
                     int displayOrder = fieldNode.has("displayOrder") ? fieldNode.get("displayOrder").asInt() : index;
+
+                    // Parse options for SELECT type
+                    List<String> options = null;
+                    if ("SELECT".equalsIgnoreCase(type) && fieldNode.has("options")) {
+                        options = new ArrayList<>();
+                        JsonNode optionsNode = fieldNode.get("options");
+                        if (optionsNode.isArray()) {
+                            for (JsonNode optNode : optionsNode) {
+                                options.add(optNode.asText());
+                            }
+                        }
+                    }
+
+                    // Parse validationRules
+                    String validationRules = null;
+                    if (fieldNode.has("validationRules")) {
+                        validationRules = fieldNode.get("validationRules").toString();
+                    }
 
                     // Parse columns for TABLE type
                     List<TableColumnResource> columns = null;
@@ -387,10 +414,23 @@ public class ClassificationManagementController {
                             for (JsonNode colNode : columnsNode) {
                                 String colId = colNode.has("id") ? colNode.get("id").asText() : "col_" + columns.size();
                                 String colLabel = colNode.has("label") ? colNode.get("label").asText() : "Columna";
-                                String colType = colNode.has("type") ? colNode.get("type").asText().toUpperCase() : "TEXT";
+                                // Mantener en lowercase para coincidir con los typeCode en la tabla field_types
+                                String colType = colNode.has("type") ? colNode.get("type").asText().toLowerCase() : "text";
                                 boolean colRequired = colNode.has("required") && colNode.get("required").asBoolean();
 
-                                columns.add(new TableColumnResource(colId, colLabel, colType, colRequired));
+                                // Parse options para columnas tipo select
+                                List<String> colOptions = null;
+                                if ("select".equalsIgnoreCase(colType) && colNode.has("options")) {
+                                    colOptions = new ArrayList<>();
+                                    JsonNode colOptionsNode = colNode.get("options");
+                                    if (colOptionsNode.isArray()) {
+                                        for (JsonNode optNode : colOptionsNode) {
+                                            colOptions.add(optNode.asText());
+                                        }
+                                    }
+                                }
+
+                                columns.add(new TableColumnResource(colId, colLabel, colType, colRequired, colOptions));
                             }
                         }
 
@@ -400,6 +440,9 @@ public class ClassificationManagementController {
                         allowDeleteRow = fieldNode.has("allowDeleteRow") ? fieldNode.get("allowDeleteRow").asBoolean() : true;
                     }
 
+                    // Extract linkedToField for bidirectional number↔table synchronization
+                    String linkedToField = fieldNode.has("linkedToField") ? fieldNode.get("linkedToField").asText() : null;
+
                     fields.add(new ClassificationFieldResource(
                         (long) index,
                         id,
@@ -408,16 +451,18 @@ public class ClassificationManagementController {
                         null, // category
                         helpText,
                         null, // defaultValue
-                        null, // validationRules
+                        validationRules,
                         required,
                         true, // visible
                         displayOrder,
                         null,  // conditionalLogic
+                        options,
                         columns,
                         minRows,
                         maxRows,
                         allowAddRow,
-                        allowDeleteRow
+                        allowDeleteRow,
+                        linkedToField
                     ));
                     index++;
                 }
@@ -444,11 +489,13 @@ public class ClassificationManagementController {
             mapping.getIsVisible(),
             mapping.getDisplayOrder(),
             mapping.getConditionalLogic(),
+            null,  // options - TODO: parse from fieldDef if needed
             null,  // columns - TODO: implement from mapping if needed
             null,  // minRows
             null,  // maxRows
             null,  // allowAddRow
-            null   // allowDeleteRow
+            null,  // allowDeleteRow
+            null   // linkedToField - TODO: implement if needed in field mappings
         );
     }
 
@@ -472,17 +519,20 @@ public class ClassificationManagementController {
         Boolean isVisible,
         Integer displayOrder,
         String conditionalLogic,
+        List<String> options,  // Para campos tipo SELECT
         List<TableColumnResource> columns,  // Para campos tipo TABLE
         Integer minRows,
         Integer maxRows,
         Boolean allowAddRow,
-        Boolean allowDeleteRow
+        Boolean allowDeleteRow,
+        String linkedToField  // Para sincronización bidireccional número↔tabla
     ) {}
 
     public record TableColumnResource(
         String id,
         String label,
         String type,
-        Boolean required
+        Boolean required,
+        List<String> options  // Para columnas tipo select
     ) {}
 }

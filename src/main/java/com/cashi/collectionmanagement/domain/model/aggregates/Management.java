@@ -79,11 +79,11 @@ public class Management extends AggregateRoot {
     @Column(name = "tipificacion_requiere_cronograma")
     private Boolean typificationRequiresSchedule;
 
-    @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
+    @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.EAGER, orphanRemoval = true)
     @JoinColumn(name = "id_detalle_llamada")
     private CallDetail callDetail;
 
-    @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
+    @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.EAGER, orphanRemoval = true)
     @JoinColumn(name = "id_detalle_pago")
     private PaymentDetail paymentDetail;
 

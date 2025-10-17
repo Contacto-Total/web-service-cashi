@@ -45,6 +45,10 @@ public class ClassificationCatalog {
     @JoinColumn(name = "id_clasificacion_padre")
     private ClassificationCatalog parentClassification;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "id_tipo_clasificacion")
+    private ClassificationTypeCatalog classificationTypeCatalog;
+
     @Column(name = "nivel_jerarquia", nullable = false)
     private Integer hierarchyLevel;
 

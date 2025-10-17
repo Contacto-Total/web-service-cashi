@@ -64,12 +64,21 @@ public class PaymentCommandServiceImpl implements PaymentCommandService {
 
     @Override
     public PaymentSchedule handle(CreatePaymentScheduleCommand command) {
+        // Convertir InstallmentData del command a InstallmentData del aggregate
+        var installmentDataList = command.installments().stream()
+                .map(inst -> new PaymentSchedule.InstallmentData(
+                        inst.installmentNumber(),
+                        inst.amount(),
+                        inst.dueDate()
+                ))
+                .toList();
+
         var schedule = new PaymentSchedule(
             command.customerId(),
             command.managementId(),
-            command.totalAmount(),
-            command.numberOfInstallments(),
-            command.startDate()
+            command.scheduleType(),
+            command.negotiatedAmount(),
+            installmentDataList
         );
 
         return scheduleRepository.save(schedule);

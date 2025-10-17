@@ -12,6 +12,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -99,6 +100,7 @@ public class ManagementController {
     }
 
     @GetMapping("/customer/{customerId}")
+    @Transactional(readOnly = true)
     public ResponseEntity<List<ManagementResource>> getManagementsByCustomer(@PathVariable String customerId) {
         var query = new GetManagementsByCustomerQuery(customerId);
         var managements = queryService.handle(query);

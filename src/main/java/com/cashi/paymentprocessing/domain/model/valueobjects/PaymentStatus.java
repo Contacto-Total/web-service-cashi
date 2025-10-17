@@ -27,6 +27,10 @@ public class PaymentStatus implements ValueObject {
         return "CANCELLED".equals(status);
     }
 
+    public boolean isOverdue() {
+        return "OVERDUE".equals(status);
+    }
+
     public static PaymentStatus pending() {
         return new PaymentStatus("PENDING", "Pago pendiente");
     }
@@ -37,5 +41,9 @@ public class PaymentStatus implements ValueObject {
 
     public static PaymentStatus cancelled() {
         return new PaymentStatus("CANCELLED", "Pago cancelado");
+    }
+
+    public static PaymentStatus overdue() {
+        return new PaymentStatus("OVERDUE", "Pago vencido");
     }
 }

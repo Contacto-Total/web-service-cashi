@@ -29,7 +29,10 @@ public class DebtInfo {
     @Column(name = "gastos_cobranza", precision = 10, scale = 2)
     private BigDecimal collectionFees;
 
-    @Column(name = "saldo_total", precision = 10, scale = 2)
+    @Column(name = "deuda_actual", precision = 15, scale = 2)
+    private BigDecimal currentDebt;
+
+    @Column(name = "saldo_total", precision = 15, scale = 2)
     private BigDecimal totalBalance;
 
     @Column(name = "dias_mora")
@@ -43,20 +46,23 @@ public class DebtInfo {
 
     public DebtInfo(BigDecimal capitalBalance, BigDecimal overdueInterest,
                    BigDecimal accumulatedLateFees, BigDecimal collectionFees,
-                   Integer daysOverdue) {
+                   BigDecimal currentDebt, Integer daysOverdue) {
         this.capitalBalance = capitalBalance;
         this.overdueInterest = overdueInterest;
         this.accumulatedLateFees = accumulatedLateFees;
         this.collectionFees = collectionFees;
+        this.currentDebt = currentDebt;
         this.daysOverdue = daysOverdue;
         this.totalBalance = calculateTotalBalance();
     }
 
     private BigDecimal calculateTotalBalance() {
-        return capitalBalance
-                .add(overdueInterest)
-                .add(accumulatedLateFees)
-                .add(collectionFees);
+        BigDecimal total = BigDecimal.ZERO;
+        if (capitalBalance != null) total = total.add(capitalBalance);
+        if (overdueInterest != null) total = total.add(overdueInterest);
+        if (accumulatedLateFees != null) total = total.add(accumulatedLateFees);
+        if (collectionFees != null) total = total.add(collectionFees);
+        return total;
     }
 
     public void updateLastPayment(LocalDate paymentDate, BigDecimal amount) {

@@ -20,8 +20,14 @@ import java.time.LocalDate;
 @NoArgsConstructor
 public class Customer extends AggregateRoot {
 
+    @Column(name = "id_inquilino", nullable = false)
+    private Long tenantId;
+
     @Column(name = "id_cliente", unique = true, nullable = false, length = 36)
     private String customerId;
+
+    @Column(name = "codigo_documento", length = 50)
+    private String documentCode;
 
     @Column(name = "nombre_completo", nullable = false)
     private String fullName;
@@ -35,6 +41,12 @@ public class Customer extends AggregateRoot {
     @Column(name = "edad")
     private Integer age;
 
+    @Column(name = "estado", length = 20)
+    private String status;
+
+    @Column(name = "fecha_importacion")
+    private LocalDate importDate;
+
     @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     @JoinColumn(name = "id_informacion_contacto")
     private ContactInfo contactInfo;
@@ -47,14 +59,18 @@ public class Customer extends AggregateRoot {
     @JoinColumn(name = "id_informacion_deuda")
     private DebtInfo debtInfo;
 
-    public Customer(String customerId, String fullName, DocumentNumber documentNumber,
-                   LocalDate birthDate) {
+    public Customer(Long tenantId, String customerId, String documentCode, String fullName,
+                   DocumentNumber documentNumber, LocalDate birthDate, String status) {
         super();
+        this.tenantId = tenantId;
         this.customerId = customerId;
+        this.documentCode = documentCode;
         this.fullName = fullName;
         this.documentNumber = documentNumber;
         this.birthDate = birthDate;
         this.age = calculateAge(birthDate);
+        this.status = status;
+        this.importDate = LocalDate.now();
     }
 
     public void updateContactInfo(ContactInfo contactInfo) {

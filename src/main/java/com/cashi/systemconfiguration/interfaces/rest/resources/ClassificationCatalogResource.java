@@ -14,5 +14,9 @@ public record ClassificationCatalogResource(
     String colorHex,
     String metadataSchema,
     Boolean isSystem,
-    Boolean isActive
+    Boolean isActive,
+    // Campos del tipo de clasificación
+    Boolean suggestsFullAmount,
+    Boolean allowsInstallmentSelection,
+    Boolean requiresManualAmount
 ) {}

@@ -39,10 +39,45 @@ public class PaymentSchedule extends AggregateRoot {
     @Column(name = "esta_activo")
     private Boolean isActive;
 
-    @OneToMany(cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
+    @Column(name = "tipo_cronograma")
+    private String scheduleType; // "FINANCIERA" o "CONFIANZA"
+
+    @Column(name = "monto_negociado")
+    private BigDecimal negotiatedAmount; // Para tipo FINANCIERA
+
+    @OneToMany(cascade = CascadeType.ALL, fetch = FetchType.EAGER, orphanRemoval = true)
     @JoinColumn(name = "id_cronograma_pago")
     private List<Installment> installments = new ArrayList<>();
 
+    // Constructor para cronogramas con cuotas manuales (NUEVO)
+    public PaymentSchedule(String customerId, String managementId, String scheduleType, BigDecimal negotiatedAmount, List<InstallmentData> installmentDataList) {
+        this.scheduleId = PaymentScheduleId.generate();
+        this.customerId = customerId;
+        this.managementId = managementId;
+        this.scheduleType = scheduleType;
+        this.negotiatedAmount = negotiatedAmount;
+        this.numberOfInstallments = installmentDataList.size();
+        this.isActive = true;
+
+        // Calcular total amount sumando las cuotas
+        this.totalAmount = installmentDataList.stream()
+                .map(InstallmentData::amount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // Fecha de inicio = fecha de la primera cuota
+        this.startDate = installmentDataList.isEmpty() ? LocalDate.now() : installmentDataList.get(0).dueDate();
+
+        // Crear cuotas desde los datos proporcionados
+        for (InstallmentData data : installmentDataList) {
+            installments.add(new Installment(data.installmentNumber(), data.amount(), data.dueDate()));
+        }
+    }
+
+    // Record para pasar datos de cuotas al constructor
+    public record InstallmentData(Integer installmentNumber, BigDecimal amount, LocalDate dueDate) {}
+
+    // Constructor legacy para backward compatibility (si lo necesitas)
+    @Deprecated
     public PaymentSchedule(String customerId, String managementId, BigDecimal totalAmount, Integer numberOfInstallments, LocalDate startDate) {
         this.scheduleId = PaymentScheduleId.generate();
         this.customerId = customerId;
@@ -51,6 +86,7 @@ public class PaymentSchedule extends AggregateRoot {
         this.numberOfInstallments = numberOfInstallments;
         this.startDate = startDate;
         this.isActive = true;
+        this.scheduleType = "LEGACY";
         generateInstallments();
     }
 

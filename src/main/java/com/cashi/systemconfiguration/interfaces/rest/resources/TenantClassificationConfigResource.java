@@ -4,6 +4,7 @@ public record TenantClassificationConfigResource(
     Long id,
     Long tenantId,
     Long portfolioId,
+    Long classificationId,
     ClassificationCatalogResource classification,
     Boolean isEnabled,
     Boolean isRequired,

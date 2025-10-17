@@ -4,12 +4,14 @@ import com.cashi.shared.domain.model.entities.FieldTypeCatalog;
 import com.cashi.shared.domain.model.entities.Portfolio;
 import com.cashi.shared.domain.model.entities.Tenant;
 import com.cashi.systemconfiguration.domain.model.entities.ClassificationCatalog;
+import com.cashi.systemconfiguration.domain.model.entities.ClassificationTypeCatalog;
 import com.cashi.systemconfiguration.domain.model.entities.TenantClassificationConfig;
 import com.cashi.systemconfiguration.domain.model.enums.ContactClassificationEnum;
 import com.cashi.systemconfiguration.domain.model.enums.ManagementClassificationEnum;
 import com.cashi.systemconfiguration.domain.model.enums.FinancieraOhClassificationEnum;
 import com.cashi.systemconfiguration.domain.model.enums.TenantClassificationStrategy;
 import com.cashi.systemconfiguration.infrastructure.persistence.jpa.repositories.ClassificationCatalogRepository;
+import com.cashi.systemconfiguration.infrastructure.persistence.jpa.repositories.ClassificationTypeCatalogRepository;
 import com.cashi.systemconfiguration.infrastructure.persistence.jpa.repositories.TenantClassificationConfigRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.FieldTypeCatalogRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.PortfolioRepository;
@@ -17,8 +19,13 @@ import com.cashi.shared.infrastructure.persistence.jpa.repositories.TenantReposi
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.stereotype.Component;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 
+import java.io.IOException;
 import java.util.*;
 
 @Component
@@ -28,6 +35,7 @@ public class DataSeeder implements CommandLineRunner {
 
     private final TenantRepository tenantRepository;
     private final ClassificationCatalogRepository classificationCatalogRepository;
+    private final ClassificationTypeCatalogRepository classificationTypeCatalogRepository;
     private final TenantClassificationConfigRepository tenantClassificationConfigRepository;
     private final PortfolioRepository portfolioRepository;
     private final FieldTypeCatalogRepository fieldTypeCatalogRepository;
@@ -60,11 +68,13 @@ public class DataSeeder implements CommandLineRunner {
     public DataSeeder(
             TenantRepository tenantRepository,
             ClassificationCatalogRepository classificationCatalogRepository,
+            ClassificationTypeCatalogRepository classificationTypeCatalogRepository,
             TenantClassificationConfigRepository tenantClassificationConfigRepository,
             PortfolioRepository portfolioRepository,
             FieldTypeCatalogRepository fieldTypeCatalogRepository) {
         this.tenantRepository = tenantRepository;
         this.classificationCatalogRepository = classificationCatalogRepository;
+        this.classificationTypeCatalogRepository = classificationTypeCatalogRepository;
         this.tenantClassificationConfigRepository = tenantClassificationConfigRepository;
         this.portfolioRepository = portfolioRepository;
         this.fieldTypeCatalogRepository = fieldTypeCatalogRepository;
@@ -76,7 +86,10 @@ public class DataSeeder implements CommandLineRunner {
         logger.info("INICIANDO DATA SEEDING - SISTEMA MULTI-TENANT");
         logger.info("====================================================================");
 
-        // Seed field types first (required by classifications)
+        // Seed classification types first
+        seedClassificationTypes();
+
+        // Seed field types (required by classifications)
         seedFieldTypes();
 
         seedTenants();
@@ -128,45 +141,49 @@ public class DataSeeder implements CommandLineRunner {
         seedFieldTypeIfNotExists("date", "Fecha", "Selector de fecha",
             "calendar", true, true, 6);
 
+        // Time
+        seedFieldTypeIfNotExists("time", "Hora", "Selector de hora",
+            "clock", true, true, 7);
+
         // DateTime
         seedFieldTypeIfNotExists("datetime", "Fecha y Hora", "Selector de fecha y hora",
-            "calendar-clock", true, true, 7);
+            "calendar-clock", true, true, 8);
 
         // Checkbox
         seedFieldTypeIfNotExists("checkbox", "Checkbox", "Casilla de verificación verdadero/falso",
-            "check-square", true, true, 8);
+            "check-square", true, true, 9);
 
         // Select
         seedFieldTypeIfNotExists("select", "Lista Desplegable", "Lista de opciones de selección única",
-            "chevron-down", true, true, 9);
+            "chevron-down", true, true, 10);
 
         // Multi-Select
         seedFieldTypeIfNotExists("multiselect", "Selección Múltiple", "Lista de opciones de selección múltiple",
-            "list-checks", true, true, 10);
+            "list-checks", true, true, 11);
 
         // Email
         seedFieldTypeIfNotExists("email", "Email", "Campo para direcciones de correo electrónico",
-            "mail", true, true, 11);
+            "mail", true, true, 12);
 
         // Phone
         seedFieldTypeIfNotExists("phone", "Teléfono", "Campo para números telefónicos",
-            "phone", true, true, 12);
+            "phone", true, true, 13);
 
         // URL
         seedFieldTypeIfNotExists("url", "URL", "Campo para direcciones web",
-            "link", true, true, 13);
+            "link", true, true, 14);
 
         // JSON
         seedFieldTypeIfNotExists("json", "JSON", "Campo para datos estructurados en formato JSON",
-            "braces", true, false, 14);
+            "braces", true, false, 15);
 
         // Table
         seedFieldTypeIfNotExists("table", "Tabla/Cronograma", "Tabla dinámica con filas y columnas configurables",
-            "table-2", true, false, 15);
+            "table-2", true, false, 16);
 
         // Auto-Number (solo para columnas de tabla)
         seedFieldTypeIfNotExists("auto-number", "Autonumérico", "Número secuencial automático (solo para tablas)",
-            "list-ordered", false, true, 16);
+            "list-ordered", false, true, 17);
 
         logger.info("✓ Field Types Catalog seeding completed");
     }
@@ -181,6 +198,85 @@ public class DataSeeder implements CommandLineRunner {
             );
             fieldTypeCatalogRepository.save(fieldType);
             logger.info("  ✓ {} - {}", typeCode, typeName);
+        }
+    }
+
+    private void seedClassificationTypes() {
+        logger.info("--------------------------------------------------------------------");
+        logger.info("Seeding Classification Types Catalog...");
+
+        // Categoría PAGO
+        seedClassificationTypeIfNotExists("PAGO", "TOTAL", "Pago Total", "PT",
+            "Pagar todo el saldo pendiente del cronograma",
+            "El cliente realiza un pago que cubre la totalidad de su deuda pendiente",
+            true, false, false);
+
+        seedClassificationTypeIfNotExists("PAGO", "PARCIAL", "Pago Parcial", "PP",
+            "Pagar solo la próxima cuota del cronograma",
+            "El cliente realiza un pago que cubre solo la siguiente cuota programada",
+            false, true, false);
+
+        seedClassificationTypeIfNotExists("PAGO", "PARCIAL_MULTIPLE", "Pago Parcial Múltiple", "PPM",
+            "Seleccionar varias cuotas para pagar",
+            "El cliente realiza un pago que cubre varias cuotas específicas del cronograma",
+            false, true, false);
+
+        seedClassificationTypeIfNotExists("PAGO", "PERSONALIZADO", "Monto Personalizado", "PX",
+            "Ingresar un monto personalizado",
+            "El cliente realiza un pago con un monto específico que no corresponde exactamente a las cuotas programadas",
+            false, false, true);
+
+        // Categoría CRONOGRAMA
+        seedClassificationTypeIfNotExists("CRONOGRAMA", "FINANCIERA", "Cronograma Financiero", "CF",
+            "Cronograma con condiciones financieras formales",
+            "Cronograma de pagos con términos financieros establecidos y validados por el área correspondiente",
+            false, false, false);
+
+        seedClassificationTypeIfNotExists("CRONOGRAMA", "CONFIANZA", "Cronograma de Confianza", "CC",
+            "Cronograma basado en acuerdo de palabra",
+            "Cronograma de pagos establecido mediante compromiso verbal con el cliente",
+            false, false, false);
+
+        // Categoría RECLAMO
+        seedClassificationTypeIfNotExists("RECLAMO", "PRODUCTO", "Reclamo de Producto", "RP",
+            "Reclamo sobre calidad o características del producto",
+            "El cliente presenta una queja relacionada con las características, calidad o funcionamiento del producto financiero adquirido",
+            false, false, false);
+
+        seedClassificationTypeIfNotExists("RECLAMO", "SERVICIO", "Reclamo de Servicio", "RS",
+            "Reclamo sobre atención o servicio recibido",
+            "El cliente presenta una queja sobre la atención recibida o el servicio prestado por la institución",
+            false, false, false);
+
+        // Categoría CONTACTO
+        seedClassificationTypeIfNotExists("CONTACTO", "EXITOSO", "Contacto Exitoso", "CE",
+            "Se logró contactar con el cliente",
+            "Se estableció comunicación efectiva con el cliente objetivo",
+            false, false, false);
+
+        seedClassificationTypeIfNotExists("CONTACTO", "NO_CONTACTADO", "No Contactado", "NC",
+            "No se logró contactar con el cliente",
+            "No fue posible establecer comunicación con el cliente en el intento realizado",
+            false, false, false);
+
+        logger.info("✓ Classification Types Catalog seeding completed");
+    }
+
+    private void seedClassificationTypeIfNotExists(String category, String code, String name, String shortName,
+                                                   String description, String userDescription,
+                                                   Boolean suggestsFullAmount, Boolean allowsInstallmentSelection,
+                                                   Boolean requiresManualAmount) {
+        if (!classificationTypeCatalogRepository.findByCategoryAndCode(category, code).isPresent()) {
+            ClassificationTypeCatalog type = new ClassificationTypeCatalog(
+                category, code, name, shortName, description, userDescription
+            );
+            type.setSuggestsFullAmount(suggestsFullAmount);
+            type.setAllowsInstallmentSelection(allowsInstallmentSelection);
+            type.setRequiresManualAmount(requiresManualAmount);
+            type.setRequiresObservations(false);
+            type.setAllowsFileAttachment(false);
+            classificationTypeCatalogRepository.save(type);
+            logger.info("  ✓ [{} - {}] {}", category, code, name);
         }
     }
 
@@ -314,14 +410,11 @@ public class DataSeeder implements CommandLineRunner {
                 classification.setColorHex(enumValue.getColorHex());
                 classification.setIconName(enumValue.getIconName());
 
-                String metadata = String.format(
-                    "{\"requiresPayment\":%b,\"requiresSchedule\":%b,\"requiresFollowUp\":%b,\"isSuccessful\":%b,\"mainCategory\":\"%s\",\"tenantCode\":\"FIN-OH\"}",
-                    enumValue.requiresPayment(),
-                    enumValue.requiresSchedule(),
-                    enumValue.requiresFollowUp(),
-                    enumValue.isSuccessful(),
-                    enumValue.getMainCategory()
-                );
+                // Asignar tipo de clasificación si es una tipificación de pago
+                assignClassificationTypeIfApplicable(classification);
+
+                // Metadata básico + Campos dinámicos (si aplica)
+                String metadata = buildMetadataWithDynamicFields(enumValue);
                 classification.setMetadataSchema(metadata);
                 classification.setIsSystem(true);
                 classificationCatalogRepository.save(classification);
@@ -329,7 +422,7 @@ public class DataSeeder implements CommandLineRunner {
                     classification.getHierarchyLevel(), enumValue.getCode(), enumValue.getDescription(),
                     parent != null ? parent.getCode() : "ROOT");
             } else {
-                // ACTUALIZAR EXISTENTE: Corregir hierarchyLevel y hierarchyPath
+                // ACTUALIZAR EXISTENTE: Corregir hierarchyLevel, hierarchyPath y metadata
                 ClassificationCatalog parent = null;
                 if (enumValue.getParentCode() != null) {
                     parent = classificationCatalogRepository.findByCode(enumValue.getParentCode())
@@ -347,8 +440,19 @@ public class DataSeeder implements CommandLineRunner {
                     classification.setHierarchyPath("/" + classification.getCode());
                 }
 
+                // Actualizar metadata con los flags correctos
+                String metadata = buildMetadataWithDynamicFields(enumValue);
+                classification.setMetadataSchema(metadata);
+
+                // Actualizar también el color e icono
+                classification.setColorHex(enumValue.getColorHex());
+                classification.setIconName(enumValue.getIconName());
+
+                // Asignar tipo de clasificación si es una tipificación de pago
+                assignClassificationTypeIfApplicable(classification);
+
                 classificationCatalogRepository.save(classification);
-                logger.info("  ✓ ACTUALIZADO L{} - {} - {} (parent: {})",
+                logger.info("  ✓ ACTUALIZADO L{} - {} - {} (parent: {}) [metadata actualizado]",
                     classification.getHierarchyLevel(), enumValue.getCode(), enumValue.getDescription(),
                     parent != null ? parent.getCode() : "ROOT");
             }
@@ -443,5 +547,166 @@ public class DataSeeder implements CommandLineRunner {
         if (enumValue.getRequiresSchedule()) return "calendar";
         if (code.equals("AGR") || code.equals("NBL") || code.equals("LGL")) return "shield-alert";
         return "file-text";
+    }
+
+    /**
+     * Construye el metadata JSON completo incluyendo campos dinámicos según la tipificación
+     */
+    private String buildMetadataWithDynamicFields(FinancieraOhClassificationEnum enumValue) {
+        String baseMetadata = String.format(
+            "{\"requiresPayment\":%b,\"requiresSchedule\":%b,\"requiresFollowUp\":%b,\"isSuccessful\":%b,\"mainCategory\":\"%s\",\"tenantCode\":\"FIN-OH\"",
+            enumValue.requiresPayment(),
+            enumValue.requiresSchedule(),
+            enumValue.requiresFollowUp(),
+            enumValue.isSuccessful(),
+            enumValue.getMainCategory()
+        );
+
+        // Agregar campos dinámicos según el código de la tipificación
+        String dynamicFields = getDynamicFieldsForClassification(enumValue.getCode());
+
+        if (dynamicFields != null && !dynamicFields.isEmpty()) {
+            return baseMetadata + ",\"fields\":" + dynamicFields + "}";
+        }
+
+        return baseMetadata + "}";
+    }
+
+    /**
+     * Retorna el array JSON de campos dinámicos según el código de clasificación
+     * Retorna null si no requiere campos dinámicos
+     */
+    private String getDynamicFieldsForClassification(String code) {
+        switch (code) {
+            case "PT": // Pago Total
+                return "[" +
+                    "{\"fieldCode\":\"monto_pagado\",\"fieldName\":\"Monto Pagado\",\"fieldType\":\"currency\",\"isRequired\":true,\"displayOrder\":1}," +
+                    "{\"fieldCode\":\"metodo_pago\",\"fieldName\":\"Método de Pago\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Efectivo\",\"Transferencia\",\"Depósito\",\"Tarjeta\",\"Yape\",\"Plin\"],\"displayOrder\":2}," +
+                    "{\"fieldCode\":\"numero_operacion\",\"fieldName\":\"Nº Operación\",\"fieldType\":\"text\",\"isRequired\":true,\"displayOrder\":3}," +
+                    "{\"fieldCode\":\"fecha_pago\",\"fieldName\":\"Fecha de Pago\",\"fieldType\":\"date\",\"isRequired\":true,\"displayOrder\":4}" +
+                "]";
+
+            case "PP": // Pago Parcial
+                return "[" +
+                    "{\"fieldCode\":\"monto_pagado\",\"fieldName\":\"Monto Pagado\",\"fieldType\":\"currency\",\"isRequired\":true,\"displayOrder\":1}," +
+                    "{\"fieldCode\":\"saldo_pendiente\",\"fieldName\":\"Saldo Pendiente\",\"fieldType\":\"currency\",\"isRequired\":true,\"displayOrder\":2}," +
+                    "{\"fieldCode\":\"metodo_pago\",\"fieldName\":\"Método de Pago\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Efectivo\",\"Transferencia\",\"Depósito\",\"Tarjeta\",\"Yape\",\"Plin\"],\"displayOrder\":3}," +
+                    "{\"fieldCode\":\"numero_operacion\",\"fieldName\":\"Nº Operación\",\"fieldType\":\"text\",\"isRequired\":true,\"displayOrder\":4}," +
+                    "{\"fieldCode\":\"fecha_pago\",\"fieldName\":\"Fecha de Pago\",\"fieldType\":\"date\",\"isRequired\":true,\"displayOrder\":5}," +
+                    "{\"fieldCode\":\"compromiso_saldo\",\"fieldName\":\"Compromiso Saldo\",\"fieldType\":\"date\",\"isRequired\":false,\"displayOrder\":6}" +
+                "]";
+
+            case "PPT": // Pago por Tercero
+                return "[" +
+                    "{\"fieldCode\":\"nombre_tercero\",\"fieldName\":\"Nombre del Tercero\",\"fieldType\":\"text\",\"isRequired\":true,\"displayOrder\":1}," +
+                    "{\"fieldCode\":\"relacion\",\"fieldName\":\"Relación\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Familiar\",\"Cónyuge\",\"Aval\",\"Amigo\",\"Otro\"],\"displayOrder\":2}," +
+                    "{\"fieldCode\":\"telefono_tercero\",\"fieldName\":\"Teléfono\",\"fieldType\":\"phone\",\"isRequired\":false,\"displayOrder\":3}," +
+                    "{\"fieldCode\":\"monto_pagado\",\"fieldName\":\"Monto Pagado\",\"fieldType\":\"currency\",\"isRequired\":true,\"displayOrder\":4}," +
+                    "{\"fieldCode\":\"metodo_pago\",\"fieldName\":\"Método de Pago\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Efectivo\",\"Transferencia\",\"Depósito\",\"Yape\",\"Plin\"],\"displayOrder\":5}," +
+                    "{\"fieldCode\":\"numero_operacion\",\"fieldName\":\"Nº Operación\",\"fieldType\":\"text\",\"isRequired\":true,\"displayOrder\":6}" +
+                "]";
+
+            case "PU": // Pago Único (Promesa)
+                return "[" +
+                    "{\"fieldCode\":\"monto_comprometido\",\"fieldName\":\"Monto Comprometido\",\"fieldType\":\"currency\",\"isRequired\":true,\"displayOrder\":1}," +
+                    "{\"fieldCode\":\"fecha_compromiso\",\"fieldName\":\"Fecha Compromiso\",\"fieldType\":\"date\",\"isRequired\":true,\"displayOrder\":2}," +
+                    "{\"fieldCode\":\"hora_aproximada\",\"fieldName\":\"Hora Aproximada\",\"fieldType\":\"text\",\"isRequired\":false,\"displayOrder\":3}," +
+                    "{\"fieldCode\":\"metodo_pago_prometido\",\"fieldName\":\"Método Prometido\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Efectivo\",\"Transferencia\",\"Depósito\",\"Yape\",\"Plin\",\"Agente\"],\"displayOrder\":4}," +
+                    "{\"fieldCode\":\"nivel_confianza\",\"fieldName\":\"Nivel de Confianza\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Alto\",\"Medio\",\"Bajo\"],\"displayOrder\":5}" +
+                "]";
+
+            case "PF": // Pago Fraccionado
+                return "[" +
+                    "{\"fieldCode\":\"numero_cuotas\",\"fieldName\":\"Número de Cuotas\",\"fieldType\":\"number\",\"isRequired\":true,\"displayOrder\":1,\"min\":1,\"max\":50}," +
+                    "{\"fieldCode\":\"cronograma_pagos\",\"fieldName\":\"Cronograma de Pagos\",\"fieldType\":\"table\",\"isRequired\":true,\"displayOrder\":2," +
+                    "\"linkedToField\":\"numero_cuotas\"," +
+                    "\"columns\":[" +
+                        "{\"id\":\"cuota\",\"label\":\"#\",\"type\":\"auto-number\",\"required\":false}," +
+                        "{\"id\":\"fecha_vencimiento\",\"label\":\"Fecha Vencimiento\",\"type\":\"date\",\"required\":true,\"minDate\":\"today\"}," +
+                        "{\"id\":\"monto\",\"label\":\"Monto\",\"type\":\"currency\",\"required\":true}" +
+                    "],\"minRows\":1,\"maxRows\":50,\"allowAddRow\":true,\"allowDeleteRow\":true}" +
+                "]";
+
+            case "CF": // Convenio Formal
+                return "[" +
+                    "{\"fieldCode\":\"numero_convenio\",\"fieldName\":\"Nº Convenio\",\"fieldType\":\"text\",\"isRequired\":true,\"displayOrder\":1}," +
+                    "{\"fieldCode\":\"fecha_convenio\",\"fieldName\":\"Fecha Convenio\",\"fieldType\":\"date\",\"isRequired\":true,\"displayOrder\":2}," +
+                    "{\"fieldCode\":\"monto_inicial\",\"fieldName\":\"Cuota Inicial\",\"fieldType\":\"currency\",\"isRequired\":false,\"displayOrder\":3}," +
+                    "{\"fieldCode\":\"numero_cuotas\",\"fieldName\":\"Número de Cuotas\",\"fieldType\":\"number\",\"isRequired\":true,\"displayOrder\":4}," +
+                    "{\"fieldCode\":\"monto_cuota\",\"fieldName\":\"Monto por Cuota\",\"fieldType\":\"currency\",\"isRequired\":true,\"displayOrder\":5}," +
+                    "{\"fieldCode\":\"frecuencia\",\"fieldName\":\"Frecuencia\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Semanal\",\"Quincenal\",\"Mensual\"],\"displayOrder\":6}," +
+                    "{\"fieldCode\":\"fecha_primera_cuota\",\"fieldName\":\"Primera Cuota\",\"fieldType\":\"date\",\"isRequired\":true,\"displayOrder\":7}," +
+                    "{\"fieldCode\":\"responsable\",\"fieldName\":\"Responsable Autorización\",\"fieldType\":\"text\",\"isRequired\":true,\"displayOrder\":8}" +
+                "]";
+
+            case "EA_ENF": // Excepción por Enfermedad
+                return "[" +
+                    "{\"fieldCode\":\"tipo_enfermedad\",\"fieldName\":\"Tipo de Enfermedad\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Hospitalización\",\"Enfermedad Crónica\",\"Accidente\",\"Cirugía\",\"Otro\"],\"displayOrder\":1}," +
+                    "{\"fieldCode\":\"persona_afectada\",\"fieldName\":\"Persona Afectada\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Cliente\",\"Familiar Directo\",\"Cónyuge\",\"Hijo/a\"],\"displayOrder\":2}," +
+                    "{\"fieldCode\":\"fecha_inicio\",\"fieldName\":\"Fecha Inicio\",\"fieldType\":\"date\",\"isRequired\":true,\"displayOrder\":3}," +
+                    "{\"fieldCode\":\"fecha_revision\",\"fieldName\":\"Fecha Revisión\",\"fieldType\":\"date\",\"isRequired\":true,\"displayOrder\":4}" +
+                "]";
+
+            case "EA_DES": // Excepción por Desempleo
+                return "[" +
+                    "{\"fieldCode\":\"fecha_cese\",\"fieldName\":\"Fecha de Cese\",\"fieldType\":\"date\",\"isRequired\":true,\"displayOrder\":1}," +
+                    "{\"fieldCode\":\"motivo_cese\",\"fieldName\":\"Motivo\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Despido\",\"Renuncia\",\"Fin de Contrato\",\"Cierre Empresa\"],\"displayOrder\":2}," +
+                    "{\"fieldCode\":\"busca_empleo\",\"fieldName\":\"¿Busca Empleo?\",\"fieldType\":\"checkbox\",\"isRequired\":false,\"defaultValue\":true,\"displayOrder\":3}," +
+                    "{\"fieldCode\":\"fecha_revision\",\"fieldName\":\"Fecha Revisión\",\"fieldType\":\"date\",\"isRequired\":true,\"displayOrder\":4}" +
+                "]";
+
+            case "CD_SMT": // Cliente solicita más tiempo
+                return "[" +
+                    "{\"fieldCode\":\"motivo_solicitud\",\"fieldName\":\"Motivo de la Solicitud\",\"fieldType\":\"textarea\",\"isRequired\":true,\"displayOrder\":1}," +
+                    "{\"fieldCode\":\"tiempo_adicional\",\"fieldName\":\"Tiempo Adicional\",\"fieldType\":\"text\",\"isRequired\":true,\"description\":\"Ej: 15 días, 1 mes\",\"displayOrder\":2}," +
+                    "{\"fieldCode\":\"nueva_fecha\",\"fieldName\":\"Nueva Fecha Compromiso\",\"fieldType\":\"date\",\"isRequired\":true,\"displayOrder\":3}," +
+                    "{\"fieldCode\":\"monto_comprometido\",\"fieldName\":\"Monto Comprometido\",\"fieldType\":\"currency\",\"isRequired\":false,\"displayOrder\":4}" +
+                "]";
+
+            case "AD_NT": // Nuevo Teléfono
+                return "[" +
+                    "{\"fieldCode\":\"nuevo_telefono\",\"fieldName\":\"Nuevo Teléfono\",\"fieldType\":\"phone\",\"isRequired\":true,\"displayOrder\":1}," +
+                    "{\"fieldCode\":\"tipo_telefono\",\"fieldName\":\"Tipo\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Celular Personal\",\"Celular Trabajo\",\"Casa\",\"Referencia\"],\"displayOrder\":2}," +
+                    "{\"fieldCode\":\"prioridad\",\"fieldName\":\"Prioridad\",\"fieldType\":\"select\",\"isRequired\":true,\"options\":[\"Principal\",\"Secundario\",\"Alternativo\"],\"displayOrder\":3}" +
+                "]";
+
+            case "AD_ND": // Nueva Dirección
+                return "[" +
+                    "{\"fieldCode\":\"nueva_direccion\",\"fieldName\":\"Nueva Dirección\",\"fieldType\":\"textarea\",\"isRequired\":true,\"displayOrder\":1}," +
+                    "{\"fieldCode\":\"distrito\",\"fieldName\":\"Distrito\",\"fieldType\":\"text\",\"isRequired\":true,\"displayOrder\":2}," +
+                    "{\"fieldCode\":\"provincia\",\"fieldName\":\"Provincia\",\"fieldType\":\"text\",\"isRequired\":true,\"displayOrder\":3}," +
+                    "{\"fieldCode\":\"referencia\",\"fieldName\":\"Referencia\",\"fieldType\":\"text\",\"isRequired\":false,\"displayOrder\":4}" +
+                "]";
+
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Asigna el tipo de clasificación correspondiente a una clasificación basándose en su código
+     * Este método mapea códigos específicos (PT, PP, PPT, PF, CF) a sus tipos de clasificación
+     */
+    private void assignClassificationTypeIfApplicable(ClassificationCatalog classification) {
+        String code = classification.getCode();
+
+        // Mapeo de códigos de tipificación a tipos de clasificación
+        final String category;
+        final String typeCode;
+
+        switch (code) {
+            case "PT" -> { category = "PAGO"; typeCode = "TOTAL"; }
+            case "PP" -> { category = "PAGO"; typeCode = "PARCIAL"; }
+            case "PPT" -> { category = "PAGO"; typeCode = "TOTAL"; } // Pago por tercero también es total
+            case "PF" -> { category = "CRONOGRAMA"; typeCode = "FINANCIERA"; }
+            case "CF" -> { category = "CRONOGRAMA"; typeCode = "FINANCIERA"; }
+            default -> { return; } // Si no es un código conocido, salir
+        }
+
+        classificationTypeCatalogRepository.findByCategoryAndCode(category, typeCode)
+            .ifPresent(type -> {
+                classification.setClassificationTypeCatalog(type);
+                logger.info("    → Tipo asignado: {} - {}", category, typeCode);
+            });
     }
 }

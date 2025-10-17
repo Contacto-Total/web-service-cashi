@@ -20,11 +20,12 @@ public interface TenantClassificationConfigRepository extends JpaRepository<Tena
     );
 
     @Query("SELECT tcc FROM TenantClassificationConfig tcc " +
-           "LEFT JOIN FETCH tcc.classification " +
+           "LEFT JOIN FETCH tcc.classification c " +
+           "LEFT JOIN FETCH c.classificationTypeCatalog " +
            "WHERE tcc.tenant = :tenant " +
            "AND (:portfolio IS NULL OR tcc.portfolio = :portfolio OR tcc.portfolio IS NULL) " +
            "AND tcc.isEnabled = true " +
-           "ORDER BY tcc.customOrder, tcc.classification.displayOrder")
+           "ORDER BY tcc.customOrder, c.displayOrder")
     List<TenantClassificationConfig> findEnabledByTenantAndPortfolio(
         @Param("tenant") Tenant tenant, @Param("portfolio") Portfolio portfolio
     );

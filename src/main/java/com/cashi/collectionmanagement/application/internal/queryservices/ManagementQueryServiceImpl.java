@@ -5,6 +5,7 @@ import com.cashi.collectionmanagement.domain.model.queries.*;
 import com.cashi.collectionmanagement.domain.services.ManagementQueryService;
 import com.cashi.collectionmanagement.infrastructure.persistence.jpa.repositories.ManagementRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -24,6 +25,7 @@ public class ManagementQueryServiceImpl implements ManagementQueryService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<Management> handle(GetManagementsByCustomerQuery query) {
         return repository.findByCustomerId(query.customerId());
     }

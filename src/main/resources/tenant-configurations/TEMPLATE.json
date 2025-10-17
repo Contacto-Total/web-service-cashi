@@ -1,0 +1,121 @@
+{
+  "_comment": "PLANTILLA PARA NUEVOS CLIENTES - Copiar este archivo y renombrarlo según el cliente",
+  "_instructions": [
+    "1. Copiar este archivo y renombrarlo (ej: banco-xyz.json)",
+    "2. Modificar tenantCode, tenantName y businessName",
+    "3. Ajustar las clasificaciones según las necesidades del cliente",
+    "4. Definir los campos dinámicos (dynamicFields) para cada tipificación que lo requiera",
+    "5. Configurar las reglas de negocio (businessRules) según los procesos del cliente",
+    "6. El seeder cargará automáticamente este archivo al reiniciar"
+  ],
+  "tenantCode": "TEMPLATE",
+  "tenantName": "Nombre del Cliente",
+  "businessName": "Razón Social del Cliente S.A.",
+  "description": "Descripción de la configuración",
+  "classifications": [
+    {
+      "_comment": "NIVEL 1 - Categorías principales",
+      "code": "RP",
+      "label": "Resultado Positivo",
+      "hierarchyLevel": 1,
+      "parentCode": null,
+      "colorHex": "#10B981",
+      "iconName": "check-circle",
+      "displayOrder": 1,
+      "businessRules": {
+        "isSuccessful": true,
+        "mainCategory": "RESULTADO_POSITIVO",
+        "requiresPayment": false,
+        "requiresSchedule": false,
+        "requiresFollowUp": false,
+        "requiresApproval": false,
+        "requiresDocumentation": false,
+        "allowDuplicates": true,
+        "preventDuplicateSchedule": false,
+        "closesAccount": false,
+        "createsFollowUpTask": false,
+        "escalationRequired": false
+      }
+    },
+    {
+      "_comment": "NIVEL 2 - Subcategorías",
+      "code": "PC",
+      "label": "Pago Confirmado",
+      "hierarchyLevel": 2,
+      "parentCode": "RP",
+      "colorHex": "#059669",
+      "iconName": "dollar-sign",
+      "displayOrder": 1,
+      "businessRules": {
+        "requiresPayment": true,
+        "validatePaymentAmount": true
+      }
+    },
+    {
+      "_comment": "NIVEL 3 - Tipificaciones específicas con campos dinámicos",
+      "code": "PT",
+      "label": "Pago Total",
+      "hierarchyLevel": 3,
+      "parentCode": "PC",
+      "colorHex": "#10B981",
+      "iconName": "check-circle",
+      "displayOrder": 1,
+      "businessRules": {
+        "requiresPayment": true,
+        "closesAccount": true,
+        "allowDuplicates": false,
+        "validatePaymentAmount": true
+      },
+      "dynamicFields": [
+        {
+          "fieldCode": "campo_ejemplo",
+          "fieldName": "Nombre del Campo",
+          "fieldType": "text",
+          "isRequired": true,
+          "description": "Descripción del campo",
+          "displayOrder": 1,
+          "defaultValue": null,
+          "options": [],
+          "validationRules": {
+            "min": null,
+            "max": null,
+            "minLength": null,
+            "maxLength": null,
+            "pattern": null,
+            "minDate": null,
+            "maxDate": null
+          }
+        }
+      ]
+    }
+  ],
+  "_fieldTypes": {
+    "_comment": "Tipos de campos disponibles",
+    "simple": ["text", "textarea", "number", "decimal", "currency", "date", "datetime", "email", "phone", "url", "checkbox"],
+    "selection": ["select", "multiselect"],
+    "special": ["json", "table", "auto-number"]
+  },
+  "_businessRulesReference": {
+    "_comment": "Referencia de reglas de negocio disponibles",
+    "isSuccessful": "Indica si es un resultado exitoso",
+    "mainCategory": "Categoría principal (RESULTADO_POSITIVO, CONTACTO_SIN_ACUERDO, SIN_CONTACTO, GESTION_ADMINISTRATIVA)",
+    "requiresPayment": "Requiere captura de información de pago",
+    "requiresSchedule": "Requiere cronograma de pagos",
+    "requiresFollowUp": "Requiere seguimiento posterior",
+    "requiresApproval": "Requiere aprobación de supervisor",
+    "requiresDocumentation": "Requiere documentación de soporte",
+    "requiresThirdPartyInfo": "Requiere información de tercero",
+    "requiresDataUpdate": "Actualiza datos del cliente",
+    "allowDuplicates": "Permite múltiples registros del mismo tipo",
+    "preventDuplicateSchedule": "Evita crear cronogramas duplicados",
+    "closesAccount": "Cierra/finaliza la cuenta del cliente",
+    "validatePaymentAmount": "Valida que el monto coincida con la deuda",
+    "createsFollowUpTask": "Crea tarea automática de seguimiento",
+    "escalationRequired": "Requiere escalamiento a supervisor/legal",
+    "affectsCustomerScore": "Afecta el score/calificación del cliente",
+    "updatesCustomerPhone": "Actualiza teléfono del cliente",
+    "updatesCustomerAddress": "Actualiza dirección del cliente",
+    "requiresLegalReview": "Requiere revisión legal",
+    "requiresRetry": "Requiere reintento de contacto"
+  }
+}

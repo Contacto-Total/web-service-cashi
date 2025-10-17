@@ -14,6 +14,9 @@ public class ContactInfo {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "telefono_celular", length = 20)
+    private String mobilePhone;
+
     @Column(name = "telefono_principal", length = 20)
     private String primaryPhone;
 
@@ -29,8 +32,9 @@ public class ContactInfo {
     @Column(name = "direccion", columnDefinition = "TEXT")
     private String address;
 
-    public ContactInfo(String primaryPhone, String alternativePhone, String workPhone,
-                      String email, String address) {
+    public ContactInfo(String mobilePhone, String primaryPhone, String alternativePhone,
+                      String workPhone, String email, String address) {
+        this.mobilePhone = mobilePhone;
         this.primaryPhone = primaryPhone;
         this.alternativePhone = alternativePhone;
         this.workPhone = workPhone;
