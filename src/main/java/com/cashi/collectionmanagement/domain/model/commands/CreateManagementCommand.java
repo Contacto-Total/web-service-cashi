@@ -7,9 +7,9 @@ public record CreateManagementCommand(
     String advisorId,
     String campaignId,
 
-    // Clasificación: Categoría/grupo al que pertenece la tipificación
-    String classificationCode,
-    String classificationDescription,
+    // Categoría: Grupo al que pertenece la tipificación
+    String categoryCode,
+    String categoryDescription,
 
     // Tipificación: Código específico/hoja (último nivel en jerarquía)
     String typificationCode,

@@ -2,19 +2,18 @@ package com.cashi.systemconfiguration.infrastructure.persistence;
 
 import com.cashi.shared.domain.model.entities.FieldTypeCatalog;
 import com.cashi.shared.domain.model.entities.Portfolio;
+import com.cashi.shared.domain.model.entities.SubPortfolio;
 import com.cashi.shared.domain.model.entities.Tenant;
-import com.cashi.systemconfiguration.domain.model.entities.ClassificationCatalog;
-import com.cashi.systemconfiguration.domain.model.entities.ClassificationTypeCatalog;
-import com.cashi.systemconfiguration.domain.model.entities.TenantClassificationConfig;
-import com.cashi.systemconfiguration.domain.model.enums.ContactClassificationEnum;
-import com.cashi.systemconfiguration.domain.model.enums.ManagementClassificationEnum;
-import com.cashi.systemconfiguration.domain.model.enums.FinancieraOhClassificationEnum;
-import com.cashi.systemconfiguration.domain.model.enums.TenantClassificationStrategy;
-import com.cashi.systemconfiguration.infrastructure.persistence.jpa.repositories.ClassificationCatalogRepository;
-import com.cashi.systemconfiguration.infrastructure.persistence.jpa.repositories.ClassificationTypeCatalogRepository;
-import com.cashi.systemconfiguration.infrastructure.persistence.jpa.repositories.TenantClassificationConfigRepository;
+import com.cashi.systemconfiguration.domain.model.entities.TypificationCatalog;
+import com.cashi.systemconfiguration.domain.model.entities.TypificationCategory;
+import com.cashi.systemconfiguration.domain.model.enums.ContactTypificationEnum;
+import com.cashi.systemconfiguration.domain.model.enums.ManagementTypificationEnum;
+import com.cashi.systemconfiguration.domain.model.enums.FinancieraOhTypificationEnum;
+import com.cashi.systemconfiguration.infrastructure.persistence.jpa.repositories.TypificationCatalogRepository;
+import com.cashi.systemconfiguration.infrastructure.persistence.jpa.repositories.TypificationCategoryRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.FieldTypeCatalogRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.PortfolioRepository;
+import com.cashi.shared.infrastructure.persistence.jpa.repositories.SubPortfolioRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.TenantRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,21 +33,15 @@ public class DataSeeder implements CommandLineRunner {
     private static final Logger logger = LoggerFactory.getLogger(DataSeeder.class);
 
     private final TenantRepository tenantRepository;
-    private final ClassificationCatalogRepository classificationCatalogRepository;
-    private final ClassificationTypeCatalogRepository classificationTypeCatalogRepository;
-    private final TenantClassificationConfigRepository tenantClassificationConfigRepository;
+    private final TypificationCatalogRepository classificationCatalogRepository;
+    private final TypificationCategoryRepository typificationCategoryRepository;
     private final PortfolioRepository portfolioRepository;
+    private final SubPortfolioRepository subPortfolioRepository;
     private final FieldTypeCatalogRepository fieldTypeCatalogRepository;
-
-    // Mapa de estrategias por tenant
-    private static final Map<String, TenantClassificationStrategy> TENANT_STRATEGIES = Map.of(
-        "TENANT001", TenantClassificationStrategy.GENERIC_ONLY,
-        "FIN-OH", TenantClassificationStrategy.CUSTOM_ONLY
-    );
 
     // Mapa de códigos de tenant a sus clasificaciones custom específicas
     private static final Map<String, Set<String>> TENANT_CUSTOM_CODES = Map.of(
-        "FIN-OH", Set.of(
+        "FOH", Set.of(
             // Nivel 1
             "RP", "CSA", "SC", "GA",
             // Nivel 2
@@ -67,16 +60,16 @@ public class DataSeeder implements CommandLineRunner {
 
     public DataSeeder(
             TenantRepository tenantRepository,
-            ClassificationCatalogRepository classificationCatalogRepository,
-            ClassificationTypeCatalogRepository classificationTypeCatalogRepository,
-            TenantClassificationConfigRepository tenantClassificationConfigRepository,
+            TypificationCatalogRepository classificationCatalogRepository,
+            TypificationCategoryRepository typificationCategoryRepository,
             PortfolioRepository portfolioRepository,
+            SubPortfolioRepository subPortfolioRepository,
             FieldTypeCatalogRepository fieldTypeCatalogRepository) {
         this.tenantRepository = tenantRepository;
         this.classificationCatalogRepository = classificationCatalogRepository;
-        this.classificationTypeCatalogRepository = classificationTypeCatalogRepository;
-        this.tenantClassificationConfigRepository = tenantClassificationConfigRepository;
+        this.typificationCategoryRepository = typificationCategoryRepository;
         this.portfolioRepository = portfolioRepository;
+        this.subPortfolioRepository = subPortfolioRepository;
         this.fieldTypeCatalogRepository = fieldTypeCatalogRepository;
     }
 
@@ -86,27 +79,22 @@ public class DataSeeder implements CommandLineRunner {
         logger.info("INICIANDO DATA SEEDING - SISTEMA MULTI-TENANT");
         logger.info("====================================================================");
 
-        // Seed classification types first
+        // Seed typification types first
         seedClassificationTypes();
 
-        // Seed field types (required by classifications)
+        // Seed field types (required by typifications)
         seedFieldTypes();
 
         seedTenants();
         seedPortfolios();
+        seedSubPortfolios();
 
         // Clasificaciones genéricas (compartidas)
         seedContactClassifications();
-        seedManagementClassifications();
+        seedManagementTypifications();
 
         // Clasificaciones custom por tenant
         seedFinancieraOhClassifications();
-
-        // IMPORTANTE: Limpiar configuraciones existentes antes de aplicar estrategias
-        cleanExistingConfigurations();
-
-        // Configurar tenants según estrategia
-        seedTenantConfigurations();
 
         logger.info("====================================================================");
         logger.info("DATA SEEDING COMPLETADO EXITOSAMENTE");
@@ -266,8 +254,8 @@ public class DataSeeder implements CommandLineRunner {
                                                    String description, String userDescription,
                                                    Boolean suggestsFullAmount, Boolean allowsInstallmentSelection,
                                                    Boolean requiresManualAmount) {
-        if (!classificationTypeCatalogRepository.findByCategoryAndCode(category, code).isPresent()) {
-            ClassificationTypeCatalog type = new ClassificationTypeCatalog(
+        if (!typificationCategoryRepository.findByCategoryAndCode(category, code).isPresent()) {
+            TypificationCategory type = new TypificationCategory(
                 category, code, name, shortName, description, userDescription
             );
             type.setSuggestsFullAmount(suggestsFullAmount);
@@ -275,7 +263,7 @@ public class DataSeeder implements CommandLineRunner {
             type.setRequiresManualAmount(requiresManualAmount);
             type.setRequiresObservations(false);
             type.setAllowsFileAttachment(false);
-            classificationTypeCatalogRepository.save(type);
+            typificationCategoryRepository.save(type);
             logger.info("  ✓ [{} - {}] {}", category, code, name);
         }
     }
@@ -283,52 +271,98 @@ public class DataSeeder implements CommandLineRunner {
     private void seedTenants() {
         logger.info("Seeding Tenants...");
 
-        if (!tenantRepository.existsByTenantCode("TENANT001")) {
-            Tenant tenant = new Tenant("TENANT001", "Tenant de Prueba");
+        if (!tenantRepository.existsByTenantCode("T01")) {
+            Tenant tenant = new Tenant("T01", "Tenant de Prueba");
             tenant.setBusinessName("Empresa Prueba SAC");
-            tenant.setIsActive(true);
+            tenant.setIsActive(1);
             tenantRepository.save(tenant);
-            logger.info("✓ Created Tenant: TENANT001");
+            logger.info("✓ Created Tenant: T01");
         }
 
-        if (!tenantRepository.existsByTenantCode("FIN-OH")) {
-            Tenant tenant = new Tenant("FIN-OH", "Financiera Oh");
+        if (!tenantRepository.existsByTenantCode("FOH")) {
+            Tenant tenant = new Tenant("FOH", "Financiera Oh");
             tenant.setBusinessName("Financiera Oh S.A.");
-            tenant.setIsActive(true);
+            tenant.setIsActive(1);
             tenantRepository.save(tenant);
-            logger.info("✓ Created Tenant: FIN-OH");
+            logger.info("✓ Created Tenant: FOH");
         }
     }
 
     private void seedPortfolios() {
         logger.info("Seeding Portfolios...");
 
-        Tenant tenant001 = tenantRepository.findByTenantCode("TENANT001").orElse(null);
+        Tenant tenant001 = tenantRepository.findByTenantCode("T01").orElse(null);
         if (tenant001 != null) {
-            seedPortfolioIfNotExists(tenant001, "PF-TC", "Tarjetas de Crédito",
-                Portfolio.PortfolioType.CREDIT_CARD, "Subcartera de gestión de tarjetas de crédito vencidas");
-            seedPortfolioIfNotExists(tenant001, "PF-PP", "Préstamos Personales",
-                Portfolio.PortfolioType.PERSONAL_LOAN, "Subcartera de gestión de préstamos personales en mora");
-            seedPortfolioIfNotExists(tenant001, "PF-PH", "Préstamos Hipotecarios",
-                Portfolio.PortfolioType.MORTGAGE, "Subcartera de gestión de préstamos hipotecarios");
+            seedPortfolioIfNotExists(tenant001, "TC", "Tarjetas de Crédito",
+                "Subcartera de gestión de tarjetas de crédito vencidas");
+            seedPortfolioIfNotExists(tenant001, "PP", "Préstamos Personales",
+                "Subcartera de gestión de préstamos personales en mora");
+            seedPortfolioIfNotExists(tenant001, "PH", "Préstamos Hipotecarios",
+                "Subcartera de gestión de préstamos hipotecarios");
         }
 
-        Tenant finOh = tenantRepository.findByTenantCode("FIN-OH").orElse(null);
+        Tenant finOh = tenantRepository.findByTenantCode("FOH").orElse(null);
         if (finOh != null) {
-            seedPortfolioIfNotExists(finOh, "TRAMO-3", "Tramo 3",
-                Portfolio.PortfolioType.PERSONAL_LOAN, "Cartera de cobranza - Tramo 3 (61-90 días de mora)");
-            seedPortfolioIfNotExists(finOh, "TRAMO-5", "Tramo 5",
-                Portfolio.PortfolioType.PERSONAL_LOAN, "Cartera de cobranza - Tramo 5 (121+ días de mora)");
+            seedPortfolioIfNotExists(finOh, "TR3", "Tramo 3",
+                "Cartera de cobranza - Tramo 3 (61-90 días de mora)");
+            seedPortfolioIfNotExists(finOh, "TR5", "Tramo 5",
+                "Cartera de cobranza - Tramo 5 (121+ días de mora)");
         }
     }
 
-    private void seedPortfolioIfNotExists(Tenant tenant, String code, String name,
-                                          Portfolio.PortfolioType type, String description) {
+    private void seedPortfolioIfNotExists(Tenant tenant, String code, String name, String description) {
         if (!portfolioRepository.existsByTenantAndPortfolioCode(tenant, code)) {
-            Portfolio portfolio = new Portfolio(tenant, code, name, type);
+            Portfolio portfolio = new Portfolio(tenant, code, name);
             portfolio.setDescription(description);
             portfolioRepository.save(portfolio);
             logger.info("✓ Created Portfolio: {} for {}", code, tenant.getTenantCode());
+        }
+    }
+
+    private void seedSubPortfolios() {
+        logger.info("Seeding SubPortfolios...");
+
+        Tenant tenant001 = tenantRepository.findByTenantCode("T01").orElse(null);
+        if (tenant001 != null) {
+            // Subcarteras para Tarjetas de Crédito
+            Portfolio tcPortfolio = portfolioRepository.findByTenantAndPortfolioCode(tenant001, "TC").orElse(null);
+            if (tcPortfolio != null) {
+                seedSubPortfolioIfNotExists(tcPortfolio, "CLS", "TC Clásica", "Tarjetas clásicas en mora");
+                seedSubPortfolioIfNotExists(tcPortfolio, "GLD", "TC Gold", "Tarjetas gold en mora");
+                seedSubPortfolioIfNotExists(tcPortfolio, "PLT", "TC Platinum", "Tarjetas platinum en mora");
+            }
+
+            // Subcarteras para Préstamos Personales
+            Portfolio ppPortfolio = portfolioRepository.findByTenantAndPortfolioCode(tenant001, "PP").orElse(null);
+            if (ppPortfolio != null) {
+                seedSubPortfolioIfNotExists(ppPortfolio, "CON", "Consumo", "Préstamos de consumo");
+                seedSubPortfolioIfNotExists(ppPortfolio, "VEH", "Vehicular", "Préstamos vehiculares");
+            }
+        }
+
+        Tenant finOh = tenantRepository.findByTenantCode("FOH").orElse(null);
+        if (finOh != null) {
+            // Subcarteras para TR3
+            Portfolio tramo3 = portfolioRepository.findByTenantAndPortfolioCode(finOh, "TR3").orElse(null);
+            if (tramo3 != null) {
+                seedSubPortfolioIfNotExists(tramo3, "LIM", "Lima", "Clientes de Lima - Tramo 3");
+                seedSubPortfolioIfNotExists(tramo3, "PRO", "Provincia", "Clientes de Provincia - Tramo 3");
+            }
+
+            // Subcarteras para TR5
+            Portfolio tramo5 = portfolioRepository.findByTenantAndPortfolioCode(finOh, "TR5").orElse(null);
+            if (tramo5 != null) {
+                seedSubPortfolioIfNotExists(tramo5, "CAS", "Castigada", "Cartera castigada - Tramo 5");
+                seedSubPortfolioIfNotExists(tramo5, "JUD", "Judicial", "Cartera en proceso judicial - Tramo 5");
+            }
+        }
+    }
+
+    private void seedSubPortfolioIfNotExists(Portfolio portfolio, String code, String name, String description) {
+        if (!subPortfolioRepository.existsByPortfolioAndSubPortfolioCode(portfolio, code)) {
+            SubPortfolio subPortfolio = new SubPortfolio(portfolio, code, name, description);
+            subPortfolioRepository.save(subPortfolio);
+            logger.info("✓ Created SubPortfolio: {} for Portfolio {}", code, portfolio.getPortfolioCode());
         }
     }
 
@@ -336,37 +370,37 @@ public class DataSeeder implements CommandLineRunner {
         logger.info("--------------------------------------------------------------------");
         logger.info("Seeding Contact Classifications (Generic)...");
 
-        Arrays.stream(ContactClassificationEnum.values()).forEach(enumValue -> {
+        Arrays.stream(ContactTypificationEnum.values()).forEach(enumValue -> {
             if (!classificationCatalogRepository.existsByCode(enumValue.getCode())) {
-                ClassificationCatalog classification = new ClassificationCatalog(
+                TypificationCatalog typification = new TypificationCatalog(
                         enumValue.getCode(),
                         enumValue.getDescription(),
-                        ClassificationCatalog.ClassificationType.CONTACT_RESULT
+                        TypificationCatalog.ClassificationType.CONTACT_RESULT
                 );
 
-                classification.setColorHex(enumValue.getIsSuccessful() ? "#10B981" : "#EF4444");
-                classification.setIconName(enumValue.getIsSuccessful() ? "phone-call" : "phone-missed");
-                classification.setIsSystem(true);
-                classificationCatalogRepository.save(classification);
+                typification.setColorHex(enumValue.getIsSuccessful() ? "#10B981" : "#EF4444");
+                typification.setIconName(enumValue.getIsSuccessful() ? "phone-call" : "phone-missed");
+                typification.setIsSystem(1);
+                classificationCatalogRepository.save(typification);
                 logger.info("  ✓ {} - {}", enumValue.getCode(), enumValue.getDescription());
             }
         });
     }
 
-    private void seedManagementClassifications() {
+    private void seedManagementTypifications() {
         logger.info("--------------------------------------------------------------------");
         logger.info("Seeding Management Classifications (Generic)...");
 
-        Arrays.stream(ManagementClassificationEnum.values()).forEach(enumValue -> {
+        Arrays.stream(ManagementTypificationEnum.values()).forEach(enumValue -> {
             if (!classificationCatalogRepository.existsByCode(enumValue.getCode())) {
-                ClassificationCatalog classification = new ClassificationCatalog(
+                TypificationCatalog typification = new TypificationCatalog(
                         enumValue.getCode(),
                         enumValue.getDescription(),
-                        ClassificationCatalog.ClassificationType.MANAGEMENT_TYPE
+                        TypificationCatalog.ClassificationType.MANAGEMENT_TYPE
                 );
 
-                classification.setColorHex(determineColorForManagementType(enumValue));
-                classification.setIconName(determineIconForManagementType(enumValue));
+                typification.setColorHex(determineColorForManagementType(enumValue));
+                typification.setIconName(determineIconForManagementType(enumValue));
 
                 String metadata = String.format(
                     "{\"requiresPayment\":%b,\"requiresSchedule\":%b,\"requiresFollowUp\":%b}",
@@ -374,9 +408,8 @@ public class DataSeeder implements CommandLineRunner {
                     enumValue.getRequiresSchedule(),
                     enumValue.getRequiresFollowUp()
                 );
-                classification.setMetadataSchema(metadata);
-                classification.setIsSystem(true);
-                classificationCatalogRepository.save(classification);
+                typification.setIsSystem(1);
+                classificationCatalogRepository.save(typification);
                 logger.info("  ✓ {} - {}", enumValue.getCode(), enumValue.getDescription());
             }
         });
@@ -386,148 +419,79 @@ public class DataSeeder implements CommandLineRunner {
         logger.info("--------------------------------------------------------------------");
         logger.info("Seeding Financiera Oh Classifications (CUSTOM)...");
 
-        Arrays.stream(FinancieraOhClassificationEnum.values()).forEach(enumValue -> {
-            ClassificationCatalog classification = classificationCatalogRepository.findByCode(enumValue.getCode())
+        Arrays.stream(FinancieraOhTypificationEnum.values()).forEach(enumValue -> {
+            TypificationCatalog typification = classificationCatalogRepository.findByCode(enumValue.getCode())
                 .orElse(null);
 
-            if (classification == null) {
+            if (typification == null) {
                 // CREAR NUEVA: Obtener el padre ANTES de crear la clasificación
-                ClassificationCatalog parent = null;
+                TypificationCatalog parent = null;
                 if (enumValue.getParentCode() != null) {
                     parent = classificationCatalogRepository.findByCode(enumValue.getParentCode())
                         .orElse(null);
                 }
 
                 // Usar el constructor que calcula automáticamente hierarchyLevel y hierarchyPath
-                classification = new ClassificationCatalog(
+                typification = new TypificationCatalog(
                         enumValue.getCode(),
                         enumValue.getDescription(),
-                        ClassificationCatalog.ClassificationType.CUSTOM,
+                        TypificationCatalog.ClassificationType.CUSTOM,
                         parent,  // Pasar el padre para que calcule hierarchyLevel correctamente
                         null     // displayOrder
                 );
 
-                classification.setColorHex(enumValue.getColorHex());
-                classification.setIconName(enumValue.getIconName());
+                typification.setColorHex(enumValue.getColorHex());
+                typification.setIconName(enumValue.getIconName());
 
                 // Asignar tipo de clasificación si es una tipificación de pago
-                assignClassificationTypeIfApplicable(classification);
+                assignClassificationTypeIfApplicable(typification);
 
                 // Metadata básico + Campos dinámicos (si aplica)
                 String metadata = buildMetadataWithDynamicFields(enumValue);
-                classification.setMetadataSchema(metadata);
-                classification.setIsSystem(true);
-                classificationCatalogRepository.save(classification);
+                typification.setIsSystem(1);
+                classificationCatalogRepository.save(typification);
                 logger.info("  ✓ CREADO L{} - {} - {} (parent: {})",
-                    classification.getHierarchyLevel(), enumValue.getCode(), enumValue.getDescription(),
+                    typification.getHierarchyLevel(), enumValue.getCode(), enumValue.getDescription(),
                     parent != null ? parent.getCode() : "ROOT");
             } else {
                 // ACTUALIZAR EXISTENTE: Corregir hierarchyLevel, hierarchyPath y metadata
-                ClassificationCatalog parent = null;
+                TypificationCatalog parent = null;
                 if (enumValue.getParentCode() != null) {
                     parent = classificationCatalogRepository.findByCode(enumValue.getParentCode())
                         .orElse(null);
                 }
 
-                classification.setParentClassification(parent);
+                typification.setParentTypification(parent);
 
                 // Recalcular hierarchyLevel y hierarchyPath
                 if (parent != null) {
-                    classification.setHierarchyLevel(parent.getHierarchyLevel() + 1);
-                    classification.setHierarchyPath(parent.getHierarchyPath() + "/" + classification.getCode());
+                    typification.setHierarchyLevel(parent.getHierarchyLevel() + 1);
+                    typification.setHierarchyPath(parent.getHierarchyPath() + "/" + typification.getCode());
                 } else {
-                    classification.setHierarchyLevel(1);
-                    classification.setHierarchyPath("/" + classification.getCode());
+                    typification.setHierarchyLevel(1);
+                    typification.setHierarchyPath("/" + typification.getCode());
                 }
 
                 // Actualizar metadata con los flags correctos
                 String metadata = buildMetadataWithDynamicFields(enumValue);
-                classification.setMetadataSchema(metadata);
 
                 // Actualizar también el color e icono
-                classification.setColorHex(enumValue.getColorHex());
-                classification.setIconName(enumValue.getIconName());
+                typification.setColorHex(enumValue.getColorHex());
+                typification.setIconName(enumValue.getIconName());
 
                 // Asignar tipo de clasificación si es una tipificación de pago
-                assignClassificationTypeIfApplicable(classification);
+                assignClassificationTypeIfApplicable(typification);
 
-                classificationCatalogRepository.save(classification);
+                classificationCatalogRepository.save(typification);
                 logger.info("  ✓ ACTUALIZADO L{} - {} - {} (parent: {}) [metadata actualizado]",
-                    classification.getHierarchyLevel(), enumValue.getCode(), enumValue.getDescription(),
+                    typification.getHierarchyLevel(), enumValue.getCode(), enumValue.getDescription(),
                     parent != null ? parent.getCode() : "ROOT");
             }
         });
     }
 
-    private void cleanExistingConfigurations() {
-        logger.info("====================================================================");
-        logger.info("LIMPIANDO CONFIGURACIONES EXISTENTES");
-        logger.info("====================================================================");
 
-        TENANT_STRATEGIES.keySet().forEach(tenantCode -> {
-            tenantRepository.findByTenantCode(tenantCode).ifPresent(tenant -> {
-                var existingConfigs = tenantClassificationConfigRepository.findByTenant(tenant);
-                if (!existingConfigs.isEmpty()) {
-                    tenantClassificationConfigRepository.deleteAll(existingConfigs);
-                    logger.info("✓ Eliminadas {} configuraciones existentes de {}", existingConfigs.size(), tenantCode);
-                }
-            });
-        });
-    }
-
-    private void seedTenantConfigurations() {
-        logger.info("====================================================================");
-        logger.info("CONFIGURANDO CLASIFICACIONES POR TENANT");
-        logger.info("====================================================================");
-
-        TENANT_STRATEGIES.forEach((tenantCode, strategy) -> {
-            tenantRepository.findByTenantCode(tenantCode).ifPresent(tenant -> {
-                logger.info("--------------------------------------------------------------------");
-                logger.info("Tenant: {} | Estrategia: {}", tenantCode, strategy.getDescription());
-                logger.info("--------------------------------------------------------------------");
-
-                List<ClassificationCatalog> classificationsToEnable = new ArrayList<>();
-
-                if (strategy.shouldLoadGeneric()) {
-                    var genericClassifications = classificationCatalogRepository.findAll().stream()
-                        .filter(c -> c.getClassificationType() == ClassificationCatalog.ClassificationType.CONTACT_RESULT ||
-                                     c.getClassificationType() == ClassificationCatalog.ClassificationType.MANAGEMENT_TYPE)
-                        .toList();
-                    classificationsToEnable.addAll(genericClassifications);
-                    logger.info("  → Cargando {} clasificaciones GENÉRICAS", genericClassifications.size());
-                }
-
-                if (strategy.shouldLoadCustom()) {
-                    Set<String> allowedCodes = TENANT_CUSTOM_CODES.get(tenantCode);
-                    if (allowedCodes != null) {
-                        var customClassifications = classificationCatalogRepository.findAll().stream()
-                            .filter(c -> c.getClassificationType() == ClassificationCatalog.ClassificationType.CUSTOM)
-                            .filter(c -> allowedCodes.contains(c.getCode()))
-                            .toList();
-                        classificationsToEnable.addAll(customClassifications);
-                        logger.info("  → Cargando {} clasificaciones CUSTOM específicas de {}", customClassifications.size(), tenantCode);
-                    }
-                }
-
-                if (strategy.isManual()) {
-                    logger.info("  → Configuración MANUAL - Sin clasificaciones automáticas");
-                }
-
-                // Habilitar solo las clasificaciones permitidas
-                int enabled = 0;
-                for (ClassificationCatalog classification : classificationsToEnable) {
-                    TenantClassificationConfig config = new TenantClassificationConfig(
-                            tenant, null, classification, true
-                    );
-                    tenantClassificationConfigRepository.save(config);
-                    enabled++;
-                }
-                logger.info("  ✓ Habilitadas {} clasificaciones para {}", enabled, tenantCode);
-            });
-        });
-    }
-
-    private String determineColorForManagementType(ManagementClassificationEnum enumValue) {
+    private String determineColorForManagementType(ManagementTypificationEnum enumValue) {
         String code = enumValue.getCode();
         if (code.startsWith("PG") || code.equals("ACP") || code.equals("PPR")) return "#10B981";
         if (code.equals("PGP") || code.startsWith("CNV") || code.equals("REF")) return "#F59E0B";
@@ -537,7 +501,7 @@ public class DataSeeder implements CommandLineRunner {
         return "#64748B";
     }
 
-    private String determineIconForManagementType(ManagementClassificationEnum enumValue) {
+    private String determineIconForManagementType(ManagementTypificationEnum enumValue) {
         String code = enumValue.getCode();
         if (code.startsWith("PG") || code.equals("PPR")) return "dollar-sign";
         if (code.equals("ACP") || code.startsWith("CNV") || code.equals("REF")) return "handshake";
@@ -552,7 +516,7 @@ public class DataSeeder implements CommandLineRunner {
     /**
      * Construye el metadata JSON completo incluyendo campos dinámicos según la tipificación
      */
-    private String buildMetadataWithDynamicFields(FinancieraOhClassificationEnum enumValue) {
+    private String buildMetadataWithDynamicFields(FinancieraOhTypificationEnum enumValue) {
         String baseMetadata = String.format(
             "{\"requiresPayment\":%b,\"requiresSchedule\":%b,\"requiresFollowUp\":%b,\"isSuccessful\":%b,\"mainCategory\":\"%s\",\"tenantCode\":\"FIN-OH\"",
             enumValue.requiresPayment(),
@@ -687,8 +651,8 @@ public class DataSeeder implements CommandLineRunner {
      * Asigna el tipo de clasificación correspondiente a una clasificación basándose en su código
      * Este método mapea códigos específicos (PT, PP, PPT, PF, CF) a sus tipos de clasificación
      */
-    private void assignClassificationTypeIfApplicable(ClassificationCatalog classification) {
-        String code = classification.getCode();
+    private void assignClassificationTypeIfApplicable(TypificationCatalog typification) {
+        String code = typification.getCode();
 
         // Mapeo de códigos de tipificación a tipos de clasificación
         final String category;
@@ -703,9 +667,9 @@ public class DataSeeder implements CommandLineRunner {
             default -> { return; } // Si no es un código conocido, salir
         }
 
-        classificationTypeCatalogRepository.findByCategoryAndCode(category, typeCode)
+        typificationCategoryRepository.findByCategoryAndCode(category, typeCode)
             .ifPresent(type -> {
-                classification.setClassificationTypeCatalog(type);
+                typification.setTypificationCategory(type);
                 logger.info("    → Tipo asignado: {} - {}", category, typeCode);
             });
     }

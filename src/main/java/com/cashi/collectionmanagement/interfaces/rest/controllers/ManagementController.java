@@ -47,7 +47,7 @@ public class ManagementController {
         System.out.println("   - customerId: " + request.customerId());
         System.out.println("   - advisorId: " + request.advisorId());
         System.out.println("   - campaignId: " + request.campaignId());
-        System.out.println("   - classificationCode: " + request.classificationCode());
+        System.out.println("   - categoryCode: " + request.categoryCode());
         System.out.println("   - typificationCode: " + request.typificationCode());
         System.out.println("   - observations: " + request.observations());
 

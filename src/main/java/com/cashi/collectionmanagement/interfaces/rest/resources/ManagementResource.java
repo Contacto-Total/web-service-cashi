@@ -10,9 +10,9 @@ public record ManagementResource(
         String campaignId,
         LocalDateTime managementDate,
 
-        // Clasificación: Categoría/grupo al que pertenece la tipificación
-        String classificationCode,
-        String classificationDescription,
+        // Categoría: Grupo al que pertenece la tipificación
+        String categoryCode,
+        String categoryDescription,
 
         // Tipificación: Código específico/hoja (último nivel en jerarquía)
         String typificationCode,
@@ -20,8 +20,6 @@ public record ManagementResource(
         Boolean typificationRequiresPayment,
         Boolean typificationRequiresSchedule,
 
-        CallDetailResource callDetail,
-        PaymentDetailResource paymentDetail,
         String observations,
         LocalDateTime createdAt,
         LocalDateTime updatedAt

@@ -14,7 +14,7 @@ import java.util.Optional;
  * PortfolioRepository - Spring Data JPA repository for Portfolio entity
  */
 @Repository
-public interface PortfolioRepository extends JpaRepository<Portfolio, Long> {
+public interface PortfolioRepository extends JpaRepository<Portfolio, Integer> {
 
     /**
      * Find portfolio by tenant and code
@@ -24,34 +24,15 @@ public interface PortfolioRepository extends JpaRepository<Portfolio, Long> {
     /**
      * Find all portfolios for a tenant
      */
-    List<Portfolio> findByTenantAndIsActive(Tenant tenant, Boolean isActive);
-
-    /**
-     * Find all portfolios for a tenant ordered by hierarchy
-     */
-    @Query("SELECT p FROM Portfolio p WHERE p.tenant = :tenant AND p.isActive = true ORDER BY p.hierarchyLevel, p.portfolioName")
-    List<Portfolio> findByTenantOrderedByHierarchy(@Param("tenant") Tenant tenant);
-
-    /**
-     * Find root portfolios (no parent)
-     */
-    @Query("SELECT p FROM Portfolio p WHERE p.tenant = :tenant AND p.parentPortfolio IS NULL AND p.isActive = true")
-    List<Portfolio> findRootPortfoliosByTenant(@Param("tenant") Tenant tenant);
-
-    /**
-     * Find child portfolios
-     */
-    List<Portfolio> findByParentPortfolioAndIsActive(Portfolio parentPortfolio, Boolean isActive);
-
-    /**
-     * Find portfolios by type
-     */
-    List<Portfolio> findByTenantAndPortfolioTypeAndIsActive(
-        Tenant tenant, Portfolio.PortfolioType portfolioType, Boolean isActive
-    );
+    List<Portfolio> findByTenant(Tenant tenant);
 
     /**
      * Check if portfolio code exists for tenant
      */
     boolean existsByTenantAndPortfolioCode(Tenant tenant, String portfolioCode);
+
+    /**
+     * Count portfolios for a tenant
+     */
+    long countByTenant(Tenant tenant);
 }

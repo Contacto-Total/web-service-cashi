@@ -1,8 +1,5 @@
 package com.cashi.collectionmanagement.domain.model.aggregates;
 
-import com.cashi.collectionmanagement.domain.model.entities.CallDetail;
-import com.cashi.collectionmanagement.domain.model.entities.ManagementDynamicField;
-import com.cashi.collectionmanagement.domain.model.entities.PaymentDetail;
 import com.cashi.collectionmanagement.domain.model.valueobjects.ContactResult;
 import com.cashi.collectionmanagement.domain.model.valueobjects.ManagementId;
 import com.cashi.collectionmanagement.domain.model.valueobjects.ManagementType;
@@ -59,12 +56,12 @@ public class Management extends AggregateRoot {
     @Column(name = "fecha_gestion")
     private LocalDateTime managementDate;
 
-    // CLASIFICACIÓN: Categoría/grupo al que pertenece la tipificación
-    @Column(name = "codigo_clasificacion", length = 50)
-    private String classificationCode;
+    // CATEGORÍA: Grupo al que pertenece la tipificación
+    @Column(name = "codigo_categoria", length = 50)
+    private String categoryCode;
 
-    @Column(name = "descripcion_clasificacion", length = 255)
-    private String classificationDescription;
+    @Column(name = "descripcion_categoria", length = 255)
+    private String categoryDescription;
 
     // TIPIFICACIÓN: Código específico/hoja (último nivel en jerarquía)
     @Column(name = "codigo_tipificacion", length = 50)
@@ -79,14 +76,6 @@ public class Management extends AggregateRoot {
     @Column(name = "tipificacion_requiere_cronograma")
     private Boolean typificationRequiresSchedule;
 
-    @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.EAGER, orphanRemoval = true)
-    @JoinColumn(name = "id_detalle_llamada")
-    private CallDetail callDetail;
-
-    @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.EAGER, orphanRemoval = true)
-    @JoinColumn(name = "id_detalle_pago")
-    private PaymentDetail paymentDetail;
-
     @Column(name = "observaciones", length = 2000)
     private String observations;
 
@@ -94,13 +83,9 @@ public class Management extends AggregateRoot {
     @Column(name = "campos_dinamicos_json", columnDefinition = "JSON")
     private String dynamicFieldsJson;
 
-    // Dynamic fields for multi-tenant support (EAV pattern - legacy)
+    // Normalized typifications (supports N levels)
     @OneToMany(mappedBy = "management", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
-    private List<ManagementDynamicField> dynamicFields = new ArrayList<>();
-
-    // Normalized classifications (supports N levels)
-    @OneToMany(mappedBy = "management", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
-    private List<com.cashi.collectionmanagement.domain.model.entities.ManagementClassification> classifications = new ArrayList<>();
+    private List<com.cashi.collectionmanagement.domain.model.entities.ManagementTypification> typifications = new ArrayList<>();
 
     // Legacy constructor (backward compatibility)
     public Management(String customerId, String advisorId, String campaignId) {
@@ -132,42 +117,19 @@ public class Management extends AggregateRoot {
         this.managementDate = LocalDateTime.now();
     }
 
-    // Dynamic field management
-    public void addDynamicField(ManagementDynamicField dynamicField) {
-        dynamicFields.add(dynamicField);
-        dynamicField.setManagement(this);
-    }
-
-    public void removeDynamicField(ManagementDynamicField dynamicField) {
-        dynamicFields.remove(dynamicField);
-        dynamicField.setManagement(null);
-    }
-
-    public void clearDynamicFields() {
-        dynamicFields.clear();
-    }
-
     // Classification management (normalized)
-    public void addClassification(com.cashi.collectionmanagement.domain.model.entities.ManagementClassification classification) {
-        classifications.add(classification);
-        classification.setManagement(this);
+    public void addClassification(com.cashi.collectionmanagement.domain.model.entities.ManagementTypification typification) {
+        typifications.add(typification);
+        typification.setManagement(this);
     }
 
-    public void removeClassification(com.cashi.collectionmanagement.domain.model.entities.ManagementClassification classification) {
-        classifications.remove(classification);
-        classification.setManagement(null);
+    public void removeClassification(com.cashi.collectionmanagement.domain.model.entities.ManagementTypification typification) {
+        typifications.remove(typification);
+        typification.setManagement(null);
     }
 
     public void clearClassifications() {
-        classifications.clear();
-    }
-
-    public void setCallDetail(CallDetail callDetail) {
-        this.callDetail = callDetail;
-    }
-
-    public void setPaymentDetail(PaymentDetail paymentDetail) {
-        this.paymentDetail = paymentDetail;
+        typifications.clear();
     }
 
     public void setObservations(String observations) {
@@ -178,10 +140,10 @@ public class Management extends AggregateRoot {
         this.dynamicFieldsJson = dynamicFieldsJson;
     }
 
-    // New setters for Classification and Typification
-    public void setClassification(String code, String description) {
-        this.classificationCode = code;
-        this.classificationDescription = description;
+    // New setters for Category and Typification
+    public void setCategory(String code, String description) {
+        this.categoryCode = code;
+        this.categoryDescription = description;
     }
 
     public void setTypification(String code, String description, Boolean requiresPayment, Boolean requiresSchedule) {

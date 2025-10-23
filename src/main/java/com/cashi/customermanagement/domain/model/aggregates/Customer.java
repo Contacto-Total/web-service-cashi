@@ -1,8 +1,5 @@
 package com.cashi.customermanagement.domain.model.aggregates;
 
-import com.cashi.customermanagement.domain.model.entities.AccountInfo;
-import com.cashi.customermanagement.domain.model.entities.ContactInfo;
-import com.cashi.customermanagement.domain.model.entities.DebtInfo;
 import com.cashi.customermanagement.domain.model.valueobjects.DocumentNumber;
 import com.cashi.shared.domain.AggregateRoot;
 import jakarta.persistence.*;
@@ -47,18 +44,6 @@ public class Customer extends AggregateRoot {
     @Column(name = "fecha_importacion")
     private LocalDate importDate;
 
-    @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_informacion_contacto")
-    private ContactInfo contactInfo;
-
-    @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_informacion_cuenta")
-    private AccountInfo accountInfo;
-
-    @OneToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_informacion_deuda")
-    private DebtInfo debtInfo;
-
     public Customer(Long tenantId, String customerId, String documentCode, String fullName,
                    DocumentNumber documentNumber, LocalDate birthDate, String status) {
         super();
@@ -73,20 +58,6 @@ public class Customer extends AggregateRoot {
         this.importDate = LocalDate.now();
     }
 
-    public void updateContactInfo(ContactInfo contactInfo) {
-        this.contactInfo = contactInfo;
-        updateTimestamp();
-    }
-
-    public void updateAccountInfo(AccountInfo accountInfo) {
-        this.accountInfo = accountInfo;
-        updateTimestamp();
-    }
-
-    public void updateDebtInfo(DebtInfo debtInfo) {
-        this.debtInfo = debtInfo;
-        updateTimestamp();
-    }
 
     private Integer calculateAge(LocalDate birthDate) {
         if (birthDate == null) return null;

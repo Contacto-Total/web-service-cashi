@@ -1,0 +1,11 @@
+package com.cashi.systemconfiguration.interfaces.rest.resources;
+
+public record UpdateTypificationCommand(
+    String name,
+    String description,
+    Integer displayOrder,
+    String iconName,
+    String colorHex,
+    Boolean isActive,
+    String metadataSchema
+) {}

@@ -10,9 +10,9 @@ public class CreateManagementCommandFromResourceAssembler {
                 resource.customerId(),
                 resource.advisorId(),
                 resource.campaignId(),
-                // Clasificación y Tipificación
-                resource.classificationCode(),
-                resource.classificationDescription(),
+                // Categoría y Tipificación
+                resource.categoryCode(),
+                resource.categoryDescription(),
                 resource.typificationCode(),
                 resource.typificationDescription(),
                 resource.typificationRequiresPayment(),

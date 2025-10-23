@@ -8,8 +8,8 @@ public class UpdateManagementCommandFromResourceAssembler {
     public static UpdateManagementCommand toCommandFromResource(String managementId, UpdateManagementRequest resource) {
         return new UpdateManagementCommand(
                 managementId,
-                resource.classificationCode(),
-                resource.classificationDescription(),
+                resource.categoryCode(),
+                resource.categoryDescription(),
                 resource.typificationCode(),
                 resource.typificationDescription(),
                 resource.typificationRequiresPayment(),

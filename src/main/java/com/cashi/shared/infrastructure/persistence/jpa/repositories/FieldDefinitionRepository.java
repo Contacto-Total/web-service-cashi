@@ -10,46 +10,29 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * FieldDefinitionRepository - Spring Data JPA repository for FieldDefinition entity
+ * FieldDefinitionRepository - Repositorio para el catálogo maestro de campos del sistema
  */
 @Repository
-public interface FieldDefinitionRepository extends JpaRepository<FieldDefinition, Long> {
+public interface FieldDefinitionRepository extends JpaRepository<FieldDefinition, Integer> {
 
     /**
-     * Find field definition by code
+     * Buscar definición de campo por código
      */
     Optional<FieldDefinition> findByFieldCode(String fieldCode);
 
     /**
-     * Find field definitions by category
+     * Buscar definiciones de campo por tipo de dato
      */
-    List<FieldDefinition> findByFieldCategory(String fieldCategory);
+    List<FieldDefinition> findByDataType(String dataType);
 
     /**
-     * Find field definitions by type
+     * Buscar todos los campos ordenados por nombre
      */
-    List<FieldDefinition> findByFieldType(FieldDefinition.FieldType fieldType);
+    @Query("SELECT f FROM FieldDefinition f ORDER BY f.fieldName")
+    List<FieldDefinition> findAllOrderedByName();
 
     /**
-     * Find all system fields
-     */
-    @Query("SELECT f FROM FieldDefinition f WHERE f.isSystemField = true ORDER BY f.displayOrder")
-    List<FieldDefinition> findSystemFields();
-
-    /**
-     * Find all custom fields
-     */
-    @Query("SELECT f FROM FieldDefinition f WHERE f.isSystemField = false ORDER BY f.fieldCategory, f.displayOrder")
-    List<FieldDefinition> findCustomFields();
-
-    /**
-     * Find fields by category ordered by display order
-     */
-    @Query("SELECT f FROM FieldDefinition f WHERE f.fieldCategory = :category ORDER BY f.displayOrder")
-    List<FieldDefinition> findByCategoryOrderedByDisplayOrder(@Param("category") String category);
-
-    /**
-     * Check if field code exists
+     * Verificar si existe un campo con el código especificado
      */
     boolean existsByFieldCode(String fieldCode);
 }

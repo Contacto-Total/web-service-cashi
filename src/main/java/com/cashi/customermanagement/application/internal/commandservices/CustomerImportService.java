@@ -1,9 +1,6 @@
 package com.cashi.customermanagement.application.internal.commandservices;
 
 import com.cashi.customermanagement.domain.model.aggregates.Customer;
-import com.cashi.customermanagement.domain.model.entities.AccountInfo;
-import com.cashi.customermanagement.domain.model.entities.ContactInfo;
-import com.cashi.customermanagement.domain.model.entities.DebtInfo;
 import com.cashi.customermanagement.domain.model.valueobjects.CustomerDataMapping;
 import com.cashi.customermanagement.domain.model.valueobjects.DocumentNumber;
 import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.CustomerRepository;
@@ -193,21 +190,7 @@ public class CustomerImportService {
         Customer customer = new Customer(tenantId, customerId, documentCode, fullName,
                                         documentNumber, null, status);
 
-        // Crear y asignar ContactInfo
-        ContactInfo contactInfo = createContactInfo(rowData, columnMapping);
-        customer.updateContactInfo(contactInfo);
-
-        // Crear y asignar AccountInfo
-        AccountInfo accountInfo = createAccountInfo(rowData, columnMapping);
-        if (accountInfo != null) {
-            customer.updateAccountInfo(accountInfo);
-        }
-
-        // Crear y asignar DebtInfo
-        DebtInfo debtInfo = createDebtInfo(rowData, columnMapping);
-        if (debtInfo != null) {
-            customer.updateDebtInfo(debtInfo);
-        }
+        // ContactInfo, AccountInfo, and DebtInfo have been removed
 
         return customer;
     }
@@ -217,81 +200,32 @@ public class CustomerImportService {
      */
     private Customer updateExistingCustomer(Customer customer, Map<String, String> rowData,
                                            Map<String, String> columnMapping) {
-        // Actualizar ContactInfo
-        ContactInfo contactInfo = createContactInfo(rowData, columnMapping);
-        customer.updateContactInfo(contactInfo);
-
-        // Actualizar AccountInfo
-        AccountInfo accountInfo = createAccountInfo(rowData, columnMapping);
-        if (accountInfo != null) {
-            customer.updateAccountInfo(accountInfo);
-        }
-
-        // Actualizar DebtInfo
-        DebtInfo debtInfo = createDebtInfo(rowData, columnMapping);
-        if (debtInfo != null) {
-            customer.updateDebtInfo(debtInfo);
-        }
-
+        // ContactInfo, AccountInfo, and DebtInfo have been removed
         return customer;
     }
 
     /**
      * Crea ContactInfo desde los datos mapeados
+     * DEPRECATED: ContactInfo entity has been removed
      */
-    private ContactInfo createContactInfo(Map<String, String> rowData, Map<String, String> columnMapping) {
-        String mobilePhone = getMappedValue(rowData, columnMapping, "mobilePhone");
-        String primaryPhone = getMappedValue(rowData, columnMapping, "primaryPhone");
-        String alternativePhone = getMappedValue(rowData, columnMapping, "alternativePhone");
-        String workPhone = getMappedValue(rowData, columnMapping, "workPhone");
-        String email = getMappedValue(rowData, columnMapping, "email");
-        String address = getMappedValue(rowData, columnMapping, "address");
-
-        return new ContactInfo(mobilePhone, primaryPhone, alternativePhone, workPhone, email, address);
+    private Object createContactInfo(Map<String, String> rowData, Map<String, String> columnMapping) {
+        return null;
     }
 
     /**
      * Crea AccountInfo desde los datos mapeados
+     * DEPRECATED: AccountInfo entity has been removed
      */
-    private AccountInfo createAccountInfo(Map<String, String> rowData, Map<String, String> columnMapping) {
-        String accountNumber = getMappedValue(rowData, columnMapping, "accountNumber");
-        if (accountNumber == null || accountNumber.isEmpty()) {
-            return null;
-        }
-
-        String productType = getMappedValue(rowData, columnMapping, "productType", "PRESTAMO");
-        LocalDate disbursementDate = parseDate(getMappedValue(rowData, columnMapping, "disbursementDate"));
-        BigDecimal originalAmount = parseBigDecimal(getMappedValue(rowData, columnMapping, "originalAmount"));
-        Integer termMonths = parseInteger(getMappedValue(rowData, columnMapping, "termMonths"));
-        BigDecimal interestRate = parseBigDecimal(getMappedValue(rowData, columnMapping, "interestRate"));
-
-        return new AccountInfo(accountNumber, productType, disbursementDate,
-                              originalAmount, termMonths, interestRate);
+    private Object createAccountInfo(Map<String, String> rowData, Map<String, String> columnMapping) {
+        return null;
     }
 
     /**
      * Crea DebtInfo desde los datos mapeados
+     * DEPRECATED: DebtInfo entity has been removed
      */
-    private DebtInfo createDebtInfo(Map<String, String> rowData, Map<String, String> columnMapping) {
-        BigDecimal currentDebt = parseBigDecimal(getMappedValue(rowData, columnMapping, "currentDebt"));
-        if (currentDebt == null || currentDebt.compareTo(BigDecimal.ZERO) == 0) {
-            return null;
-        }
-
-        BigDecimal capitalBalance = parseBigDecimal(getMappedValue(rowData, columnMapping, "capitalBalance"));
-        BigDecimal overdueInterest = parseBigDecimal(getMappedValue(rowData, columnMapping, "overdueInterest"));
-        BigDecimal accumulatedLateFees = parseBigDecimal(getMappedValue(rowData, columnMapping, "accumulatedLateFees"));
-        BigDecimal collectionFees = parseBigDecimal(getMappedValue(rowData, columnMapping, "collectionFees"));
-        Integer daysOverdue = parseInteger(getMappedValue(rowData, columnMapping, "daysOverdue"));
-
-        return new DebtInfo(
-            capitalBalance != null ? capitalBalance : BigDecimal.ZERO,
-            overdueInterest != null ? overdueInterest : BigDecimal.ZERO,
-            accumulatedLateFees != null ? accumulatedLateFees : BigDecimal.ZERO,
-            collectionFees != null ? collectionFees : BigDecimal.ZERO,
-            currentDebt,
-            daysOverdue != null ? daysOverdue : 0
-        );
+    private Object createDebtInfo(Map<String, String> rowData, Map<String, String> columnMapping) {
+        return null;
     }
 
     /**

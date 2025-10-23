@@ -1,10 +1,11 @@
 package com.cashi.systemconfiguration.interfaces.rest.resources;
 
 public record TenantResource(
-    Long id,
+    Integer id,
     String tenantCode,
     String tenantName,
     String businessName,
-    Boolean isActive
+    Integer isActive,
+    Boolean hasPortfolios
 ) {
 }

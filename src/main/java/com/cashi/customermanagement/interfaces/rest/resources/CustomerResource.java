@@ -9,9 +9,6 @@ public record CustomerResource(
         String documentType,
         String documentNumber,
         LocalDate birthDate,
-        Integer age,
-        ContactInfoResource contactInfo,
-        AccountInfoResource accountInfo,
-        DebtInfoResource debtInfo
+        Integer age
 ) {
 }

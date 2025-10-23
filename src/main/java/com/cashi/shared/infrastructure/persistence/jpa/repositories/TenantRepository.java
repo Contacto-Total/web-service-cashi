@@ -11,7 +11,7 @@ import java.util.Optional;
  * TenantRepository - Spring Data JPA repository for Tenant entity
  */
 @Repository
-public interface TenantRepository extends JpaRepository<Tenant, Long> {
+public interface TenantRepository extends JpaRepository<Tenant, Integer> {
 
     /**
      * Find tenant by tenant code
@@ -21,7 +21,7 @@ public interface TenantRepository extends JpaRepository<Tenant, Long> {
     /**
      * Find tenant by tenant code and active status
      */
-    Optional<Tenant> findByTenantCodeAndIsActive(String tenantCode, Boolean isActive);
+    Optional<Tenant> findByTenantCodeAndIsActive(String tenantCode, Integer isActive);
 
     /**
      * Check if tenant code exists
@@ -31,11 +31,6 @@ public interface TenantRepository extends JpaRepository<Tenant, Long> {
     /**
      * Find all active tenants
      */
-    @Query("SELECT t FROM Tenant t WHERE t.isActive = true ORDER BY t.tenantName")
+    @Query("SELECT t FROM Tenant t WHERE t.isActive = 1 ORDER BY t.tenantName")
     java.util.List<Tenant> findAllActive();
-
-    /**
-     * Find tenant by tax ID
-     */
-    Optional<Tenant> findByTaxId(String taxId);
 }

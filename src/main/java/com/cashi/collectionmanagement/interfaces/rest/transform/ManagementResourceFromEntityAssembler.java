@@ -1,9 +1,7 @@
 package com.cashi.collectionmanagement.interfaces.rest.transform;
 
 import com.cashi.collectionmanagement.domain.model.aggregates.Management;
-import com.cashi.collectionmanagement.interfaces.rest.resources.CallDetailResource;
 import com.cashi.collectionmanagement.interfaces.rest.resources.ManagementResource;
-import com.cashi.collectionmanagement.interfaces.rest.resources.PaymentDetailResource;
 
 public class ManagementResourceFromEntityAssembler {
 
@@ -15,52 +13,16 @@ public class ManagementResourceFromEntityAssembler {
                 entity.getAdvisorId(),
                 entity.getCampaignId(),
                 entity.getManagementDate(),
-                // Clasificación y Tipificación
-                entity.getClassificationCode(),
-                entity.getClassificationDescription(),
+                // Categoría y Tipificación
+                entity.getCategoryCode(),
+                entity.getCategoryDescription(),
                 entity.getTypificationCode(),
                 entity.getTypificationDescription(),
                 entity.getTypificationRequiresPayment(),
                 entity.getTypificationRequiresSchedule(),
-                toCallDetailResource(entity),
-                toPaymentDetailResource(entity),
                 entity.getObservations(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt()
         );
-    }
-
-    private static CallDetailResource toCallDetailResource(Management entity) {
-        try {
-            if (entity.getCallDetail() == null) return null;
-            var call = entity.getCallDetail();
-            return new CallDetailResource(
-                    call.getPhoneNumber(),
-                    call.getStartTime(),
-                    call.getEndTime(),
-                    call.getDurationSeconds()
-            );
-        } catch (Exception e) {
-            // Manejo de lazy loading exception - retornar null si no se puede cargar
-            return null;
-        }
-    }
-
-    private static PaymentDetailResource toPaymentDetailResource(Management entity) {
-        try {
-            if (entity.getPaymentDetail() == null) return null;
-            var payment = entity.getPaymentDetail();
-            return new PaymentDetailResource(
-                    payment.getAmount(),
-                    payment.getScheduledDate(),
-                    payment.getPaymentMethod() != null ? payment.getPaymentMethod().getType() : null,
-                    payment.getPaymentMethod() != null ? payment.getPaymentMethod().getDetails() : null,
-                    payment.getVoucherNumber(),
-                    payment.getBankName()
-            );
-        } catch (Exception e) {
-            // Manejo de lazy loading exception - retornar null si no se puede cargar
-            return null;
-        }
     }
 }
