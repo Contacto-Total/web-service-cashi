@@ -187,6 +187,18 @@ public class Customer extends AggregateRoot {
         this.personalReference = personalReference;
     }
 
+    public void setAccountNumber(String accountNumber) {
+        this.accountNumber = accountNumber;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public void setImportDate(LocalDate importDate) {
+        this.importDate = importDate;
+    }
+
     private Integer calculateAge(LocalDate birthDate) {
         if (birthDate == null) return null;
         return LocalDate.now().getYear() - birthDate.getYear();

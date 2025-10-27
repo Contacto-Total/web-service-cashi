@@ -60,6 +60,7 @@ public class CustomerResourceFromEntityAssembler {
                 entity.getId(),
                 entity.getCustomerId(),
                 entity.getIdentificationCode(),
+                entity.getAccountNumber(),
                 entity.getDocument(),
                 entity.getFullName(),
                 "DNI", // default document type

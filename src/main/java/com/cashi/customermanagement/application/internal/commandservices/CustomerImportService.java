@@ -197,7 +197,48 @@ public class CustomerImportService {
             "ACTIVO"
         );
 
+        // Mapear campos adicionales usando setters
+        customer.setSubPortfolioId(subPortfolioId.longValue());
+
+        // Nombres
+        customer.setFirstName(getString(enrichedRowDataObj, "primer_nombre"));
+        customer.setSecondName(getString(enrichedRowDataObj, "segundo_nombre"));
+        customer.setFirstLastName(getString(enrichedRowDataObj, "primer_apellido"));
+        customer.setSecondLastName(getString(enrichedRowDataObj, "segundo_apellido"));
+
+        // Datos personales
+        String edadStr = getString(enrichedRowDataObj, "edad");
+        if (edadStr != null) {
+            try {
+                customer.setAge(Integer.parseInt(edadStr));
+            } catch (NumberFormatException e) {
+                // Ignorar si no es un número válido
+            }
+        }
+        customer.setMaritalStatus(getString(enrichedRowDataObj, "estado_civil"));
+        customer.setOccupation(getString(enrichedRowDataObj, "ocupacion"));
+        customer.setCustomerType(getString(enrichedRowDataObj, "tipo_cliente"));
+
+        // Ubicación
+        customer.setAddress(getString(enrichedRowDataObj, "direccion"));
+        customer.setDistrict(getString(enrichedRowDataObj, "distrito"));
+        customer.setProvince(getString(enrichedRowDataObj, "provincia"));
+        customer.setDepartment(getString(enrichedRowDataObj, "departamento"));
+
+        // Referencias
+        customer.setPersonalReference(getString(enrichedRowDataObj, "referencia_personal"));
+
+        // Número de cuenta - CAMPO IMPORTANTE
+        String accountNumber = getString(enrichedRowDataObj, "numero_cuenta_linea_prestamo");
+        if (accountNumber == null) {
+            accountNumber = getString(enrichedRowDataObj, "num_cuenta_pmcp");
+        }
+        customer.setAccountNumber(accountNumber);
+
         System.out.println("✅ Cliente nuevo creado: " + documento + " - " + fullName);
+        if (accountNumber != null) {
+            System.out.println("   📝 Número de cuenta: " + accountNumber);
+        }
         return customer;
     }
 

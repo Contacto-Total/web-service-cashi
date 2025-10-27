@@ -7,6 +7,7 @@ public record CustomerResource(
         Long id,
         String customerId,
         String identificationCode,
+        String accountNumber,
         String documentNumber,
         String fullName,
         String documentType,
