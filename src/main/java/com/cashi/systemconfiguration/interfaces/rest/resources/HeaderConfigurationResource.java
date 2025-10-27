@@ -34,6 +34,12 @@ public record HeaderConfigurationResource(
     @Schema(description = "Tipo de carga", example = "ACTUALIZACION")
     LoadType loadType,
 
+    @Schema(description = "Campo origen para transformación regex", example = "IDENTITY_CODE")
+    String sourceField,
+
+    @Schema(description = "Patrón regex para extraer valor", example = ".{8}$")
+    String regexPattern,
+
     @Schema(description = "Fecha de creación")
     LocalDate createdAt,
 

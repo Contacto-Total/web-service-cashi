@@ -12,6 +12,7 @@ public class CustomerDataMapping {
     private String importSourceType;
     private String sourceTableName;
     private Map<String, String> columnMapping;
+    private Map<String, FieldDerivationRule> derivedFields;
     private CustomerDisplayConfig customerDisplayConfig;
 
     @Data
@@ -34,5 +35,25 @@ public class CustomerDataMapping {
         private Integer displayOrder;
         private String format;
         private Boolean highlight;
+    }
+
+    /**
+     * Regla de derivación para campos calculados
+     */
+    @Data
+    public static class FieldDerivationRule {
+        private String sourceField;
+        private List<TransformationRule> rules;
+    }
+
+    /**
+     * Regla de transformación condicional
+     */
+    @Data
+    public static class TransformationRule {
+        private String startsWithPrefix;
+        private Integer extractLastNChars;
+        private String regexPattern;
+        private Integer regexCaptureGroup;
     }
 }

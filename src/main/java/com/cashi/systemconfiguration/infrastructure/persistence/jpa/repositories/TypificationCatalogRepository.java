@@ -38,4 +38,7 @@ public interface TypificationCatalogRepository extends JpaRepository<Typificatio
 
     @Query("SELECT COUNT(t) > 0 FROM TypificationCatalog t WHERE t.parentTypification.id = :parentId AND t.deletedAt IS NULL")
     boolean hasChildren(@Param("parentId") Integer parentId);
+
+    @Query("SELECT t FROM TypificationCatalog t WHERE t.hierarchyLevel = :level AND t.deletedAt IS NULL AND t.isActive = 1 ORDER BY t.displayOrder")
+    List<TypificationCatalog> findByHierarchyLevel(@Param("level") Integer level);
 }

@@ -34,6 +34,12 @@ public record BulkCreateHeaderConfigurationResource(
         String format,
 
         @Schema(description = "Es obligatorio", example = "false")
-        Boolean required
+        Boolean required,
+
+        @Schema(description = "Campo origen para transformación", example = "IDENTITY_CODE")
+        String sourceField,
+
+        @Schema(description = "Patrón regex para transformación", example = ".{8}$")
+        String regexPattern
     ) {}
 }

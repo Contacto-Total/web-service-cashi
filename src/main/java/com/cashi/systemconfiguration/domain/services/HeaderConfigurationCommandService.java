@@ -48,6 +48,8 @@ public interface HeaderConfigurationCommandService {
         String dataType,
         String displayLabel,
         String format,
-        Boolean required
+        Boolean required,
+        String sourceField,
+        String regexPattern
     ) {}
 }

@@ -30,11 +30,13 @@ public class CustomerImportController {
     public ResponseEntity<Map<String, Object>> importCustomers(
             @RequestParam("file") MultipartFile file,
             @RequestParam("tenantId") Long tenantId,
-            @RequestParam("tenantCode") String tenantCode) {
+            @RequestParam("tenantCode") String tenantCode,
+            @RequestParam(value = "subPortfolioId", required = false) Integer subPortfolioId) {
 
         System.out.println("📤 POST /api/v1/customers/import");
         System.out.println("   - tenantId: " + tenantId);
         System.out.println("   - tenantCode: " + tenantCode);
+        System.out.println("   - subPortfolioId: " + subPortfolioId);
         System.out.println("   - fileName: " + file.getOriginalFilename());
         System.out.println("   - fileSize: " + file.getSize() + " bytes");
 
@@ -45,7 +47,7 @@ public class CustomerImportController {
 
         try {
             CustomerImportService.ImportResult result =
-                    customerImportService.importCustomers(tenantId, file, tenantCode);
+                    customerImportService.importCustomers(tenantId, file, tenantCode, subPortfolioId);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);

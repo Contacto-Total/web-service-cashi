@@ -8,6 +8,7 @@
     "importSourceType": "EXCEL",
     "sourceTableName": "ASIG_TEMP",
     "columnMapping": {
+      "IDENTITY_CODE": "codigo_identificacion",
       "CODIGO_DOCUMENTO": "documentCode",
       "NOMBRE": "fullName",
       "NRO_CUENTA": "accountNumber",
@@ -23,6 +24,21 @@
       "PLAZO": "termMonths",
       "PRODUCTO": "productType",
       "ESTADO": "status"
+    },
+    "derivedFields": {
+      "documento": {
+        "sourceField": "codigo_identificacion",
+        "rules": [
+          {
+            "startsWithPrefix": "D",
+            "extractLastNChars": 8
+          },
+          {
+            "startsWithPrefix": "C",
+            "extractLastNChars": 7
+          }
+        ]
+      }
     },
     "customerDisplayConfig": {
       "title": "Información del Cliente",

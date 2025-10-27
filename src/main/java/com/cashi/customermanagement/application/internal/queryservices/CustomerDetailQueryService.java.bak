@@ -1,0 +1,160 @@
+package com.cashi.customermanagement.application.internal.queryservices;
+
+import com.cashi.customermanagement.domain.model.aggregates.Customer;
+import com.cashi.customermanagement.domain.model.entities.CustomerContact;
+import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.CustomerContactRepository;
+import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.CustomerRepository;
+import com.cashi.customermanagement.interfaces.rest.resources.CustomerDetailResource;
+import com.cashi.customermanagement.interfaces.rest.resources.CustomerFieldResource;
+import com.cashi.shared.domain.model.entities.FieldDefinition;
+import com.cashi.shared.domain.model.entities.HeaderConfiguration;
+import com.cashi.shared.infrastructure.persistence.jpa.repositories.FieldDefinitionRepository;
+import com.cashi.shared.infrastructure.persistence.jpa.repositories.HeaderConfigurationRepository;
+import org.springframework.stereotype.Service;
+
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Service
+public class CustomerDetailQueryService {
+
+    private final CustomerRepository customerRepository;
+    private final CustomerContactRepository customerContactRepository;
+    private final HeaderConfigurationRepository headerConfigurationRepository;
+    private final FieldDefinitionRepository fieldDefinitionRepository;
+
+    public CustomerDetailQueryService(
+            CustomerRepository customerRepository,
+            CustomerContactRepository customerContactRepository,
+            HeaderConfigurationRepository headerConfigurationRepository,
+            FieldDefinitionRepository fieldDefinitionRepository
+    ) {
+        this.customerRepository = customerRepository;
+        this.customerContactRepository = customerContactRepository;
+        this.headerConfigurationRepository = headerConfigurationRepository;
+        this.fieldDefinitionRepository = fieldDefinitionRepository;
+    }
+
+    /**
+     * Search customer by document and map fields with labels from HeaderConfiguration
+     */
+    public Optional<CustomerDetailResource> searchCustomerByDocument(String document, Long subPortfolioId) {
+        // 1. Find customer
+        Optional<Customer> customerOpt = customerRepository.findByDocument(document);
+        if (customerOpt.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Customer customer = customerOpt.get();
+
+        // 2. Get HeaderConfiguration for subportfolio
+        List<HeaderConfiguration> headerConfigs = headerConfigurationRepository.findBySubPortfolioId(subPortfolioId);
+        Map<String, String> fieldLabels = headerConfigs.stream()
+                .collect(Collectors.toMap(
+                        hc -> hc.getFieldDefinition().getFieldCode(),
+                        HeaderConfiguration::getColumnName,
+                        (existing, replacement) -> existing
+                ));
+
+        // 3. Get all FieldDefinitions for metadata
+        List<FieldDefinition> fieldDefinitions = fieldDefinitionRepository.findAll();
+        Map<String, FieldDefinition> fieldDefMap = fieldDefinitions.stream()
+                .collect(Collectors.toMap(
+                        FieldDefinition::getFieldCode,
+                        fd -> fd
+                ));
+
+        // 4. Get customer contacts
+        List<CustomerContact> contacts = customerContactRepository.findByIdentificationCode(customer.getIdentificationCode());
+        Map<String, String> contactMap = contacts.stream()
+                .collect(Collectors.toMap(
+                        CustomerContact::getContactType,
+                        CustomerContact::getContact,
+                        (existing, replacement) -> existing
+                ));
+
+        // 5. Map customer fields to resources
+        List<CustomerFieldResource> campos = new ArrayList<>();
+
+        // Personal fields
+        addField(campos, "codigo_identificacion", customer.getIdentificationCode(), fieldLabels, fieldDefMap);
+        addField(campos, "documento", customer.getDocument(), fieldLabels, fieldDefMap);
+        addField(campos, "primer_nombre", customer.getFirstName(), fieldLabels, fieldDefMap);
+        addField(campos, "segundo_nombre", customer.getSecondName(), fieldLabels, fieldDefMap);
+        addField(campos, "primer_apellido", customer.getFirstLastName(), fieldLabels, fieldDefMap);
+        addField(campos, "segundo_apellido", customer.getSecondLastName(), fieldLabels, fieldDefMap);
+        addField(campos, "nombre_completo", customer.getFullName(), fieldLabels, fieldDefMap);
+        addFieldDate(campos, "fecha_nacimiento", customer.getBirthDate(), fieldLabels, fieldDefMap);
+        addField(campos, "edad", customer.getAge(), fieldLabels, fieldDefMap);
+        addField(campos, "estado_civil", customer.getMaritalStatus(), fieldLabels, fieldDefMap);
+        addField(campos, "ocupacion", customer.getOccupation(), fieldLabels, fieldDefMap);
+        addField(campos, "tipo_cliente", customer.getCustomerType(), fieldLabels, fieldDefMap);
+
+        // Contact fields
+        addField(campos, "telefono_principal", contactMap.get("telefono_principal"), fieldLabels, fieldDefMap);
+        addField(campos, "telefono_secundario", contactMap.get("telefono_secundario"), fieldLabels, fieldDefMap);
+        addField(campos, "telefono_trabajo", contactMap.get("telefono_trabajo"), fieldLabels, fieldDefMap);
+        addField(campos, "email", contactMap.get("email"), fieldLabels, fieldDefMap);
+
+        // Location fields
+        addField(campos, "direccion", customer.getAddress(), fieldLabels, fieldDefMap);
+        addField(campos, "distrito", customer.getDistrict(), fieldLabels, fieldDefMap);
+        addField(campos, "provincia", customer.getProvince(), fieldLabels, fieldDefMap);
+        addField(campos, "departamento", customer.getDepartment(), fieldLabels, fieldDefMap);
+
+        // Reference fields
+        addField(campos, "referencia_personal", customer.getPersonalReference(), fieldLabels, fieldDefMap);
+        addField(campos, "telefono_referencia_1", contactMap.get("telefono_referencia_1"), fieldLabels, fieldDefMap);
+        addField(campos, "telefono_referencia_2", contactMap.get("telefono_referencia_2"), fieldLabels, fieldDefMap);
+
+        return Optional.of(new CustomerDetailResource(customer.getDocument(), campos));
+    }
+
+    private void addField(
+            List<CustomerFieldResource> campos,
+            String fieldCode,
+            Object value,
+            Map<String, String> fieldLabels,
+            Map<String, FieldDefinition> fieldDefMap
+    ) {
+        FieldDefinition fieldDef = fieldDefMap.get(fieldCode);
+        if (fieldDef == null) return;
+
+        String fieldName = fieldLabels.getOrDefault(fieldCode, fieldDef.getFieldName());
+
+        campos.add(new CustomerFieldResource(
+                fieldCode,
+                fieldName,
+                value,
+                fieldDef.getDataType().name(),
+                fieldDef.getCategory().name().toLowerCase(),
+                fieldDef.getIcon(),
+                fieldDef.getColor()
+        ));
+    }
+
+    private void addFieldDate(
+            List<CustomerFieldResource> campos,
+            String fieldCode,
+            java.time.LocalDate value,
+            Map<String, String> fieldLabels,
+            Map<String, FieldDefinition> fieldDefMap
+    ) {
+        FieldDefinition fieldDef = fieldDefMap.get(fieldCode);
+        if (fieldDef == null) return;
+
+        String fieldName = fieldLabels.getOrDefault(fieldCode, fieldDef.getFieldName());
+        String formattedDate = value != null ? value.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) : null;
+
+        campos.add(new CustomerFieldResource(
+                fieldCode,
+                fieldName,
+                formattedDate,
+                fieldDef.getDataType().name(),
+                fieldDef.getCategory().name().toLowerCase(),
+                fieldDef.getIcon(),
+                fieldDef.getColor()
+        ));
+    }
+}

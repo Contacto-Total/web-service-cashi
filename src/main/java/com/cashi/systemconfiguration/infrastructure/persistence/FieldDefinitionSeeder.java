@@ -10,7 +10,12 @@ import org.springframework.stereotype.Component;
 
 /**
  * Seeder específico para las definiciones de campos del sistema
- * Carga el catálogo maestro de 93 campos disponibles para mapeo de cabeceras
+ * Carga el catálogo maestro de 113 campos disponibles para mapeo de cabeceras
+ * - 38 campos numéricos
+ * - 10 datos cliente
+ * - 10 datos cuenta
+ * - 34 campos de texto
+ * - 21 campos de fecha
  */
 @Component
 @Order(1) // Se ejecuta antes que otros seeders
@@ -27,7 +32,7 @@ public class FieldDefinitionSeeder implements CommandLineRunner {
     @Override
     public void run(String... args) {
         logger.info("====================================================================");
-        logger.info("INICIANDO SEEDING - DEFINICIONES DE CAMPOS DEL SISTEMA (93 CAMPOS)");
+        logger.info("INICIANDO SEEDING - DEFINICIONES DE CAMPOS DEL SISTEMA (113 CAMPOS)");
         logger.info("====================================================================");
 
         long camposAntesDeSeeding = fieldDefinitionRepository.count();
@@ -52,7 +57,7 @@ public class FieldDefinitionSeeder implements CommandLineRunner {
 
     private void seedCamposNumericos() {
         logger.info("--------------------------------------------------------------------");
-        logger.info("Seeding Campos Numéricos (38 campos)...");
+        logger.info("Seeding Campos Numéricos y Adicionales (58 campos)...");
 
         seedField("monto_capital", "Monto Capital",
             "Monto principal adeudado del préstamo",
@@ -222,7 +227,91 @@ public class FieldDefinitionSeeder implements CommandLineRunner {
             "Campo promocional 10",
             "NUMERICO", "decimal(18,2)");
 
+        // Datos adicionales del cliente
+        seedField("dato_cliente_1", "Dato Cliente 1",
+            "Campo adicional 1 para datos del cliente",
+            "TEXTO", null);
+
+        seedField("dato_cliente_2", "Dato Cliente 2",
+            "Campo adicional 2 para datos del cliente",
+            "TEXTO", null);
+
+        seedField("dato_cliente_3", "Dato Cliente 3",
+            "Campo adicional 3 para datos del cliente",
+            "TEXTO", null);
+
+        seedField("dato_cliente_4", "Dato Cliente 4",
+            "Campo adicional 4 para datos del cliente",
+            "TEXTO", null);
+
+        seedField("dato_cliente_5", "Dato Cliente 5",
+            "Campo adicional 5 para datos del cliente",
+            "TEXTO", null);
+
+        seedField("dato_cliente_6", "Dato Cliente 6",
+            "Campo adicional 6 para datos del cliente",
+            "TEXTO", null);
+
+        seedField("dato_cliente_7", "Dato Cliente 7",
+            "Campo adicional 7 para datos del cliente",
+            "TEXTO", null);
+
+        seedField("dato_cliente_8", "Dato Cliente 8",
+            "Campo adicional 8 para datos del cliente",
+            "TEXTO", null);
+
+        seedField("dato_cliente_9", "Dato Cliente 9",
+            "Campo adicional 9 para datos del cliente",
+            "TEXTO", null);
+
+        seedField("dato_cliente_10", "Dato Cliente 10",
+            "Campo adicional 10 para datos del cliente",
+            "TEXTO", null);
+
+        // Datos adicionales de la cuenta
+        seedField("dato_cuenta_1", "Dato Cuenta 1",
+            "Campo adicional 1 para datos de la cuenta",
+            "TEXTO", null);
+
+        seedField("dato_cuenta_2", "Dato Cuenta 2",
+            "Campo adicional 2 para datos de la cuenta",
+            "TEXTO", null);
+
+        seedField("dato_cuenta_3", "Dato Cuenta 3",
+            "Campo adicional 3 para datos de la cuenta",
+            "TEXTO", null);
+
+        seedField("dato_cuenta_4", "Dato Cuenta 4",
+            "Campo adicional 4 para datos de la cuenta",
+            "TEXTO", null);
+
+        seedField("dato_cuenta_5", "Dato Cuenta 5",
+            "Campo adicional 5 para datos de la cuenta",
+            "TEXTO", null);
+
+        seedField("dato_cuenta_6", "Dato Cuenta 6",
+            "Campo adicional 6 para datos de la cuenta",
+            "TEXTO", null);
+
+        seedField("dato_cuenta_7", "Dato Cuenta 7",
+            "Campo adicional 7 para datos de la cuenta",
+            "TEXTO", null);
+
+        seedField("dato_cuenta_8", "Dato Cuenta 8",
+            "Campo adicional 8 para datos de la cuenta",
+            "TEXTO", null);
+
+        seedField("dato_cuenta_9", "Dato Cuenta 9",
+            "Campo adicional 9 para datos de la cuenta",
+            "TEXTO", null);
+
+        seedField("dato_cuenta_10", "Dato Cuenta 10",
+            "Campo adicional 10 para datos de la cuenta",
+            "TEXTO", null);
+
         logger.info("✓ Campos Numéricos - 38 campos creados");
+        logger.info("✓ Datos Cliente - 10 campos creados");
+        logger.info("✓ Datos Cuenta - 10 campos creados");
     }
 
     private void seedCamposTexto() {

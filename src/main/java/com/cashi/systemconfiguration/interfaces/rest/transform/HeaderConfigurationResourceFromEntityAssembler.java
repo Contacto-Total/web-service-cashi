@@ -16,6 +16,8 @@ public class HeaderConfigurationResourceFromEntityAssembler {
             entity.getFormat(),
             entity.getRequired() != null && entity.getRequired() == 1,
             entity.getLoadType(),
+            entity.getSourceField(),
+            entity.getRegexPattern(),
             entity.getCreatedAt(),
             entity.getUpdatedAt()
         );

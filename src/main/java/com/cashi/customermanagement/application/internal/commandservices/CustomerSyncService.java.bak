@@ -1,0 +1,373 @@
+package com.cashi.customermanagement.application.internal.commandservices;
+
+import com.cashi.customermanagement.domain.model.aggregates.Customer;
+import com.cashi.customermanagement.domain.model.entities.CustomerContact;
+import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.CustomerContactRepository;
+import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.CustomerRepository;
+import com.cashi.shared.domain.model.entities.Portfolio;
+import com.cashi.shared.domain.model.entities.SubPortfolio;
+import com.cashi.shared.domain.model.entities.Tenant;
+import com.cashi.shared.infrastructure.persistence.jpa.repositories.SubPortfolioRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.sql.Date;
+import java.time.LocalDate;
+import java.time.Period;
+import java.time.ZoneId;
+import java.util.*;
+
+/**
+ * Servicio para sincronizar clientes desde tablas dinámicas a tabla clientes
+ * Lee datos de tablas ini_<prov>_<car>_<subcartera> y los consolida en la tabla clientes
+ */
+@Service
+@RequiredArgsConstructor
+public class CustomerSyncService {
+
+    @PersistenceContext
+    private final EntityManager entityManager;
+
+    private final CustomerRepository customerRepository;
+    private final CustomerContactRepository customerContactRepository;
+    private final SubPortfolioRepository subPortfolioRepository;
+
+    /**
+     * Sincroniza clientes de una sub-cartera específica
+     */
+    @Transactional
+    public SyncResult syncCustomersFromSubPortfolio(Long subPortfolioId) {
+        System.out.println("🔄 Iniciando sincronización de clientes para SubPortfolio ID: " + subPortfolioId);
+
+        // 1. Obtener SubPortfolio con sus relaciones
+        SubPortfolio subPortfolio = subPortfolioRepository.findById(Math.toIntExact(subPortfolioId))
+                .orElseThrow(() -> new IllegalArgumentException("SubPortfolio no encontrado: " + subPortfolioId));
+
+        Portfolio portfolio = subPortfolio.getPortfolio();
+        Tenant tenant = portfolio.getTenant();
+
+        // 2. Construir nombre de tabla dinámica
+        String tableName = buildDynamicTableName(
+                tenant.getTenantCode(),
+                portfolio.getPortfolioCode(),
+                subPortfolio.getSubPortfolioCode()
+        );
+
+        System.out.println("📊 Tabla dinámica: " + tableName);
+
+        int customersCreated = 0;
+        int customersUpdated = 0;
+        int contactsCreated = 0;
+        List<String> errors = new ArrayList<>();
+
+        try {
+            // 3. Verificar que la tabla existe
+            if (!tableExists(tableName)) {
+                throw new IllegalArgumentException("La tabla dinámica no existe: " + tableName);
+            }
+
+            // 4. Leer datos de la tabla dinámica
+            List<Map<String, Object>> rows = readDynamicTableData(tableName);
+            System.out.println("📋 Registros encontrados: " + rows.size());
+
+            // 5. Procesar cada registro
+            for (Map<String, Object> row : rows) {
+                try {
+                    String identificationCode = getStringValue(row, "codigo_identificacion");
+                    String document = getStringValue(row, "documento");
+
+                    if (document == null || document.isEmpty()) {
+                        errors.add("Documento vacío en registro");
+                        continue;
+                    }
+
+                    // Verificar si el cliente ya existe
+                    Optional<Customer> existingCustomer = customerRepository.findByDocument(document);
+
+                    Customer customer;
+                    if (existingCustomer.isPresent()) {
+                        // Actualizar cliente existente
+                        customer = existingCustomer.get();
+                        updateCustomerFromRow(customer, row);
+                        customersUpdated++;
+                    } else {
+                        // Crear nuevo cliente
+                        customer = createCustomerFromRow(row);
+                        customersCreated++;
+                    }
+
+                    customerRepository.save(customer);
+
+                    // Sincronizar contactos
+                    int contacts = syncCustomerContacts(customer.getIdentificationCode(), row);
+                    contactsCreated += contacts;
+
+                } catch (Exception e) {
+                    errors.add("Error procesando registro: " + e.getMessage());
+                    System.err.println("❌ Error: " + e.getMessage());
+                }
+            }
+
+            System.out.println("✅ Sincronización completada:");
+            System.out.println("   - Clientes creados: " + customersCreated);
+            System.out.println("   - Clientes actualizados: " + customersUpdated);
+            System.out.println("   - Contactos creados: " + contactsCreated);
+            System.out.println("   - Errores: " + errors.size());
+
+            return new SyncResult(customersCreated, customersUpdated, contactsCreated, errors);
+
+        } catch (Exception e) {
+            System.err.println("❌ Error fatal en sincronización: " + e.getMessage());
+            throw new RuntimeException("Error en sincronización de clientes: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Construye el nombre de la tabla dinámica de carga inicial
+     */
+    private String buildDynamicTableName(String tenantCode, String portfolioCode, String subPortfolioCode) {
+        return String.format("ini_%s_%s_%s",
+                tenantCode.toLowerCase(),
+                portfolioCode.toLowerCase(),
+                subPortfolioCode.toLowerCase()
+        );
+    }
+
+    /**
+     * Verifica si una tabla existe en la base de datos
+     */
+    private boolean tableExists(String tableName) {
+        try {
+            String sql = "SELECT 1 FROM information_schema.tables WHERE table_name = :tableName LIMIT 1";
+            var query = entityManager.createNativeQuery(sql);
+            query.setParameter("tableName", tableName);
+            query.getSingleResult();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Lee todos los datos de la tabla dinámica
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> readDynamicTableData(String tableName) {
+        String sql = "SELECT * FROM " + tableName;
+        var query = entityManager.createNativeQuery(sql);
+        List<Object[]> results = query.getResultList();
+
+        // Obtener nombres de columnas
+        String columnsQuery = "SELECT column_name FROM information_schema.columns WHERE table_name = :tableName ORDER BY ordinal_position";
+        var columnsQueryObj = entityManager.createNativeQuery(columnsQuery);
+        columnsQueryObj.setParameter("tableName", tableName);
+        List<String> columnNames = (List<String>) columnsQueryObj.getResultList();
+
+        // Convertir a lista de mapas
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Object[] row : results) {
+            Map<String, Object> rowMap = new HashMap<>();
+            for (int i = 0; i < columnNames.size() && i < row.length; i++) {
+                rowMap.put(columnNames.get(i), row[i]);
+            }
+            rows.add(rowMap);
+        }
+
+        return rows;
+    }
+
+    /**
+     * Crea un nuevo cliente desde los datos de la fila
+     */
+    private Customer createCustomerFromRow(Map<String, Object> row) {
+        Customer customer = new Customer();
+
+        // Identificación
+        customer.setIdentificationCode(getStringValue(row, "codigo_identificacion"));
+        customer.setDocument(getStringValue(row, "documento"));
+
+        // Información Personal
+        customer.setFullName(getStringValue(row, "nombre_completo"));
+        customer.setFirstName(getStringValue(row, "primer_nombre"));
+        customer.setSecondName(getStringValue(row, "segundo_nombre"));
+        customer.setFirstLastName(getStringValue(row, "primer_apellido"));
+        customer.setSecondLastName(getStringValue(row, "segundo_apellido"));
+
+        // Datos Demográficos
+        LocalDate birthDate = getDateValue(row, "fecha_nacimiento");
+        customer.setBirthDate(birthDate);
+        customer.setAge(calculateAge(birthDate));
+        customer.setMaritalStatus(getStringValue(row, "estado_civil"));
+
+        // Información Laboral
+        customer.setOccupation(getStringValue(row, "ocupacion"));
+        customer.setCustomerType(getStringValue(row, "tipo_cliente"));
+
+        // Ubicación
+        customer.setAddress(getStringValue(row, "direccion"));
+        customer.setDistrict(getStringValue(row, "distrito"));
+        customer.setProvince(getStringValue(row, "provincia"));
+        customer.setDepartment(getStringValue(row, "departamento"));
+
+        // Referencias
+        customer.setPersonalReference(getStringValue(row, "referencia_personal"));
+
+        return customer;
+    }
+
+    /**
+     * Actualiza un cliente existente desde los datos de la fila
+     */
+    private void updateCustomerFromRow(Customer customer, Map<String, Object> row) {
+        // Actualizar información personal
+        customer.updatePersonalInfo(
+                getStringValue(row, "nombre_completo"),
+                getStringValue(row, "primer_nombre"),
+                getStringValue(row, "segundo_nombre"),
+                getStringValue(row, "primer_apellido"),
+                getStringValue(row, "segundo_apellido")
+        );
+
+        // Actualizar datos demográficos
+        LocalDate birthDate = getDateValue(row, "fecha_nacimiento");
+        customer.updateDemographicInfo(birthDate, getStringValue(row, "estado_civil"));
+
+        // Actualizar información laboral
+        customer.updateWorkInfo(
+                getStringValue(row, "ocupacion"),
+                getStringValue(row, "tipo_cliente")
+        );
+
+        // Actualizar ubicación
+        customer.updateLocationInfo(
+                getStringValue(row, "direccion"),
+                getStringValue(row, "distrito"),
+                getStringValue(row, "provincia"),
+                getStringValue(row, "departamento")
+        );
+
+        // Actualizar referencias
+        customer.updateReferenceInfo(getStringValue(row, "referencia_personal"));
+    }
+
+    /**
+     * Sincroniza los contactos de un cliente
+     */
+    private int syncCustomerContacts(String identificationCode, Map<String, Object> row) {
+        int contactsCreated = 0;
+
+        // Eliminar contactos existentes para este cliente
+        customerContactRepository.deleteByIdentificationCode(identificationCode);
+
+        // Crear contactos desde los datos
+        contactsCreated += createContactIfPresent(identificationCode, "telefono_principal", row);
+        contactsCreated += createContactIfPresent(identificationCode, "telefono_secundario", row);
+        contactsCreated += createContactIfPresent(identificationCode, "telefono_trabajo", row);
+        contactsCreated += createContactIfPresent(identificationCode, "email", row);
+        contactsCreated += createContactIfPresent(identificationCode, "telefono_referencia_1", row);
+        contactsCreated += createContactIfPresent(identificationCode, "telefono_referencia_2", row);
+
+        return contactsCreated;
+    }
+
+    /**
+     * Crea un contacto si el valor está presente
+     */
+    private int createContactIfPresent(String identificationCode, String contactType, Map<String, Object> row) {
+        String contactValue = getStringValue(row, contactType);
+        if (contactValue != null && !contactValue.isEmpty()) {
+            CustomerContact contact = new CustomerContact();
+            contact.setIdentificationCode(identificationCode);
+            contact.setContactType(contactType);
+            contact.setContact(contactValue);
+            customerContactRepository.save(contact);
+            return 1;
+        }
+        return 0;
+    }
+
+    /**
+     * Obtiene un valor String de la fila
+     */
+    private String getStringValue(Map<String, Object> row, String columnName) {
+        Object value = row.get(columnName);
+        return value != null ? value.toString().trim() : null;
+    }
+
+    /**
+     * Obtiene un valor Date de la fila
+     */
+    private LocalDate getDateValue(Map<String, Object> row, String columnName) {
+        Object value = row.get(columnName);
+        if (value == null) return null;
+
+        try {
+            if (value instanceof Date) {
+                return ((Date) value).toLocalDate();
+            } else if (value instanceof java.util.Date) {
+                return ((java.util.Date) value).toInstant()
+                        .atZone(ZoneId.systemDefault())
+                        .toLocalDate();
+            } else if (value instanceof LocalDate) {
+                return (LocalDate) value;
+            } else {
+                return LocalDate.parse(value.toString());
+            }
+        } catch (Exception e) {
+            System.err.println("⚠️ Error parseando fecha: " + value);
+            return null;
+        }
+    }
+
+    /**
+     * Calcula la edad desde la fecha de nacimiento
+     */
+    private Integer calculateAge(LocalDate birthDate) {
+        if (birthDate == null) return null;
+        return Period.between(birthDate, LocalDate.now()).getYears();
+    }
+
+    /**
+     * Resultado de la sincronización
+     */
+    public static class SyncResult {
+        private final int customersCreated;
+        private final int customersUpdated;
+        private final int contactsCreated;
+        private final List<String> errors;
+
+        public SyncResult(int customersCreated, int customersUpdated, int contactsCreated, List<String> errors) {
+            this.customersCreated = customersCreated;
+            this.customersUpdated = customersUpdated;
+            this.contactsCreated = contactsCreated;
+            this.errors = errors;
+        }
+
+        public int getCustomersCreated() {
+            return customersCreated;
+        }
+
+        public int getCustomersUpdated() {
+            return customersUpdated;
+        }
+
+        public int getContactsCreated() {
+            return contactsCreated;
+        }
+
+        public List<String> getErrors() {
+            return errors;
+        }
+
+        public boolean hasErrors() {
+            return !errors.isEmpty();
+        }
+
+        public int getTotalCustomers() {
+            return customersCreated + customersUpdated;
+        }
+    }
+}

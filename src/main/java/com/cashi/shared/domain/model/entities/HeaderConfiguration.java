@@ -82,6 +82,25 @@ public class HeaderConfiguration {
     @Column(name = "tipo_carga", nullable = false, length = 20)
     private LoadType loadType = LoadType.ACTUALIZACION;
 
+    // ========== CAMPOS DE TRANSFORMACIÓN ==========
+
+    /**
+     * Campo origen desde el cual se extraerá el valor mediante regex
+     * Ejemplo: "IDENTITY_CODE" si documento se deriva de IDENTITY_CODE
+     * Si es NULL, el valor viene directamente del CSV con el nombre de headerName
+     */
+    @Column(name = "campo_origen", length = 100)
+    private String sourceField;
+
+    /**
+     * Patrón regex para extraer/transformar el valor del campo origen
+     * Ejemplo: ".{8}$" para extraer últimos 8 caracteres
+     * Ejemplo: "(?<=D)(.{8})" para extraer 8 caracteres después de "D"
+     * Si es NULL y sourceField tiene valor, se copia tal cual
+     */
+    @Column(name = "patron_regex", length = 500)
+    private String regexPattern;
+
     @CreatedDate
     @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDate createdAt;

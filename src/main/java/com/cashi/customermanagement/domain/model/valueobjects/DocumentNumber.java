@@ -11,10 +11,10 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class DocumentNumber implements ValueObject {
 
-    @Column(name = "document_type", nullable = false, length = 10)
+    @Column(name = "document_type", length = 10)
     private String type;
 
-    @Column(name = "document_number", nullable = false, length = 20)
+    @Column(name = "document_number", length = 20)
     private String number;
 
     public DocumentNumber(String type, String number) {
