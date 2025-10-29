@@ -2,6 +2,7 @@ package com.cashi.collectionmanagement.application.internal.commandservices;
 
 import com.cashi.collectionmanagement.domain.model.aggregates.Management;
 import com.cashi.collectionmanagement.domain.model.commands.*;
+import com.cashi.collectionmanagement.domain.model.entities.ManagementTypification;
 import com.cashi.collectionmanagement.domain.model.valueobjects.ContactResult;
 import com.cashi.collectionmanagement.domain.model.valueobjects.ManagementType;
 import com.cashi.collectionmanagement.domain.model.valueobjects.PaymentMethod;
@@ -11,6 +12,10 @@ import com.cashi.paymentprocessing.domain.model.aggregates.PaymentSchedule;
 import com.cashi.paymentprocessing.domain.model.entities.Installment;
 import com.cashi.paymentprocessing.domain.services.InstallmentStatusCommandService;
 import com.cashi.paymentprocessing.infrastructure.persistence.jpa.repositories.PaymentScheduleRepository;
+import com.cashi.shared.infrastructure.persistence.jpa.repositories.TenantRepository;
+import com.cashi.shared.infrastructure.persistence.jpa.repositories.PortfolioRepository;
+import com.cashi.shared.infrastructure.persistence.jpa.repositories.CampaignRepository;
+import com.cashi.systemconfiguration.infrastructure.persistence.jpa.repositories.TypificationCatalogRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
@@ -26,15 +31,27 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
     private final PaymentScheduleRepository paymentScheduleRepository;
     private final InstallmentStatusCommandService installmentStatusService;
     private final ObjectMapper objectMapper;
+    private final TenantRepository tenantRepository;
+    private final PortfolioRepository portfolioRepository;
+    private final CampaignRepository campaignRepository;
+    private final TypificationCatalogRepository typificationCatalogRepository;
 
     public ManagementCommandServiceImpl(ManagementRepository repository,
                                        PaymentScheduleRepository paymentScheduleRepository,
                                        InstallmentStatusCommandService installmentStatusService,
-                                       ObjectMapper objectMapper) {
+                                       ObjectMapper objectMapper,
+                                       TenantRepository tenantRepository,
+                                       PortfolioRepository portfolioRepository,
+                                       CampaignRepository campaignRepository,
+                                       TypificationCatalogRepository typificationCatalogRepository) {
         this.repository = repository;
         this.paymentScheduleRepository = paymentScheduleRepository;
         this.installmentStatusService = installmentStatusService;
         this.objectMapper = objectMapper;
+        this.tenantRepository = tenantRepository;
+        this.portfolioRepository = portfolioRepository;
+        this.campaignRepository = campaignRepository;
+        this.typificationCatalogRepository = typificationCatalogRepository;
     }
 
     @Override
@@ -45,83 +62,85 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
         System.out.println("📋 Tabla destino: gestiones");
         System.out.println("👤 Cliente ID: " + command.customerId());
         System.out.println("👨‍💼 Asesor ID: " + command.advisorId());
-        System.out.println("📢 Campaña ID: " + command.campaignId());
 
+        // 1. Obtener entidades de multi-tenancy
+        var tenant = tenantRepository.findById(command.tenantId())
+                .orElseThrow(() -> new IllegalArgumentException("Tenant not found: " + command.tenantId()));
+
+        var portfolio = command.portfolioId() != null
+                ? portfolioRepository.findById(command.portfolioId())
+                        .orElseThrow(() -> new IllegalArgumentException("Portfolio not found: " + command.portfolioId()))
+                : null;
+
+        var campaign = command.campaignId() != null
+                ? campaignRepository.findById(command.campaignId())
+                        .orElseThrow(() -> new IllegalArgumentException("Campaign not found: " + command.campaignId()))
+                : null;
+
+        System.out.println("🏢 Inquilino ID: " + tenant.getId());
+        System.out.println("📁 Cartera ID: " + (portfolio != null ? portfolio.getId() : "null"));
+        System.out.println("📢 Campaña ID: " + (campaign != null ? campaign.getId() : "null"));
+
+        // 2. Crear gestión con constructor multi-tenant
         var management = new Management(
+            tenant,
+            portfolio,
+            campaign,
             command.customerId(),
-            command.advisorId(),
-            command.campaignId()
+            command.advisorId()
         );
 
-        // Categoría: Grupo al que pertenece la tipificación
-        if (command.categoryCode() != null) {
-            System.out.println("📁 Categoría (Grupo):");
-            System.out.println("   - Código: " + command.categoryCode());
-            System.out.println("   - Descripción: " + command.categoryDescription());
-            System.out.println("   - Columnas BD: codigo_tipificacion, descripcion_tipificacion");
+        // 3. Obtener tipificaciones y crear registros en tabla tipificaciones_gestion
+        var typification1 = typificationCatalogRepository.findById(command.typificationLevel1Id())
+                .orElseThrow(() -> new IllegalArgumentException("Typification Level 1 not found: " + command.typificationLevel1Id()));
+        var typification2 = typificationCatalogRepository.findById(command.typificationLevel2Id())
+                .orElseThrow(() -> new IllegalArgumentException("Typification Level 2 not found: " + command.typificationLevel2Id()));
+        var typification3 = typificationCatalogRepository.findById(command.typificationLevel3Id())
+                .orElseThrow(() -> new IllegalArgumentException("Typification Level 3 not found: " + command.typificationLevel3Id()));
 
-            management.setCategory(
-                command.categoryCode(),
-                command.categoryDescription()
-            );
-        }
+        System.out.println("🏷️  Tipificación Nivel 1: " + typification1.getCode() + " - " + typification1.getName());
+        System.out.println("🏷️  Tipificación Nivel 2: " + typification2.getCode() + " - " + typification2.getName());
+        System.out.println("🏷️  Tipificación Nivel 3: " + typification3.getCode() + " - " + typification3.getName());
 
-        // Tipificación: Código específico/hoja (último nivel en jerarquía)
-        if (command.typificationCode() != null) {
-            System.out.println("🏷️  Tipificación (Hoja específica):");
-            System.out.println("   - Código: " + command.typificationCode());
-            System.out.println("   - Descripción: " + command.typificationDescription());
-            System.out.println("   - Requiere Pago: " + command.typificationRequiresPayment());
-            System.out.println("   - Requiere Cronograma: " + command.typificationRequiresSchedule());
-            System.out.println("   - Columnas BD: codigo_tipificacion, descripcion_tipificacion, tipificacion_requiere_pago, tipificacion_requiere_cronograma");
-
-            management.setTypification(
-                command.typificationCode(),
-                command.typificationDescription(),
-                command.typificationRequiresPayment(),
-                command.typificationRequiresSchedule()
-            );
-        }
-
+        // 4. Guardar observaciones
         if (command.observations() != null) {
             System.out.println("💬 Observaciones: " + command.observations());
-            System.out.println("   - Columna BD: observaciones");
             management.setObservations(command.observations());
         }
 
-        // Serializar campos dinámicos a JSON
-        if (command.dynamicFields() != null && !command.dynamicFields().isEmpty()) {
-            try {
-                // Calcular saldo pendiente automáticamente si viene monto_pagado
-                Map<String, Object> enrichedFields = enrichDynamicFieldsWithPendingBalance(
-                    command.dynamicFields(),
-                    command.customerId()
-                );
-
-                String dynamicFieldsJson = objectMapper.writeValueAsString(enrichedFields);
-                System.out.println("🔧 Campos Dinámicos:");
-                System.out.println("   - Cantidad de campos: " + enrichedFields.size());
-                System.out.println("   - Columna BD: campos_dinamicos_json");
-                System.out.println("   - JSON guardado:");
-                System.out.println(dynamicFieldsJson);
-
-                management.setDynamicFieldsJson(dynamicFieldsJson);
-            } catch (Exception e) {
-                System.err.println("❌ Error serializando campos dinámicos: " + e.getMessage());
-                e.printStackTrace();
-            }
-        } else {
-            System.out.println("ℹ️  No hay campos dinámicos para guardar");
-        }
+        // 5. COMENTADO: Campos dinámicos deshabilitados temporalmente
+        // if (command.dynamicFields() != null && !command.dynamicFields().isEmpty()) {
+        //     try {
+        //         Map<String, Object> enrichedFields = enrichDynamicFieldsWithPendingBalance(
+        //             command.dynamicFields(),
+        //             command.customerId()
+        //         );
+        //
+        //         String dynamicFieldsJson = objectMapper.writeValueAsString(enrichedFields);
+        //         System.out.println("🔧 Campos Dinámicos: " + enrichedFields.size() + " campos");
+        //         management.setDynamicFieldsJson(dynamicFieldsJson);
+        //     } catch (Exception e) {
+        //         System.err.println("❌ Error serializando campos dinámicos: " + e.getMessage());
+        //         e.printStackTrace();
+        //     }
+        // }
 
         System.out.println("----------------------------------------");
-        System.out.println("💾 Guardando en base de datos...");
+        System.out.println("💾 Guardando gestión en BD...");
         Management savedManagement = repository.save(management);
 
+        // 6. Guardar SOLO el último nivel (nivel 3 - hoja) en tabla normalizada tipificaciones_gestion
+        System.out.println("💾 Guardando tipificación final (nivel 3) en tipificaciones_gestion...");
+        management.addClassification(new ManagementTypification(savedManagement, typification3, 3));
+
+        savedManagement = repository.save(savedManagement);
+
         System.out.println("✅ GESTIÓN GUARDADA EXITOSAMENTE");
-        System.out.println("   - ID Gestión: " + savedManagement.getManagementId().getManagementId());
-        System.out.println("   - Tabla: gestiones");
-        System.out.println("   - Fecha: " + savedManagement.getManagementDate());
+        System.out.println("   - ID Gestión: " + savedManagement.getId());
+        System.out.println("   - Inquilino: " + savedManagement.getTenant().getId());
+        System.out.println("   - Cartera: " + (savedManagement.getPortfolio() != null ? savedManagement.getPortfolio().getId() : "null"));
+        System.out.println("   - Campaña: " + (savedManagement.getCampaign() != null ? savedManagement.getCampaign().getId() : "null"));
+        System.out.println("   - Tipificación guardada: Nivel 3 (hoja) - " + typification3.getCode());
         System.out.println("========================================");
 
         // Detectar y guardar cronogramas de pago (campos tipo tabla)
@@ -134,8 +153,8 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
 
     @Override
     public Management handle(UpdateManagementCommand command) {
-        var management = repository.findByManagementId_ManagementId(command.managementId())
-            .orElseThrow(() -> new IllegalArgumentException("Management not found: " + command.managementId()));
+        var management = repository.findById(command.id())
+            .orElseThrow(() -> new IllegalArgumentException("Management not found with id: " + command.id()));
 
         // Actualizar Categoría
         if (command.categoryCode() != null) {
@@ -179,8 +198,8 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
         System.out.println("💳 REGISTRANDO PAGO");
         System.out.println("========================================");
 
-        var management = repository.findByManagementId_ManagementId(command.managementId())
-            .orElseThrow(() -> new IllegalArgumentException("Management not found: " + command.managementId()));
+        var management = repository.findById(command.managementId())
+            .orElseThrow(() -> new IllegalArgumentException("Management not found with id: " + command.managementId()));
 
         Management savedManagement = repository.save(management);
 
@@ -195,7 +214,7 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
 
         if (appliesPaymentToSchedule) {
             System.out.println("\n🔗 Esta tipificación enlaza pagos con cronogramas pendientes");
-            applyPaymentToPendingSchedules(management.getCustomerId(), command.amount(), command.managementId());
+            applyPaymentToPendingSchedules(management.getCustomerId(), command.amount(), command.managementId().toString());
         } else {
             System.out.println("\nℹ️  Esta tipificación NO enlaza con cronogramas");
         }
@@ -404,7 +423,7 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
 
             PaymentSchedule paymentSchedule = new PaymentSchedule(
                 management.getCustomerId(),
-                management.getManagementId().getManagementId(),
+                management.getId().toString(),
                 "FINANCIERA", // Tipo de cronograma para convenios
                 totalAmount,  // Monto negociado
                 installmentDataList // Lista de cuotas con montos personalizados
@@ -426,7 +445,7 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
             for (Installment installment : installments) {
                 installmentStatusService.registerInitialStatus(
                     installment.getId(),
-                    management.getManagementId().getManagementId(),
+                    management.getId().toString(),
                     "SYSTEM" // Por ahora usamos SYSTEM, luego puede ser el usuario actual
                 );
             }

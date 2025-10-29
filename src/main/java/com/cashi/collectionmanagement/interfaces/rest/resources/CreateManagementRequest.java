@@ -4,26 +4,29 @@ import java.util.Map;
 
 /**
  * Request para crear una nueva gestión
- * @param categoryCode Código de la categoría (grupo)
- * @param categoryDescription Descripción de la categoría
- * @param typificationCode Código de la tipificación específica (hoja)
- * @param typificationDescription Descripción de la tipificación
+ * @param tenantId ID del inquilino (tenant)
+ * @param portfolioId ID de la cartera
+ * @param subPortfolioId ID de la subcartera (opcional)
+ * @param campaignId ID de la campaña (como entidad, no legacy)
+ * @param typificationLevel1Id ID de la tipificación nivel 1
+ * @param typificationLevel2Id ID de la tipificación nivel 2
+ * @param typificationLevel3Id ID de la tipificación nivel 3
  * @param dynamicFields Campos dinámicos configurados por tipificación (JSON serializado)
  */
 public record CreateManagementRequest(
         String customerId,
         String advisorId,
-        String campaignId,
 
-        // Categoría: Grupo al que pertenece la tipificación
-        String categoryCode,
-        String categoryDescription,
+        // Multi-tenant fields
+        Integer tenantId,
+        Integer portfolioId,
+        Integer subPortfolioId,
+        Long campaignId,  // Campaign usa Long como ID
 
-        // Tipificación: Código específico/hoja (último nivel en jerarquía)
-        String typificationCode,
-        String typificationDescription,
-        Boolean typificationRequiresPayment,
-        Boolean typificationRequiresSchedule,
+        // Jerarquía de tipificaciones (3 niveles)
+        Integer typificationLevel1Id,
+        Integer typificationLevel2Id,
+        Integer typificationLevel3Id,
 
         String observations,
         Map<String, Object> dynamicFields

@@ -5,9 +5,9 @@ import com.cashi.collectionmanagement.interfaces.rest.resources.UpdateManagement
 
 public class UpdateManagementCommandFromResourceAssembler {
 
-    public static UpdateManagementCommand toCommandFromResource(String managementId, UpdateManagementRequest resource) {
+    public static UpdateManagementCommand toCommandFromResource(Long id, UpdateManagementRequest resource) {
         return new UpdateManagementCommand(
-                managementId,
+                id,
                 resource.categoryCode(),
                 resource.categoryDescription(),
                 resource.typificationCode(),

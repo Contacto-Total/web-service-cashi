@@ -4,6 +4,8 @@ import com.cashi.shared.domain.model.entities.HeaderConfiguration;
 import com.cashi.shared.domain.model.entities.SubPortfolio;
 import com.cashi.shared.domain.model.valueobjects.LoadType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -22,8 +24,16 @@ public interface HeaderConfigurationRepository extends JpaRepository<HeaderConfi
 
     /**
      * Obtiene todas las configuraciones de cabeceras de una subcartera filtradas por tipo de carga
+     * NOTA: Usa JOIN FETCH para cargar eagerly el FieldDefinition y evitar problemas de lazy loading
+     * Ordenado por ID para mantener el orden de inserción
      */
-    List<HeaderConfiguration> findBySubPortfolioAndLoadType(SubPortfolio subPortfolio, LoadType loadType);
+    @Query("SELECT hc FROM HeaderConfiguration hc " +
+           "LEFT JOIN FETCH hc.fieldDefinition " +
+           "WHERE hc.subPortfolio = :subPortfolio AND hc.loadType = :loadType " +
+           "ORDER BY hc.id")
+    List<HeaderConfiguration> findBySubPortfolioAndLoadType(
+            @Param("subPortfolio") SubPortfolio subPortfolio,
+            @Param("loadType") LoadType loadType);
 
     /**
      * Verifica si existe una configuración con el mismo nombre de cabecera para una subcartera

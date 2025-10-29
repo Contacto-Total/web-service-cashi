@@ -5,7 +5,7 @@ import com.cashi.collectionmanagement.interfaces.rest.resources.RegisterPaymentR
 
 public class RegisterPaymentCommandFromResourceAssembler {
 
-    public static RegisterPaymentCommand toCommandFromResource(String managementId, RegisterPaymentRequest resource) {
+    public static RegisterPaymentCommand toCommandFromResource(Long managementId, RegisterPaymentRequest resource) {
         return new RegisterPaymentCommand(
                 managementId,
                 resource.amount(),

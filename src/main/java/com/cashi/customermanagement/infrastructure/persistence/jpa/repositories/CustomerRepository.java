@@ -18,8 +18,11 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     Optional<Customer> findByTenantIdAndIdentificationCode(Long tenantId, String identificationCode);
     Optional<Customer> findByTenantIdAndDocument(Long tenantId, String document);
 
-    // Get top 5 most recent customers
-    List<Customer> findTop5ByOrderByIdDesc();
+    // Get top 6 most recent customers
+    List<Customer> findTop6ByOrderByIdDesc();
+
+    // Get top 6 most recently accessed customers
+    List<Customer> findTop6ByLastAccessedAtNotNullOrderByLastAccessedAtDesc();
 
     // Métodos con JOIN FETCH para cargar métodos de contacto (retornan único resultado)
     @Query("SELECT c FROM Customer c LEFT JOIN FETCH c.contactMethods WHERE c.tenantId = :tenantId AND c.identificationCode = :identificationCode")
@@ -44,4 +47,14 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     // Method to fetch all customers with their contact methods
     @Query("SELECT DISTINCT c FROM Customer c LEFT JOIN FETCH c.contactMethods")
     List<Customer> findAllWithContactMethods();
+
+    // Métodos multi-tenant (sin filtro de tenantId) para búsqueda de duplicados entre inquilinos
+    @Query("SELECT DISTINCT c FROM Customer c LEFT JOIN FETCH c.contactMethods WHERE c.identificationCode = :identificationCode")
+    List<Customer> findAllByIdentificationCodeWithContactMethods(@Param("identificationCode") String identificationCode);
+
+    @Query("SELECT DISTINCT c FROM Customer c LEFT JOIN FETCH c.contactMethods WHERE c.document = :document")
+    List<Customer> findAllByDocumentWithContactMethods(@Param("document") String document);
+
+    @Query("SELECT DISTINCT c FROM Customer c LEFT JOIN FETCH c.contactMethods WHERE c.accountNumber = :accountNumber")
+    List<Customer> findAllByAccountNumberWithContactMethods(@Param("accountNumber") String accountNumber);
 }

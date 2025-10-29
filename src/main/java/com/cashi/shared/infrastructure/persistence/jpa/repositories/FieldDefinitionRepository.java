@@ -26,9 +26,9 @@ public interface FieldDefinitionRepository extends JpaRepository<FieldDefinition
     List<FieldDefinition> findByDataType(String dataType);
 
     /**
-     * Buscar todos los campos ordenados por nombre
+     * Buscar todos los campos ordenados por ID (orden de inserción)
      */
-    @Query("SELECT f FROM FieldDefinition f ORDER BY f.fieldName")
+    @Query("SELECT f FROM FieldDefinition f ORDER BY f.id")
     List<FieldDefinition> findAllOrderedByName();
 
     /**

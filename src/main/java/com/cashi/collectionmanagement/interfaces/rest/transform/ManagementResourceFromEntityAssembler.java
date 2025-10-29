@@ -7,11 +7,11 @@ public class ManagementResourceFromEntityAssembler {
 
     public static ManagementResource toResourceFromEntity(Management entity) {
         return new ManagementResource(
-                entity.getId(),
-                entity.getManagementId() != null ? entity.getManagementId().getManagementId() : null,
+                entity.getId(),  // ID from AggregateRoot (Long auto-increment)
+                entity.getId() != null ? entity.getId().toString() : null,  // managementId as string version of id
                 entity.getCustomerId(),
                 entity.getAdvisorId(),
-                entity.getCampaignId(),
+                entity.getCampaign() != null ? entity.getCampaign().getId().toString() : null,  // Obtener ID de Campaign entity
                 entity.getManagementDate(),
                 // Categoría y Tipificación
                 entity.getCategoryCode(),

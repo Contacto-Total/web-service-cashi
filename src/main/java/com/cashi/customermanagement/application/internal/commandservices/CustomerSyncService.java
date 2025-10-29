@@ -4,9 +4,12 @@ import com.cashi.customermanagement.domain.model.aggregates.Customer;
 import com.cashi.customermanagement.domain.model.entities.FieldTransformationRule;
 import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.CustomerRepository;
 import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.FieldTransformationRuleRepository;
+import com.cashi.shared.domain.model.entities.HeaderConfiguration;
 import com.cashi.shared.domain.model.entities.Portfolio;
 import com.cashi.shared.domain.model.entities.SubPortfolio;
 import com.cashi.shared.domain.model.entities.Tenant;
+import com.cashi.shared.domain.model.valueobjects.LoadType;
+import com.cashi.shared.infrastructure.persistence.jpa.repositories.HeaderConfigurationRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.SubPortfolioRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -34,6 +37,7 @@ public class CustomerSyncService {
     private final CustomerRepository customerRepository;
     private final SubPortfolioRepository subPortfolioRepository;
     private final FieldTransformationRuleRepository transformationRuleRepository;
+    private final HeaderConfigurationRepository headerConfigurationRepository;
 
     /**
      * Sincroniza clientes desde una tabla específica (método directo)
@@ -84,11 +88,13 @@ public class CustomerSyncService {
                     if (existingCustomer.isPresent()) {
                         // Actualizar cliente existente
                         customer = existingCustomer.get();
+                        customer.setTenantId(tenantId);
+                        // Note: portfolioId y subPortfolioId quedarán null ya que este método solo tiene tenantId
                         updateCustomerFromRow(customer, enrichedRow);
                         customersUpdated++;
                     } else {
-                        // Crear nuevo cliente
-                        customer = createCustomerFromRow(enrichedRow, tenantId, null);
+                        // Crear nuevo cliente (sin portfolio/subportfolio ya que este método directo no los tiene)
+                        customer = createCustomerFromRowLegacy(enrichedRow, tenantId);
                         customersCreated++;
                     }
 
@@ -153,8 +159,11 @@ public class CustomerSyncService {
             // 5. Procesar cada registro
             for (Map<String, Object> row : rows) {
                 try {
+                    // Mapear columnas de financiera a sistema usando HeaderConfiguration
+                    Map<String, Object> mappedRow = mapColumnsToSystemFields(row, subPortfolio, LoadType.INICIAL);
+
                     // Aplicar reglas de transformación de campos
-                    Map<String, Object> enrichedRow = applyFieldTransformations(row, tenant.getId().longValue());
+                    Map<String, Object> enrichedRow = applyFieldTransformations(mappedRow, tenant.getId().longValue());
 
                     String identificationCode = getStringValue(enrichedRow, "codigo_identificacion");
                     String document = getStringValue(enrichedRow, "documento");
@@ -172,15 +181,22 @@ public class CustomerSyncService {
                     if (existingCustomer.isPresent()) {
                         // Actualizar cliente existente
                         customer = existingCustomer.get();
+                        // Actualizar jerarquía completa
+                        customer.setTenantId(tenant.getId().longValue());
+                        customer.setTenantName(tenant.getTenantName());
+                        customer.setPortfolioId(portfolio.getId().longValue());
+                        customer.setPortfolioName(portfolio.getPortfolioName());
                         customer.setSubPortfolioId(subPortfolioId.longValue());
+                        customer.setSubPortfolioName(subPortfolio.getSubPortfolioName());
                         updateCustomerFromRow(customer, enrichedRow);
                         customersUpdated++;
                     } else {
                         // Crear nuevo cliente
-                        customer = createCustomerFromRow(enrichedRow, tenant.getId().longValue(), subPortfolioId.longValue());
+                        customer = createCustomerFromRow(enrichedRow, tenant, portfolio, subPortfolio);
                         customersCreated++;
                     }
 
+                    System.out.println("💾 Guardando cliente - Edad: " + customer.getAge() + ", Documento: " + customer.getDocument());
                     customerRepository.save(customer);
 
                 } catch (Exception e) {
@@ -259,12 +275,16 @@ public class CustomerSyncService {
     /**
      * Crea un nuevo cliente desde los datos de la fila
      */
-    private Customer createCustomerFromRow(Map<String, Object> row, Long tenantId, Long subPortfolioId) {
+    private Customer createCustomerFromRow(Map<String, Object> row, Tenant tenant, Portfolio portfolio, SubPortfolio subPortfolio) {
         Customer customer = new Customer();
 
-        // Tenant
-        customer.setTenantId(tenantId);
-        customer.setSubPortfolioId(subPortfolioId);
+        // Jerarquía completa: Inquilino -> Cartera -> Subcartera
+        customer.setTenantId(tenant.getId().longValue());
+        customer.setTenantName(tenant.getTenantName());
+        customer.setPortfolioId(portfolio.getId().longValue());
+        customer.setPortfolioName(portfolio.getPortfolioName());
+        customer.setSubPortfolioId(subPortfolio.getId().longValue());
+        customer.setSubPortfolioName(subPortfolio.getSubPortfolioName());
 
         // Identificación
         String identificationCode = getStringValue(row, "codigo_identificacion");
@@ -284,7 +304,11 @@ public class CustomerSyncService {
         // Datos Demográficos
         LocalDate birthDate = getDateValue(row, "fecha_nacimiento");
         customer.setBirthDate(birthDate);
-        customer.setAge(calculateAge(birthDate));
+
+        Integer edad = getIntegerValue(row, "edad");
+        customer.setAge(edad);
+        System.out.println("   📅 Edad del row: " + edad + " (campo 'edad' en row: " + row.get("edad") + ")");
+
         customer.setMaritalStatus(getStringValue(row, "estado_civil"));
 
         // Información Laboral
@@ -299,6 +323,75 @@ public class CustomerSyncService {
 
         // Referencias
         customer.setPersonalReference(getStringValue(row, "referencia_personal"));
+
+        // Cuenta (número de cuenta del sistema)
+        customer.setAccountNumber(getStringValue(row, "numero_cuenta_linea_prestamo"));
+
+        // Información de deuda/mora
+        customer.setOverdueDays(getIntegerValue(row, "dias_mora"));
+        customer.setOverdueAmount(getDoubleValue(row, "monto_mora"));
+        customer.setPrincipalAmount(getDoubleValue(row, "monto_capital"));
+
+        return customer;
+    }
+
+    /**
+     * Crea un nuevo cliente desde los datos de la fila (método legacy sin portfolio/subportfolio)
+     * @deprecated Usar createCustomerFromRow(row, tenant, portfolio, subPortfolio) en su lugar
+     */
+    @Deprecated
+    private Customer createCustomerFromRowLegacy(Map<String, Object> row, Long tenantId) {
+        Customer customer = new Customer();
+
+        // Solo tenantId disponible en este método legacy
+        customer.setTenantId(tenantId);
+        // portfolioId, portfolioName, subPortfolioId, subPortfolioName quedarán null
+
+        // Identificación
+        String identificationCode = getStringValue(row, "codigo_identificacion");
+        String document = getStringValue(row, "documento");
+
+        customer.setCustomerId(document);  // id_cliente = documento
+        customer.setIdentificationCode(identificationCode);
+        customer.setDocument(document);
+
+        // Información Personal
+        customer.setFullName(getStringValue(row, "nombre_completo"));
+        customer.setFirstName(getStringValue(row, "primer_nombre"));
+        customer.setSecondName(getStringValue(row, "segundo_nombre"));
+        customer.setFirstLastName(getStringValue(row, "primer_apellido"));
+        customer.setSecondLastName(getStringValue(row, "segundo_apellido"));
+
+        // Datos Demográficos
+        LocalDate birthDate = getDateValue(row, "fecha_nacimiento");
+        customer.setBirthDate(birthDate);
+
+        Integer edad = getIntegerValue(row, "edad");
+        customer.setAge(edad);
+        System.out.println("   📅 Edad del row: " + edad + " (campo 'edad' en row: " + row.get("edad") + ")");
+
+        customer.setMaritalStatus(getStringValue(row, "estado_civil"));
+
+        // Información Laboral
+        customer.setOccupation(getStringValue(row, "ocupacion"));
+        customer.setCustomerType(getStringValue(row, "tipo_cliente"));
+
+        // Ubicación
+        customer.setAddress(getStringValue(row, "direccion"));
+        customer.setDistrict(getStringValue(row, "distrito"));
+        customer.setProvince(getStringValue(row, "provincia"));
+        customer.setDepartment(getStringValue(row, "departamento"));
+
+        // Referencias
+        customer.setPersonalReference(getStringValue(row, "referencia_personal"));
+
+        // Cuenta (número de cuenta del sistema)
+        customer.setAccountNumber(getStringValue(row, "numero_cuenta_linea_prestamo"));
+
+        // Información de deuda/mora
+        customer.setOverdueDays(getIntegerValue(row, "dias_mora"));
+        customer.setOverdueAmount(getDoubleValue(row, "monto_mora"));
+        customer.setPrincipalAmount(getDoubleValue(row, "monto_capital"));
 
         return customer;
     }
@@ -317,6 +410,7 @@ public class CustomerSyncService {
         // Actualizar datos demográficos
         LocalDate birthDate = getDateValue(row, "fecha_nacimiento");
         customer.setBirthDate(birthDate);
+        customer.setAge(getIntegerValue(row, "edad"));
         customer.setMaritalStatus(getStringValue(row, "estado_civil"));
 
         // Actualizar información laboral
@@ -331,6 +425,14 @@ public class CustomerSyncService {
 
         // Actualizar referencias
         customer.setPersonalReference(getStringValue(row, "referencia_personal"));
+
+        // Actualizar cuenta (número de cuenta del sistema)
+        customer.setAccountNumber(getStringValue(row, "numero_cuenta_linea_prestamo"));
+
+        // Actualizar información de deuda/mora
+        customer.setOverdueDays(getIntegerValue(row, "dias_mora"));
+        customer.setOverdueAmount(getDoubleValue(row, "monto_mora"));
+        customer.setPrincipalAmount(getDoubleValue(row, "monto_capital"));
     }
 
     /**
@@ -367,11 +469,123 @@ public class CustomerSyncService {
     }
 
     /**
+     * Obtiene un valor Integer de la fila
+     */
+    private Integer getIntegerValue(Map<String, Object> row, String columnName) {
+        Object value = row.get(columnName);
+        if (value == null) return null;
+
+        try {
+            if (value instanceof Number) {
+                return ((Number) value).intValue();
+            } else {
+                String strValue = value.toString().trim();
+                // Si el valor tiene decimales (ej: "71.0"), convertir primero a double
+                if (strValue.contains(".")) {
+                    return (int) Double.parseDouble(strValue);
+                } else {
+                    return Integer.parseInt(strValue);
+                }
+            }
+        } catch (NumberFormatException e) {
+            System.err.println("⚠️ Error parseando Integer del campo '" + columnName + "': " + value);
+            return null;
+        }
+    }
+
+    /**
+     * Obtiene un valor Double de la fila
+     */
+    private Double getDoubleValue(Map<String, Object> row, String columnName) {
+        Object value = row.get(columnName);
+        if (value == null) return null;
+
+        try {
+            if (value instanceof Number) {
+                return ((Number) value).doubleValue();
+            } else {
+                return Double.parseDouble(value.toString().trim());
+            }
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
      * Calcula la edad desde la fecha de nacimiento
      */
     private Integer calculateAge(LocalDate birthDate) {
         if (birthDate == null) return null;
         return Period.between(birthDate, LocalDate.now()).getYears();
+    }
+
+    /**
+     * Mapea las columnas de la tabla dinámica (nombres de financiera) a nombres del sistema
+     * usando la configuración de cabeceras
+     */
+    private Map<String, Object> mapColumnsToSystemFields(Map<String, Object> row, SubPortfolio subPortfolio, LoadType loadType) {
+        // Obtener configuraciones de cabecera para este subportfolio
+        List<HeaderConfiguration> headerConfigs = headerConfigurationRepository
+                .findBySubPortfolioAndLoadType(subPortfolio, loadType);
+
+        System.out.println("🔍 [MAPEO] Configuraciones encontradas: " + headerConfigs.size());
+
+        // Crear mapa con columnas del sistema
+        Map<String, Object> mappedRow = new HashMap<>();
+
+        // Construir mapa de headerName -> systemFieldCode
+        Map<String, String> columnMapping = new HashMap<>();
+        for (HeaderConfiguration config : headerConfigs) {
+            if (config.getFieldDefinition() != null) {
+                String headerName = sanitizeColumnName(config.getHeaderName());
+                String systemFieldCode = config.getFieldDefinition().getFieldCode();
+                columnMapping.put(headerName, systemFieldCode);
+                System.out.println("   ✓ Mapeo registrado: '" + config.getHeaderName() + "' (sanitized: '" + headerName + "') → '" + systemFieldCode + "' (FieldDef ID: " + config.getFieldDefinition().getId() + ")");
+            } else {
+                System.out.println("   ⚠️ Config sin FieldDefinition: '" + config.getHeaderName() + "' (ID config: " + config.getId() + ")");
+            }
+        }
+
+        System.out.println("🔍 [MAPEO] Columnas en el row: " + row.keySet());
+
+        // Aplicar el mapeo
+        for (Map.Entry<String, Object> entry : row.entrySet()) {
+            String columnName = entry.getKey();
+            Object value = entry.getValue();
+
+            // Si existe mapeo, usar el nombre del sistema, sino usar el nombre original
+            String targetColumnName = columnMapping.getOrDefault(columnName, columnName);
+            mappedRow.put(targetColumnName, value);
+
+            // Debug log
+            if (columnMapping.containsKey(columnName)) {
+                System.out.println("🗺️ Mapeo aplicado: '" + columnName + "' → '" + targetColumnName + "' = " + value);
+            }
+        }
+
+        // Log final para verificar si numero_cuenta_linea_prestamo está en el mappedRow
+        System.out.println("🔍 [MAPEO] MappedRow contiene 'numero_cuenta_linea_prestamo': " +
+                         mappedRow.containsKey("numero_cuenta_linea_prestamo"));
+        if (mappedRow.containsKey("numero_cuenta_linea_prestamo")) {
+            System.out.println("   💰 Valor: " + mappedRow.get("numero_cuenta_linea_prestamo"));
+        }
+
+        return mappedRow;
+    }
+
+    /**
+     * Sanitiza el nombre de columna (igual que en HeaderConfigurationCommandServiceImpl)
+     */
+    private String sanitizeColumnName(String columnName) {
+        if (columnName == null) return null;
+        return columnName.toLowerCase()
+                .replaceAll("[áàäâ]", "a")
+                .replaceAll("[éèëê]", "e")
+                .replaceAll("[íìïî]", "i")
+                .replaceAll("[óòöô]", "o")
+                .replaceAll("[úùüû]", "u")
+                .replaceAll("ñ", "n")
+                .replaceAll("[^a-z0-9_]", "_");
     }
 
     /**

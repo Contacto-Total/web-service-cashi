@@ -21,7 +21,7 @@ public class ManagementQueryServiceImpl implements ManagementQueryService {
 
     @Override
     public Optional<Management> handle(GetManagementByIdQuery query) {
-        return repository.findByManagementId_ManagementId(query.managementId());
+        return repository.findById(query.id());
     }
 
     @Override
@@ -37,7 +37,7 @@ public class ManagementQueryServiceImpl implements ManagementQueryService {
 
     @Override
     public List<Management> handle(GetManagementsByCampaignQuery query) {
-        return repository.findByCampaignId(query.campaignId());
+        return repository.findByCampaign_Id(query.campaignId());
     }
 
     @Override

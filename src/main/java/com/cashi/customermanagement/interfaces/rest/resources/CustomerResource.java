@@ -8,6 +8,10 @@ public record CustomerResource(
         String customerId,
         String identificationCode,
         String accountNumber,
+        // Información financiera/deuda
+        Integer overdueDays,
+        Double overdueAmount,
+        Double principalAmount,
         String documentNumber,
         String fullName,
         String documentType,

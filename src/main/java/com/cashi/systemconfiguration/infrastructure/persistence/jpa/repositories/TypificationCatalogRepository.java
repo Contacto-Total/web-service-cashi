@@ -16,7 +16,7 @@ public interface TypificationCatalogRepository extends JpaRepository<Typificatio
 
     List<TypificationCatalog> findByClassificationType(TypificationCatalog.ClassificationType classificationType);
 
-    @Query("SELECT t FROM TypificationCatalog t WHERE t.deletedAt IS NULL AND t.isActive = 1 ORDER BY t.displayOrder")
+    @Query("SELECT t FROM TypificationCatalog t LEFT JOIN FETCH t.parentTypification WHERE t.deletedAt IS NULL AND t.isActive = 1 ORDER BY t.displayOrder")
     List<TypificationCatalog> findAllActive();
 
     @Query("SELECT t FROM TypificationCatalog t WHERE t.classificationType = :type AND t.deletedAt IS NULL AND t.isActive = 1 ORDER BY t.hierarchyLevel, t.displayOrder")

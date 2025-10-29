@@ -56,4 +56,17 @@ public interface ContactMethodRepository extends JpaRepository<ContactMethod, Lo
         @Param("subtype") String subtype,
         @Param("value") String value
     );
+
+    /**
+     * Busca métodos de contacto por subtipo y valor SIN filtrar por tenant (búsqueda multi-tenant)
+     */
+    @Query("SELECT DISTINCT cm FROM ContactMethod cm " +
+           "LEFT JOIN FETCH cm.customer c " +
+           "LEFT JOIN FETCH c.contactMethods " +
+           "WHERE cm.subtype = :subtype " +
+           "AND cm.value = :value")
+    List<ContactMethod> findAllBySubtypeAndValueWithCustomer(
+        @Param("subtype") String subtype,
+        @Param("value") String value
+    );
 }

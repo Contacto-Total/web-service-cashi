@@ -236,20 +236,91 @@ public class CustomerController {
         };
     }
 
-    @Operation(summary = "Obtener clientes más recientes", description = "Retorna los últimos 5 clientes agregados")
+    @Operation(summary = "Buscar clientes en TODOS los tenants (búsqueda multi-tenant global)",
+               description = "Busca clientes que coincidan con el criterio SIN filtrar por tenant. Útil para encontrar duplicados entre diferentes inquilinos.")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "200", description = "Clientes encontrados (puede ser lista vacía)"),
+        @ApiResponse(responseCode = "400", description = "Criterio de búsqueda inválido")
+    })
+    @GetMapping("/search-all-tenants")
+    public ResponseEntity<?> searchCustomersAcrossAllTenants(
+            @Parameter(description = "Criterio de búsqueda: documento, numero_cuenta, telefono_principal",
+                       required = true, example = "documento") @RequestParam String searchBy,
+            @Parameter(description = "Valor a buscar", required = true, example = "12345678") @RequestParam String value) {
+
+        System.out.println("🔍 Búsqueda multi-tenant GLOBAL: searchBy=" + searchBy + ", value=" + value);
+
+        // Buscar según el criterio especificado SIN filtro de tenantId
+        return switch (searchBy.toLowerCase()) {
+            case "documento" -> {
+                var customers = customerRepository.findAllByDocumentWithContactMethods(value);
+                System.out.println("✅ Encontrados " + customers.size() + " clientes por documento en todos los tenants");
+                var resources = customers.stream()
+                        .map(assembler::toResourceFromEntity)
+                        .toList();
+                yield ResponseEntity.ok(resources);
+            }
+
+            case "telefono_principal" -> {
+                var contactMethods = contactMethodRepository.findAllBySubtypeAndValueWithCustomer("telefono_principal", value);
+                System.out.println("✅ Encontrados " + contactMethods.size() + " clientes por telefono_principal en todos los tenants");
+                var resources = contactMethods.stream()
+                        .map(cm -> assembler.toResourceFromEntity(cm.getCustomer()))
+                        .toList();
+                yield ResponseEntity.ok(resources);
+            }
+
+            case "numero_cuenta" -> {
+                var customers = customerRepository.findAllByAccountNumberWithContactMethods(value);
+                System.out.println("✅ Encontrados " + customers.size() + " clientes por numero_cuenta en todos los tenants");
+                var resources = customers.stream()
+                        .map(assembler::toResourceFromEntity)
+                        .toList();
+                yield ResponseEntity.ok(resources);
+            }
+
+            default -> {
+                System.out.println("❌ Criterio de búsqueda inválido: " + searchBy);
+                Map<String, String> errorResponse = new HashMap<>();
+                errorResponse.put("error", "Criterio de búsqueda inválido");
+                errorResponse.put("message", "Criterios válidos: documento, numero_cuenta, telefono_principal");
+                yield ResponseEntity.badRequest().body(errorResponse);
+            }
+        };
+    }
+
+    @Operation(summary = "Obtener clientes más recientes", description = "Retorna los últimos 6 clientes buscados")
     @ApiResponse(responseCode = "200", description = "Lista de clientes recientes obtenida")
     @GetMapping("/recent")
     public ResponseEntity<List<Map<String, String>>> getRecentCustomers() {
-        var customers = customerRepository.findTop5ByOrderByIdDesc();
+        var customers = customerRepository.findTop6ByLastAccessedAtNotNullOrderByLastAccessedAtDesc();
         var simplified = customers.stream()
                 .map(customer -> {
                     Map<String, String> map = new HashMap<>();
-                    map.put("document", customer.getIdentificationCode());
+                    map.put("document", customer.getDocument());
                     map.put("fullName", customer.getFullName());
+                    map.put("tenantName", customer.getTenantName() != null ? customer.getTenantName() : "N/A");
+                    map.put("portfolioName", customer.getPortfolioName() != null ? customer.getPortfolioName() : "N/A");
+                    map.put("subPortfolioName", customer.getSubPortfolioName() != null ? customer.getSubPortfolioName() : "N/A");
                     return map;
                 })
                 .toList();
         return ResponseEntity.ok(simplified);
+    }
+
+    @Operation(summary = "Registrar acceso a cliente", description = "Actualiza la fecha de último acceso del cliente")
+    @ApiResponse(responseCode = "200", description = "Acceso registrado exitosamente")
+    @PostMapping("/{customerId}/access")
+    public ResponseEntity<Void> registerCustomerAccess(
+            @Parameter(description = "ID del cliente", required = true) @PathVariable Long customerId) {
+        var customerOpt = customerRepository.findById(customerId);
+        if (customerOpt.isPresent()) {
+            var customer = customerOpt.get();
+            customer.updateLastAccessedAt();
+            customerRepository.save(customer);
+            System.out.println("✅ Acceso registrado para cliente ID: " + customerId);
+        }
+        return ResponseEntity.ok().build();
     }
 
     @Operation(summary = "Obtener cliente por código de identificación y tenant",

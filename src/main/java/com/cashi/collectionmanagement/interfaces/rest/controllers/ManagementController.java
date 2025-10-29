@@ -46,9 +46,12 @@ public class ManagementController {
         System.out.println("📦 Request Body:");
         System.out.println("   - customerId: " + request.customerId());
         System.out.println("   - advisorId: " + request.advisorId());
+        System.out.println("   - tenantId: " + request.tenantId());
+        System.out.println("   - portfolioId: " + request.portfolioId());
         System.out.println("   - campaignId: " + request.campaignId());
-        System.out.println("   - categoryCode: " + request.categoryCode());
-        System.out.println("   - typificationCode: " + request.typificationCode());
+        System.out.println("   - typificationLevel1Id: " + request.typificationLevel1Id());
+        System.out.println("   - typificationLevel2Id: " + request.typificationLevel2Id());
+        System.out.println("   - typificationLevel3Id: " + request.typificationLevel3Id());
         System.out.println("   - observations: " + request.observations());
 
         if (request.dynamicFields() != null && !request.dynamicFields().isEmpty()) {
@@ -81,7 +84,7 @@ public class ManagementController {
     })
     @GetMapping("/{managementId}")
     public ResponseEntity<ManagementResource> getManagementById(
-            @Parameter(description = "ID de la gestión") @PathVariable String managementId) {
+            @Parameter(description = "ID de la gestión") @PathVariable Long managementId) {
         var query = new GetManagementByIdQuery(managementId);
         return queryService.handle(query)
                 .map(management -> ResponseEntity.ok(
@@ -91,7 +94,7 @@ public class ManagementController {
 
     @PutMapping("/{managementId}")
     public ResponseEntity<ManagementResource> updateManagement(
-            @PathVariable String managementId,
+            @PathVariable Long managementId,
             @RequestBody UpdateManagementRequest request) {
         var command = UpdateManagementCommandFromResourceAssembler.toCommandFromResource(managementId, request);
         var management = commandService.handle(command);
@@ -121,7 +124,7 @@ public class ManagementController {
     }
 
     @GetMapping("/campaign/{campaignId}")
-    public ResponseEntity<List<ManagementResource>> getManagementsByCampaign(@PathVariable String campaignId) {
+    public ResponseEntity<List<ManagementResource>> getManagementsByCampaign(@PathVariable Long campaignId) {
         var query = new GetManagementsByCampaignQuery(campaignId);
         var managements = queryService.handle(query);
         var resources = managements.stream()
@@ -179,7 +182,7 @@ public class ManagementController {
     })
     @PostMapping("/{managementId}/payment")
     public ResponseEntity<ManagementResource> registerPayment(
-            @Parameter(description = "ID de la gestión") @PathVariable String managementId,
+            @Parameter(description = "ID de la gestión") @PathVariable Long managementId,
             @RequestBody RegisterPaymentRequest request) {
         var command = RegisterPaymentCommandFromResourceAssembler.toCommandFromResource(managementId, request);
         var management = commandService.handle(command);

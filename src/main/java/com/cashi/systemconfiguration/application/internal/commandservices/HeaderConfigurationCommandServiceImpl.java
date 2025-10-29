@@ -1,5 +1,6 @@
 package com.cashi.systemconfiguration.application.internal.commandservices;
 
+import com.cashi.customermanagement.application.internal.commandservices.CustomerSyncService;
 import com.cashi.customermanagement.domain.model.aggregates.Customer;
 import com.cashi.customermanagement.domain.model.entities.ContactMethod;
 import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.ContactMethodRepository;
@@ -32,6 +33,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     private final JdbcTemplate jdbcTemplate;
     private final CustomerRepository customerRepository;
     private final ContactMethodRepository contactMethodRepository;
+    private final CustomerSyncService customerSyncService;
 
     public HeaderConfigurationCommandServiceImpl(
             HeaderConfigurationRepository headerConfigurationRepository,
@@ -39,13 +41,15 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             FieldDefinitionRepository fieldDefinitionRepository,
             JdbcTemplate jdbcTemplate,
             CustomerRepository customerRepository,
-            ContactMethodRepository contactMethodRepository) {
+            ContactMethodRepository contactMethodRepository,
+            CustomerSyncService customerSyncService) {
         this.headerConfigurationRepository = headerConfigurationRepository;
         this.subPortfolioRepository = subPortfolioRepository;
         this.fieldDefinitionRepository = fieldDefinitionRepository;
         this.jdbcTemplate = jdbcTemplate;
         this.customerRepository = customerRepository;
         this.contactMethodRepository = contactMethodRepository;
+        this.customerSyncService = customerSyncService;
     }
 
     @Override
@@ -507,6 +511,26 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         logger.info("Importación completada: {} filas insertadas, {} fallidas", insertedRows, failedRows);
 
+        // 🔄 Sincronizar clientes desde la tabla dinámica a la tabla clientes
+        if (insertedRows > 0) {
+            logger.info("🔄 Iniciando sincronización de clientes para SubPortfolio ID: {}", subPortfolioId);
+            try {
+                CustomerSyncService.SyncResult syncResult = customerSyncService.syncCustomersFromSubPortfolio(subPortfolioId.longValue());
+                logger.info("✅ Sincronización completada: {} clientes creados, {} actualizados",
+                        syncResult.getCustomersCreated(), syncResult.getCustomersUpdated());
+
+                // Agregar información de sincronización al resultado
+                result.put("syncCustomersCreated", syncResult.getCustomersCreated());
+                result.put("syncCustomersUpdated", syncResult.getCustomersUpdated());
+                if (syncResult.hasErrors()) {
+                    result.put("syncErrors", syncResult.getErrors());
+                }
+            } catch (Exception e) {
+                logger.error("❌ Error en sincronización de clientes: {}", e.getMessage(), e);
+                result.put("syncError", "Error al sincronizar clientes: " + e.getMessage());
+            }
+        }
+
         return result;
     }
 
@@ -673,7 +697,16 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
                 // Guardar en el mapa usando el fieldCode de la definición
                 if (header.getFieldDefinition() != null && value != null) {
-                    transformedData.put(header.getFieldDefinition().getFieldCode(), value);
+                    String fieldCode = header.getFieldDefinition().getFieldCode();
+                    transformedData.put(fieldCode, value);
+
+                    // Log especial para numero_cuenta_linea_prestamo
+                    if ("numero_cuenta_linea_prestamo".equals(fieldCode)) {
+                        logger.info("💰 [MAPEO] NUM_CUENTA encontrado: header='{}' → fieldCode='{}' = '{}'",
+                                  header.getHeaderName(), fieldCode, value);
+                    }
+                } else if (header.getFieldDefinition() == null) {
+                    logger.warn("⚠️ Header '{}' NO tiene FieldDefinition asociado", header.getHeaderName());
                 }
             }
 
@@ -785,16 +818,38 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     newCustomer.setPersonalReference(referenciaPersonal);
                 }
 
+                String numeroCuentaLineaPrestamo = transformedData.get("numero_cuenta_linea_prestamo");
+                logger.debug("🔍 [ACCOUNT] Buscando 'numero_cuenta_linea_prestamo' en transformedData");
+                logger.debug("🔍 [ACCOUNT] Valor encontrado: '{}'", numeroCuentaLineaPrestamo);
+                logger.debug("🔍 [ACCOUNT] Campos en transformedData: {}", transformedData.keySet());
+
+                if (numeroCuentaLineaPrestamo != null && !numeroCuentaLineaPrestamo.trim().isEmpty()) {
+                    newCustomer.setAccountNumber(numeroCuentaLineaPrestamo);
+                    logger.info("💰 AccountNumber SETEADO: {}", numeroCuentaLineaPrestamo);
+                } else {
+                    logger.warn("⚠️ AccountNumber NO encontrado en transformedData para cliente: {}", identificationCode);
+                }
+
                 Customer savedCustomer = customerRepository.save(newCustomer);
-                logger.info("✅ Cliente creado automáticamente: codigo_identificacion={}, documento={}, nombre={}",
-                           identificationCode, documento, nombreCompleto);
+                logger.info("✅ Cliente creado automáticamente: codigo_identificacion={}, documento={}, nombre={}, accountNumber={}",
+                           identificationCode, documento, nombreCompleto, savedCustomer.getAccountNumber());
 
                 // Crear métodos de contacto para el nuevo cliente
                 createContactMethodsForCustomer(savedCustomer, transformedData, headers);
             } else {
                 logger.debug("Cliente ya existe con codigo_identificacion={}", identificationCode);
+
+                // Actualizar accountNumber si viene en los datos
+                Customer customer = existingCustomer.get();
+                String numeroCuentaLineaPrestamo = transformedData.get("numero_cuenta_linea_prestamo");
+                if (numeroCuentaLineaPrestamo != null && !numeroCuentaLineaPrestamo.trim().isEmpty()) {
+                    customer.setAccountNumber(numeroCuentaLineaPrestamo);
+                    customerRepository.save(customer);
+                    logger.debug("AccountNumber actualizado para cliente existente: {}", identificationCode);
+                }
+
                 // También crear métodos de contacto para clientes existentes
-                createContactMethodsForCustomer(existingCustomer.get(), transformedData, headers);
+                createContactMethodsForCustomer(customer, transformedData, headers);
             }
 
         } catch (Exception e) {

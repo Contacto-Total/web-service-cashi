@@ -1,7 +1,7 @@
 package com.cashi.collectionmanagement.domain.model.commands;
 
 public record UpdateManagementCommand(
-    String managementId,
+    Long id,
 
     // Categoría: Grupo al que pertenece la tipificación
     String categoryCode,

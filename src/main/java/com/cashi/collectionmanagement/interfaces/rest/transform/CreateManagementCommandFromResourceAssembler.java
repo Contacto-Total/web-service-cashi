@@ -9,14 +9,15 @@ public class CreateManagementCommandFromResourceAssembler {
         return new CreateManagementCommand(
                 resource.customerId(),
                 resource.advisorId(),
+                // Multi-tenant fields
+                resource.tenantId(),
+                resource.portfolioId(),
+                resource.subPortfolioId(),
                 resource.campaignId(),
-                // Categoría y Tipificación
-                resource.categoryCode(),
-                resource.categoryDescription(),
-                resource.typificationCode(),
-                resource.typificationDescription(),
-                resource.typificationRequiresPayment(),
-                resource.typificationRequiresSchedule(),
+                // Tipificaciones jerárquicas (3 niveles)
+                resource.typificationLevel1Id(),
+                resource.typificationLevel2Id(),
+                resource.typificationLevel3Id(),
                 resource.observations(),
                 resource.dynamicFields()
         );

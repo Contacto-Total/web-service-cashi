@@ -23,8 +23,20 @@ public class Customer extends AggregateRoot {
     @Column(name = "id_inquilino")
     private Long tenantId;
 
+    @Column(name = "nombre_inquilino")
+    private String tenantName;
+
+    @Column(name = "id_cartera")
+    private Long portfolioId;
+
+    @Column(name = "nombre_cartera")
+    private String portfolioName;
+
     @Column(name = "id_subcartera")
     private Long subPortfolioId;
+
+    @Column(name = "nombre_subcartera")
+    private String subPortfolioName;
 
     @Column(name = "id_cliente")
     private String customerId;
@@ -83,11 +95,24 @@ public class Customer extends AggregateRoot {
     @Column(name = "numero_cuenta_linea_prestamo")
     private String accountNumber;
 
+    // Información de deuda/mora
+    @Column(name = "dias_mora")
+    private Integer overdueDays;
+
+    @Column(name = "monto_mora")
+    private Double overdueAmount;
+
+    @Column(name = "monto_capital")
+    private Double principalAmount;
+
     @Column(name = "estado", length = 20)
     private String status;
 
     @Column(name = "fecha_importacion")
     private LocalDate importDate;
+
+    @Column(name = "ultimo_acceso")
+    private LocalDate lastAccessedAt;
 
     @OneToMany(mappedBy = "customer", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<ContactMethod> contactMethods = new ArrayList<>();
@@ -110,8 +135,24 @@ public class Customer extends AggregateRoot {
         this.tenantId = tenantId;
     }
 
+    public void setTenantName(String tenantName) {
+        this.tenantName = tenantName;
+    }
+
+    public void setPortfolioId(Long portfolioId) {
+        this.portfolioId = portfolioId;
+    }
+
+    public void setPortfolioName(String portfolioName) {
+        this.portfolioName = portfolioName;
+    }
+
     public void setSubPortfolioId(Long subPortfolioId) {
         this.subPortfolioId = subPortfolioId;
+    }
+
+    public void setSubPortfolioName(String subPortfolioName) {
+        this.subPortfolioName = subPortfolioName;
     }
 
     public void setCustomerId(String customerId) {
@@ -191,12 +232,32 @@ public class Customer extends AggregateRoot {
         this.accountNumber = accountNumber;
     }
 
+    public void setOverdueDays(Integer overdueDays) {
+        this.overdueDays = overdueDays;
+    }
+
+    public void setOverdueAmount(Double overdueAmount) {
+        this.overdueAmount = overdueAmount;
+    }
+
+    public void setPrincipalAmount(Double principalAmount) {
+        this.principalAmount = principalAmount;
+    }
+
     public void setStatus(String status) {
         this.status = status;
     }
 
     public void setImportDate(LocalDate importDate) {
         this.importDate = importDate;
+    }
+
+    public LocalDate getLastAccessedAt() {
+        return lastAccessedAt;
+    }
+
+    public void updateLastAccessedAt() {
+        this.lastAccessedAt = LocalDate.now();
     }
 
     private Integer calculateAge(LocalDate birthDate) {

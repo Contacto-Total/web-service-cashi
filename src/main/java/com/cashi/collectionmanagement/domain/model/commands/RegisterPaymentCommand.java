@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 public record RegisterPaymentCommand(
-    String managementId,
+    Long managementId,
     BigDecimal amount,
     LocalDate scheduledDate,
     String paymentMethodType,

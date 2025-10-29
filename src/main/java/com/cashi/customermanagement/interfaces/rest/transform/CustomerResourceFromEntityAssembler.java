@@ -33,26 +33,15 @@ public class CustomerResourceFromEntityAssembler {
                 ))
                 .collect(Collectors.toList());
 
-        // Buscar información de subcartera si existe
-        Long subPortfolioId = entity.getSubPortfolioId();
-        String subPortfolioName = null;
+        // Usar los nombres directamente desde la entidad Customer
+        // Ya no necesitamos hacer consultas adicionales porque ahora están guardados directamente
         String subPortfolioCode = null;
-        String portfolioName = null;
-        String tenantName = null;
 
-        if (subPortfolioId != null) {
-            // Buscar la información de la subcartera
-            var subPortfolioOpt = subPortfolioRepository.findById(subPortfolioId.intValue());
+        // Solo buscar el código si tenemos el ID y aún no está en la entidad
+        if (entity.getSubPortfolioId() != null) {
+            var subPortfolioOpt = subPortfolioRepository.findById(entity.getSubPortfolioId().intValue());
             if (subPortfolioOpt.isPresent()) {
-                SubPortfolio subPortfolio = subPortfolioOpt.get();
-                subPortfolioName = subPortfolio.getSubPortfolioName();
-                subPortfolioCode = subPortfolio.getSubPortfolioCode();
-                if (subPortfolio.getPortfolio() != null) {
-                    portfolioName = subPortfolio.getPortfolio().getPortfolioName();
-                    if (subPortfolio.getPortfolio().getTenant() != null) {
-                        tenantName = subPortfolio.getPortfolio().getTenant().getTenantName();
-                    }
-                }
+                subPortfolioCode = subPortfolioOpt.get().getSubPortfolioCode();
             }
         }
 
@@ -61,6 +50,10 @@ public class CustomerResourceFromEntityAssembler {
                 entity.getCustomerId(),
                 entity.getIdentificationCode(),
                 entity.getAccountNumber(),
+                // Información financiera/deuda
+                entity.getOverdueDays(),
+                entity.getOverdueAmount(),
+                entity.getPrincipalAmount(),
                 entity.getDocument(),
                 entity.getFullName(),
                 "DNI", // default document type
@@ -87,12 +80,12 @@ public class CustomerResourceFromEntityAssembler {
                 entity.getImportDate(),
                 // Métodos de contacto
                 contactMethods,
-                // Información de subcartera
-                subPortfolioId,
-                subPortfolioName,
+                // Información de jerarquía (ahora desde los campos directos)
+                entity.getSubPortfolioId(),
+                entity.getSubPortfolioName(),
                 subPortfolioCode,
-                portfolioName,
-                tenantName
+                entity.getPortfolioName(),
+                entity.getTenantName()
         );
     }
 }

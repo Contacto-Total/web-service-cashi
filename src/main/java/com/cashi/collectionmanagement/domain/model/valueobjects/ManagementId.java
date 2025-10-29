@@ -12,6 +12,7 @@ import java.util.UUID;
 @NoArgsConstructor
 public class ManagementId implements ValueObject {
 
+    @jakarta.persistence.Column(name = "id")
     private String managementId;
 
     public ManagementId(String managementId) {

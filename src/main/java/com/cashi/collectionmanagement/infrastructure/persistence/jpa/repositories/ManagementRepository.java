@@ -11,13 +11,14 @@ import java.util.Optional;
 @Repository
 public interface ManagementRepository extends JpaRepository<Management, Long> {
 
-    Optional<Management> findByManagementId_ManagementId(String managementId);
+    // NOTE: findById(Long id) is inherited from JpaRepository
+    // No need for findByManagementId_ManagementId since ManagementId is removed
 
     List<Management> findByCustomerId(String customerId);
 
     List<Management> findByAdvisorId(String advisorId);
 
-    List<Management> findByCampaignId(String campaignId);
+    List<Management> findByCampaign_Id(Long campaignId);
 
     List<Management> findByManagementDateBetween(LocalDateTime startDate, LocalDateTime endDate);
 
