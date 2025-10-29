@@ -34,14 +34,4 @@ public class ManagementQueryServiceImpl implements ManagementQueryService {
     public List<Management> handle(GetManagementsByAdvisorQuery query) {
         return repository.findByAdvisorId(query.advisorId());
     }
-
-    @Override
-    public List<Management> handle(GetManagementsByCampaignQuery query) {
-        return repository.findByCampaign_Id(query.campaignId());
-    }
-
-    @Override
-    public List<Management> handle(GetManagementsByDateRangeQuery query) {
-        return repository.findByManagementDateBetween(query.startDate(), query.endDate());
-    }
 }

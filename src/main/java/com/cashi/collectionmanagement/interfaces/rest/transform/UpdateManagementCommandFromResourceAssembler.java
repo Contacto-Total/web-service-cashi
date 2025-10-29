@@ -8,13 +8,16 @@ public class UpdateManagementCommandFromResourceAssembler {
     public static UpdateManagementCommand toCommandFromResource(Long id, UpdateManagementRequest resource) {
         return new UpdateManagementCommand(
                 id,
-                resource.categoryCode(),
-                resource.categoryDescription(),
-                resource.typificationCode(),
-                resource.typificationDescription(),
+                resource.phone(),
+                resource.level1Id(),
+                resource.level1Name(),
+                resource.level2Id(),
+                resource.level2Name(),
+                resource.level3Id(),
+                resource.level3Name(),
+                resource.observations(),
                 resource.typificationRequiresPayment(),
-                resource.typificationRequiresSchedule(),
-                resource.observations()
+                resource.typificationRequiresSchedule()
         );
     }
 }

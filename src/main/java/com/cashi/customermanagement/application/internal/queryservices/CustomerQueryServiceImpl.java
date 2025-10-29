@@ -33,4 +33,16 @@ public class CustomerQueryServiceImpl {
     public List<Customer> getAllCustomers() {
         return customerRepository.findAllWithContactMethods();
     }
+
+    /**
+     * Busca un cliente por teléfono dentro de un tenant, portfolio y subportfolio específico
+     * @param phoneNumber Número de teléfono a buscar
+     * @param tenantId ID del inquilino
+     * @param portfolioId ID de la cartera
+     * @param subPortfolioId ID de la subcartera
+     * @return Optional con el cliente encontrado
+     */
+    public Optional<Customer> getCustomerByPhone(String phoneNumber, Long tenantId, Long portfolioId, Long subPortfolioId) {
+        return customerRepository.findByPhoneAndTenantAndPortfolio(phoneNumber, tenantId, portfolioId, subPortfolioId);
+    }
 }

@@ -2,10 +2,6 @@ package com.cashi.collectionmanagement.application.internal.commandservices;
 
 import com.cashi.collectionmanagement.domain.model.aggregates.Management;
 import com.cashi.collectionmanagement.domain.model.commands.*;
-import com.cashi.collectionmanagement.domain.model.entities.ManagementTypification;
-import com.cashi.collectionmanagement.domain.model.valueobjects.ContactResult;
-import com.cashi.collectionmanagement.domain.model.valueobjects.ManagementType;
-import com.cashi.collectionmanagement.domain.model.valueobjects.PaymentMethod;
 import com.cashi.collectionmanagement.domain.services.ManagementCommandService;
 import com.cashi.collectionmanagement.infrastructure.persistence.jpa.repositories.ManagementRepository;
 import com.cashi.paymentprocessing.domain.model.aggregates.PaymentSchedule;
@@ -14,8 +10,7 @@ import com.cashi.paymentprocessing.domain.services.InstallmentStatusCommandServi
 import com.cashi.paymentprocessing.infrastructure.persistence.jpa.repositories.PaymentScheduleRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.TenantRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.PortfolioRepository;
-import com.cashi.shared.infrastructure.persistence.jpa.repositories.CampaignRepository;
-import com.cashi.systemconfiguration.infrastructure.persistence.jpa.repositories.TypificationCatalogRepository;
+import com.cashi.shared.infrastructure.persistence.jpa.repositories.SubPortfolioRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
@@ -33,8 +28,7 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
     private final ObjectMapper objectMapper;
     private final TenantRepository tenantRepository;
     private final PortfolioRepository portfolioRepository;
-    private final CampaignRepository campaignRepository;
-    private final TypificationCatalogRepository typificationCatalogRepository;
+    private final SubPortfolioRepository subPortfolioRepository;
 
     public ManagementCommandServiceImpl(ManagementRepository repository,
                                        PaymentScheduleRepository paymentScheduleRepository,
@@ -42,16 +36,14 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
                                        ObjectMapper objectMapper,
                                        TenantRepository tenantRepository,
                                        PortfolioRepository portfolioRepository,
-                                       CampaignRepository campaignRepository,
-                                       TypificationCatalogRepository typificationCatalogRepository) {
+                                       SubPortfolioRepository subPortfolioRepository) {
         this.repository = repository;
         this.paymentScheduleRepository = paymentScheduleRepository;
         this.installmentStatusService = installmentStatusService;
         this.objectMapper = objectMapper;
         this.tenantRepository = tenantRepository;
         this.portfolioRepository = portfolioRepository;
-        this.campaignRepository = campaignRepository;
-        this.typificationCatalogRepository = typificationCatalogRepository;
+        this.subPortfolioRepository = subPortfolioRepository;
     }
 
     @Override
@@ -62,6 +54,7 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
         System.out.println("📋 Tabla destino: gestiones");
         System.out.println("👤 Cliente ID: " + command.customerId());
         System.out.println("👨‍💼 Asesor ID: " + command.advisorId());
+        System.out.println("📞 Teléfono: " + command.phone());
 
         // 1. Obtener entidades de multi-tenancy
         var tenant = tenantRepository.findById(command.tenantId())
@@ -72,35 +65,38 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
                         .orElseThrow(() -> new IllegalArgumentException("Portfolio not found: " + command.portfolioId()))
                 : null;
 
-        var campaign = command.campaignId() != null
-                ? campaignRepository.findById(command.campaignId())
-                        .orElseThrow(() -> new IllegalArgumentException("Campaign not found: " + command.campaignId()))
+        var subPortfolio = command.subPortfolioId() != null
+                ? subPortfolioRepository.findById(command.subPortfolioId())
+                        .orElseThrow(() -> new IllegalArgumentException("SubPortfolio not found: " + command.subPortfolioId()))
                 : null;
 
         System.out.println("🏢 Inquilino ID: " + tenant.getId());
         System.out.println("📁 Cartera ID: " + (portfolio != null ? portfolio.getId() : "null"));
-        System.out.println("📢 Campaña ID: " + (campaign != null ? campaign.getId() : "null"));
+        System.out.println("📂 SubCartera ID: " + (subPortfolio != null ? subPortfolio.getId() : "null"));
 
-        // 2. Crear gestión con constructor multi-tenant
+        // 2. Crear gestión con constructor simplificado
         var management = new Management(
             tenant,
             portfolio,
-            campaign,
+            subPortfolio,
             command.customerId(),
-            command.advisorId()
+            command.advisorId(),
+            command.phone()
         );
 
-        // 3. Obtener tipificaciones y crear registros en tabla tipificaciones_gestion
-        var typification1 = typificationCatalogRepository.findById(command.typificationLevel1Id())
-                .orElseThrow(() -> new IllegalArgumentException("Typification Level 1 not found: " + command.typificationLevel1Id()));
-        var typification2 = typificationCatalogRepository.findById(command.typificationLevel2Id())
-                .orElseThrow(() -> new IllegalArgumentException("Typification Level 2 not found: " + command.typificationLevel2Id()));
-        var typification3 = typificationCatalogRepository.findById(command.typificationLevel3Id())
-                .orElseThrow(() -> new IllegalArgumentException("Typification Level 3 not found: " + command.typificationLevel3Id()));
-
-        System.out.println("🏷️  Tipificación Nivel 1: " + typification1.getCode() + " - " + typification1.getName());
-        System.out.println("🏷️  Tipificación Nivel 2: " + typification2.getCode() + " - " + typification2.getName());
-        System.out.println("🏷️  Tipificación Nivel 3: " + typification3.getCode() + " - " + typification3.getName());
+        // 3. Configurar niveles de categorización jerárquica
+        if (command.level1Id() != null) {
+            management.setLevel1(command.level1Id(), command.level1Name());
+            System.out.println("🏷️  Nivel 1: " + command.level1Name());
+        }
+        if (command.level2Id() != null) {
+            management.setLevel2(command.level2Id(), command.level2Name());
+            System.out.println("🏷️  Nivel 2: " + command.level2Name());
+        }
+        if (command.level3Id() != null) {
+            management.setLevel3(command.level3Id(), command.level3Name());
+            System.out.println("🏷️  Nivel 3: " + command.level3Name());
+        }
 
         // 4. Guardar observaciones
         if (command.observations() != null) {
@@ -108,45 +104,16 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
             management.setObservations(command.observations());
         }
 
-        // 5. COMENTADO: Campos dinámicos deshabilitados temporalmente
-        // if (command.dynamicFields() != null && !command.dynamicFields().isEmpty()) {
-        //     try {
-        //         Map<String, Object> enrichedFields = enrichDynamicFieldsWithPendingBalance(
-        //             command.dynamicFields(),
-        //             command.customerId()
-        //         );
-        //
-        //         String dynamicFieldsJson = objectMapper.writeValueAsString(enrichedFields);
-        //         System.out.println("🔧 Campos Dinámicos: " + enrichedFields.size() + " campos");
-        //         management.setDynamicFieldsJson(dynamicFieldsJson);
-        //     } catch (Exception e) {
-        //         System.err.println("❌ Error serializando campos dinámicos: " + e.getMessage());
-        //         e.printStackTrace();
-        //     }
-        // }
-
         System.out.println("----------------------------------------");
         System.out.println("💾 Guardando gestión en BD...");
         Management savedManagement = repository.save(management);
-
-        // 6. Guardar SOLO el último nivel (nivel 3 - hoja) en tabla normalizada tipificaciones_gestion
-        System.out.println("💾 Guardando tipificación final (nivel 3) en tipificaciones_gestion...");
-        management.addClassification(new ManagementTypification(savedManagement, typification3, 3));
-
-        savedManagement = repository.save(savedManagement);
 
         System.out.println("✅ GESTIÓN GUARDADA EXITOSAMENTE");
         System.out.println("   - ID Gestión: " + savedManagement.getId());
         System.out.println("   - Inquilino: " + savedManagement.getTenant().getId());
         System.out.println("   - Cartera: " + (savedManagement.getPortfolio() != null ? savedManagement.getPortfolio().getId() : "null"));
-        System.out.println("   - Campaña: " + (savedManagement.getCampaign() != null ? savedManagement.getCampaign().getId() : "null"));
-        System.out.println("   - Tipificación guardada: Nivel 3 (hoja) - " + typification3.getCode());
+        System.out.println("   - SubCartera: " + (savedManagement.getSubPortfolio() != null ? savedManagement.getSubPortfolio().getId() : "null"));
         System.out.println("========================================");
-
-        // Detectar y guardar cronogramas de pago (campos tipo tabla)
-        if (command.dynamicFields() != null && !command.dynamicFields().isEmpty()) {
-            processPaymentSchedules(command.dynamicFields(), savedManagement);
-        }
 
         return savedManagement;
     }
@@ -156,27 +123,33 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
         var management = repository.findById(command.id())
             .orElseThrow(() -> new IllegalArgumentException("Management not found with id: " + command.id()));
 
-        // Actualizar Categoría
-        if (command.categoryCode() != null) {
-            management.setCategory(
-                command.categoryCode(),
-                command.categoryDescription()
-            );
+        // Actualizar teléfono
+        if (command.phone() != null) {
+            management.setPhone(command.phone());
         }
 
-        // Actualizar Tipificación
-        if (command.typificationCode() != null) {
-            management.setTypification(
-                command.typificationCode(),
-                command.typificationDescription(),
-                command.typificationRequiresPayment(),
-                command.typificationRequiresSchedule()
-            );
+        // Actualizar niveles de categorización
+        if (command.level1Id() != null) {
+            management.setLevel1(command.level1Id(), command.level1Name());
+        }
+        if (command.level2Id() != null) {
+            management.setLevel2(command.level2Id(), command.level2Name());
+        }
+        if (command.level3Id() != null) {
+            management.setLevel3(command.level3Id(), command.level3Name());
         }
 
         // Actualizar observaciones
         if (command.observations() != null) {
             management.setObservations(command.observations());
+        }
+
+        // Actualizar flags de tipificación
+        if (command.typificationRequiresPayment() != null) {
+            management.setTypificationRequiresPayment(command.typificationRequiresPayment());
+        }
+        if (command.typificationRequiresSchedule() != null) {
+            management.setTypificationRequiresSchedule(command.typificationRequiresSchedule());
         }
 
         return repository.save(management);
@@ -206,18 +179,9 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
         System.out.println("✅ Pago registrado: S/ " + command.amount());
         System.out.println("   - Gestión ID: " + command.managementId());
         System.out.println("   - Cliente ID: " + management.getCustomerId());
-        System.out.println("   - Tipificación: " + management.getTypificationCode());
 
-        // Verificar si esta tipificación aplica pagos a cronogramas automáticamente
-        String typificationCode = management.getTypificationCode();
-        boolean appliesPaymentToSchedule = isPaymentApplicableToSchedule(typificationCode);
-
-        if (appliesPaymentToSchedule) {
-            System.out.println("\n🔗 Esta tipificación enlaza pagos con cronogramas pendientes");
-            applyPaymentToPendingSchedules(management.getCustomerId(), command.amount(), command.managementId().toString());
-        } else {
-            System.out.println("\nℹ️  Esta tipificación NO enlaza con cronogramas");
-        }
+        // TODO: Re-implementar lógica de aplicación automática de pagos si es necesario
+        // Por ahora, la lógica de pago se maneja manualmente o por otras reglas
 
         System.out.println("========================================\n");
 

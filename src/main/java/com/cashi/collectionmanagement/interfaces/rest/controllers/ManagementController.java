@@ -15,7 +15,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController
@@ -48,20 +47,12 @@ public class ManagementController {
         System.out.println("   - advisorId: " + request.advisorId());
         System.out.println("   - tenantId: " + request.tenantId());
         System.out.println("   - portfolioId: " + request.portfolioId());
-        System.out.println("   - campaignId: " + request.campaignId());
-        System.out.println("   - typificationLevel1Id: " + request.typificationLevel1Id());
-        System.out.println("   - typificationLevel2Id: " + request.typificationLevel2Id());
-        System.out.println("   - typificationLevel3Id: " + request.typificationLevel3Id());
+        System.out.println("   - subPortfolioId: " + request.subPortfolioId());
+        System.out.println("   - phone: " + request.phone());
+        System.out.println("   - level1: " + request.level1Name() + " (ID: " + request.level1Id() + ")");
+        System.out.println("   - level2: " + request.level2Name() + " (ID: " + request.level2Id() + ")");
+        System.out.println("   - level3: " + request.level3Name() + " (ID: " + request.level3Id() + ")");
         System.out.println("   - observations: " + request.observations());
-
-        if (request.dynamicFields() != null && !request.dynamicFields().isEmpty()) {
-            System.out.println("   - dynamicFields: " + request.dynamicFields().size() + " campos");
-            request.dynamicFields().forEach((key, value) -> {
-                System.out.println("      • " + key + " = " + value);
-            });
-        } else {
-            System.out.println("   - dynamicFields: null o vacío");
-        }
         System.out.println("🌐 ========================================\n");
 
         var command = CreateManagementCommandFromResourceAssembler.toCommandFromResource(request);
@@ -71,7 +62,7 @@ public class ManagementController {
         System.out.println("🌐 ========================================");
         System.out.println("🌐 RESPONSE ENVIADO AL FRONTEND");
         System.out.println("🌐 HTTP Status: 201 CREATED");
-        System.out.println("🌐 Management ID: " + resource.managementId());
+        System.out.println("🌐 Management ID: " + resource.id());
         System.out.println("🌐 ========================================\n");
 
         return new ResponseEntity<>(resource, HttpStatus.CREATED);
@@ -116,28 +107,6 @@ public class ManagementController {
     @GetMapping("/advisor/{advisorId}")
     public ResponseEntity<List<ManagementResource>> getManagementsByAdvisor(@PathVariable String advisorId) {
         var query = new GetManagementsByAdvisorQuery(advisorId);
-        var managements = queryService.handle(query);
-        var resources = managements.stream()
-                .map(ManagementResourceFromEntityAssembler::toResourceFromEntity)
-                .toList();
-        return ResponseEntity.ok(resources);
-    }
-
-    @GetMapping("/campaign/{campaignId}")
-    public ResponseEntity<List<ManagementResource>> getManagementsByCampaign(@PathVariable Long campaignId) {
-        var query = new GetManagementsByCampaignQuery(campaignId);
-        var managements = queryService.handle(query);
-        var resources = managements.stream()
-                .map(ManagementResourceFromEntityAssembler::toResourceFromEntity)
-                .toList();
-        return ResponseEntity.ok(resources);
-    }
-
-    @GetMapping("/date-range")
-    public ResponseEntity<List<ManagementResource>> getManagementsByDateRange(
-            @RequestParam LocalDateTime startDate,
-            @RequestParam LocalDateTime endDate) {
-        var query = new GetManagementsByDateRangeQuery(startDate, endDate);
         var managements = queryService.handle(query);
         var resources = managements.stream()
                 .map(ManagementResourceFromEntityAssembler::toResourceFromEntity)

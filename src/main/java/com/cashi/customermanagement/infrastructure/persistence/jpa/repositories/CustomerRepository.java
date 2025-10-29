@@ -57,4 +57,21 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
 
     @Query("SELECT DISTINCT c FROM Customer c LEFT JOIN FETCH c.contactMethods WHERE c.accountNumber = :accountNumber")
     List<Customer> findAllByAccountNumberWithContactMethods(@Param("accountNumber") String accountNumber);
+
+    // Buscar cliente por teléfono en métodos de contacto con filtros multi-tenant
+    @Query("SELECT DISTINCT c FROM Customer c " +
+           "LEFT JOIN FETCH c.contactMethods cm " +
+           "WHERE c.tenantId = :tenantId " +
+           "AND c.portfolioId = :portfolioId " +
+           "AND c.subPortfolioId = :subPortfolioId " +
+           "AND EXISTS (SELECT 1 FROM ContactMethod cm2 " +
+           "            WHERE cm2.customer = c " +
+           "            AND cm2.contactType = 'telefono' " +
+           "            AND cm2.value = :phoneNumber)")
+    Optional<Customer> findByPhoneAndTenantAndPortfolio(
+        @Param("phoneNumber") String phoneNumber,
+        @Param("tenantId") Long tenantId,
+        @Param("portfolioId") Long portfolioId,
+        @Param("subPortfolioId") Long subPortfolioId
+    );
 }

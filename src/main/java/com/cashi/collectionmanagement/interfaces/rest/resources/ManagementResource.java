@@ -1,27 +1,35 @@
 package com.cashi.collectionmanagement.interfaces.rest.resources;
 
-import java.time.LocalDateTime;
-
 public record ManagementResource(
         Long id,
-        String managementId,
         String customerId,
         String advisorId,
-        String campaignId,
-        LocalDateTime managementDate,
 
-        // Categoría: Grupo al que pertenece la tipificación
-        String categoryCode,
-        String categoryDescription,
+        // Multi-tenant fields
+        Integer tenantId,
+        String tenantName,
+        Integer portfolioId,
+        String portfolioName,
+        Integer subPortfolioId,
+        String subPortfolioName,
 
-        // Tipificación: Código específico/hoja (último nivel en jerarquía)
-        String typificationCode,
-        String typificationDescription,
+        // Contact info
+        String phone,
+
+        // Hierarchical categorization
+        Long level1Id,
+        String level1Name,
+        Long level2Id,
+        String level2Name,
+        Long level3Id,
+        String level3Name,
+
+        String observations,
         Boolean typificationRequiresPayment,
         Boolean typificationRequiresSchedule,
 
-        String observations,
-        LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        // Automatic timestamp fields
+        String managementDate,  // Fecha de gestión (YYYY-MM-DD)
+        String managementTime   // Hora de gestión (HH:mm:ss)
 ) {
 }

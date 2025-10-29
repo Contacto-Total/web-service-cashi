@@ -1,17 +1,20 @@
 package com.cashi.collectionmanagement.interfaces.rest.resources;
 
-import java.util.Map;
-
 /**
  * Request para crear una nueva gestión
+ * @param customerId ID del cliente
+ * @param advisorId ID del asesor
  * @param tenantId ID del inquilino (tenant)
  * @param portfolioId ID de la cartera
  * @param subPortfolioId ID de la subcartera (opcional)
- * @param campaignId ID de la campaña (como entidad, no legacy)
- * @param typificationLevel1Id ID de la tipificación nivel 1
- * @param typificationLevel2Id ID de la tipificación nivel 2
- * @param typificationLevel3Id ID de la tipificación nivel 3
- * @param dynamicFields Campos dinámicos configurados por tipificación (JSON serializado)
+ * @param phone Teléfono de contacto
+ * @param level1Id ID de categoría nivel 1
+ * @param level1Name Nombre de categoría nivel 1
+ * @param level2Id ID de categoría nivel 2 (opcional)
+ * @param level2Name Nombre de categoría nivel 2 (opcional)
+ * @param level3Id ID de categoría nivel 3 (opcional)
+ * @param level3Name Nombre de categoría nivel 3 (opcional)
+ * @param observations Observaciones de la gestión
  */
 public record CreateManagementRequest(
         String customerId,
@@ -21,14 +24,18 @@ public record CreateManagementRequest(
         Integer tenantId,
         Integer portfolioId,
         Integer subPortfolioId,
-        Long campaignId,  // Campaign usa Long como ID
 
-        // Jerarquía de tipificaciones (3 niveles)
-        Integer typificationLevel1Id,
-        Integer typificationLevel2Id,
-        Integer typificationLevel3Id,
+        // Contact info
+        String phone,
 
-        String observations,
-        Map<String, Object> dynamicFields
+        // Hierarchical categorization (3 levels)
+        Long level1Id,
+        String level1Name,
+        Long level2Id,
+        String level2Name,
+        Long level3Id,
+        String level3Name,
+
+        String observations
 ) {
 }

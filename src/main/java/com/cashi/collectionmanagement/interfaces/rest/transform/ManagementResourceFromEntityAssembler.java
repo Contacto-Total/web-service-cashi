@@ -7,22 +7,36 @@ public class ManagementResourceFromEntityAssembler {
 
     public static ManagementResource toResourceFromEntity(Management entity) {
         return new ManagementResource(
-                entity.getId(),  // ID from AggregateRoot (Long auto-increment)
-                entity.getId() != null ? entity.getId().toString() : null,  // managementId as string version of id
+                entity.getId(),
                 entity.getCustomerId(),
                 entity.getAdvisorId(),
-                entity.getCampaign() != null ? entity.getCampaign().getId().toString() : null,  // Obtener ID de Campaign entity
-                entity.getManagementDate(),
-                // Categoría y Tipificación
-                entity.getCategoryCode(),
-                entity.getCategoryDescription(),
-                entity.getTypificationCode(),
-                entity.getTypificationDescription(),
+
+                // Multi-tenant fields
+                entity.getTenant() != null ? entity.getTenant().getId() : (Integer) null,
+                entity.getTenant() != null ? entity.getTenant().getTenantName() : null,
+                entity.getPortfolio() != null ? entity.getPortfolio().getId() : (Integer) null,
+                entity.getPortfolio() != null ? entity.getPortfolio().getPortfolioName() : null,
+                entity.getSubPortfolio() != null ? entity.getSubPortfolio().getId() : (Integer) null,
+                entity.getSubPortfolio() != null ? entity.getSubPortfolio().getSubPortfolioName() : null,
+
+                // Contact info
+                entity.getPhone(),
+
+                // Hierarchical categorization
+                entity.getLevel1Id(),
+                entity.getLevel1Name(),
+                entity.getLevel2Id(),
+                entity.getLevel2Name(),
+                entity.getLevel3Id(),
+                entity.getLevel3Name(),
+
+                entity.getObservations(),
                 entity.getTypificationRequiresPayment(),
                 entity.getTypificationRequiresSchedule(),
-                entity.getObservations(),
-                entity.getCreatedAt(),
-                entity.getUpdatedAt()
+
+                // Automatic timestamp fields
+                entity.getManagementDate() != null ? entity.getManagementDate().toString() : null,
+                entity.getManagementTime() != null ? entity.getManagementTime().toString() : null
         );
     }
 }

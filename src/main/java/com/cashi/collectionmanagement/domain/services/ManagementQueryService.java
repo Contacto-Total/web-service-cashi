@@ -13,8 +13,4 @@ public interface ManagementQueryService {
     List<Management> handle(GetManagementsByCustomerQuery query);
 
     List<Management> handle(GetManagementsByAdvisorQuery query);
-
-    List<Management> handle(GetManagementsByCampaignQuery query);
-
-    List<Management> handle(GetManagementsByDateRangeQuery query);
 }

@@ -106,7 +106,7 @@ public class CustomerController {
     }
 
     @Operation(summary = "Buscar cliente por criterio específico",
-               description = "Busca un cliente por un criterio específico: codigo_identificacion, documento, numero_cuenta, telefono_principal")
+               description = "Busca un cliente por un criterio específico: codigo_identificacion, documento, numero_cuenta, telefono, telefono_principal")
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Cliente encontrado"),
         @ApiResponse(responseCode = "404", description = "Cliente no encontrado"),
@@ -115,7 +115,7 @@ public class CustomerController {
     @GetMapping("/search-by")
     public ResponseEntity<?> searchCustomerByCriteria(
             @Parameter(description = "ID del tenant", required = true) @RequestParam Long tenantId,
-            @Parameter(description = "Criterio de búsqueda: codigo_identificacion, documento, numero_cuenta, telefono_principal",
+            @Parameter(description = "Criterio de búsqueda: codigo_identificacion, documento, numero_cuenta, telefono, telefono_principal",
                        required = true, example = "codigo_identificacion") @RequestParam String searchBy,
             @Parameter(description = "Valor a buscar", required = true, example = "D000007530354") @RequestParam String value) {
 
@@ -143,6 +143,18 @@ public class CustomerController {
                         return ResponseEntity.notFound().build();
                     });
 
+            case "telefono" -> {
+                var contactMethods = contactMethodRepository.findAllByTenantIdAndContactTypeAndValueWithCustomer(tenantId, "telefono", value);
+                if (!contactMethods.isEmpty()) {
+                    var customer = contactMethods.get(0).getCustomer();
+                    System.out.println("✅ Cliente encontrado por telefono (todos los tipos): " + customer.getFullName());
+                    yield ResponseEntity.ok(assembler.toResourceFromEntity(customer));
+                } else {
+                    System.out.println("❌ Cliente no encontrado por telefono");
+                    yield ResponseEntity.notFound().build();
+                }
+            }
+
             case "telefono_principal" -> contactMethodRepository.findByTenantIdAndSubtypeAndValueWithCustomer(tenantId, "telefono_principal", value)
                     .map(contactMethod -> {
                         System.out.println("✅ Cliente encontrado por telefono_principal: " + contactMethod.getCustomer().getFullName());
@@ -167,7 +179,7 @@ public class CustomerController {
                 System.out.println("❌ Criterio de búsqueda inválido: " + searchBy);
                 Map<String, String> errorResponse = new HashMap<>();
                 errorResponse.put("error", "Criterio de búsqueda inválido");
-                errorResponse.put("message", "Criterios válidos: codigo_identificacion, documento, numero_cuenta, telefono_principal");
+                errorResponse.put("message", "Criterios válidos: codigo_identificacion, documento, numero_cuenta, telefono, telefono_principal");
                 yield ResponseEntity.badRequest().body(errorResponse);
             }
         };
@@ -182,7 +194,7 @@ public class CustomerController {
     @GetMapping("/search-by-multi")
     public ResponseEntity<?> searchCustomersByCriteria(
             @Parameter(description = "ID del tenant", required = true) @RequestParam Long tenantId,
-            @Parameter(description = "Criterio de búsqueda: codigo_identificacion, documento, numero_cuenta, telefono_principal",
+            @Parameter(description = "Criterio de búsqueda: codigo_identificacion, documento, numero_cuenta, telefono, telefono_principal",
                        required = true, example = "documento") @RequestParam String searchBy,
             @Parameter(description = "Valor a buscar", required = true, example = "12345678") @RequestParam String value) {
 
@@ -204,6 +216,15 @@ public class CustomerController {
                 System.out.println("✅ Encontrados " + customers.size() + " clientes por documento");
                 var resources = customers.stream()
                         .map(assembler::toResourceFromEntity)
+                        .toList();
+                yield ResponseEntity.ok(resources);
+            }
+
+            case "telefono" -> {
+                var contactMethods = contactMethodRepository.findAllByTenantIdAndContactTypeAndValueWithCustomer(tenantId, "telefono", value);
+                System.out.println("✅ Encontrados " + contactMethods.size() + " clientes por telefono (todos los tipos)");
+                var resources = contactMethods.stream()
+                        .map(cm -> assembler.toResourceFromEntity(cm.getCustomer()))
                         .toList();
                 yield ResponseEntity.ok(resources);
             }
@@ -230,7 +251,7 @@ public class CustomerController {
                 System.out.println("❌ Criterio de búsqueda inválido: " + searchBy);
                 Map<String, String> errorResponse = new HashMap<>();
                 errorResponse.put("error", "Criterio de búsqueda inválido");
-                errorResponse.put("message", "Criterios válidos: codigo_identificacion, documento, numero_cuenta, telefono_principal");
+                errorResponse.put("message", "Criterios válidos: codigo_identificacion, documento, numero_cuenta, telefono, telefono_principal");
                 yield ResponseEntity.badRequest().body(errorResponse);
             }
         };
@@ -244,7 +265,7 @@ public class CustomerController {
     })
     @GetMapping("/search-all-tenants")
     public ResponseEntity<?> searchCustomersAcrossAllTenants(
-            @Parameter(description = "Criterio de búsqueda: documento, numero_cuenta, telefono_principal",
+            @Parameter(description = "Criterio de búsqueda: documento, numero_cuenta, telefono, telefono_principal",
                        required = true, example = "documento") @RequestParam String searchBy,
             @Parameter(description = "Valor a buscar", required = true, example = "12345678") @RequestParam String value) {
 
@@ -257,6 +278,15 @@ public class CustomerController {
                 System.out.println("✅ Encontrados " + customers.size() + " clientes por documento en todos los tenants");
                 var resources = customers.stream()
                         .map(assembler::toResourceFromEntity)
+                        .toList();
+                yield ResponseEntity.ok(resources);
+            }
+
+            case "telefono" -> {
+                var contactMethods = contactMethodRepository.findAllByContactTypeAndValueWithCustomer("telefono", value);
+                System.out.println("✅ Encontrados " + contactMethods.size() + " clientes por telefono (todos los tipos) en todos los tenants");
+                var resources = contactMethods.stream()
+                        .map(cm -> assembler.toResourceFromEntity(cm.getCustomer()))
                         .toList();
                 yield ResponseEntity.ok(resources);
             }
@@ -283,7 +313,7 @@ public class CustomerController {
                 System.out.println("❌ Criterio de búsqueda inválido: " + searchBy);
                 Map<String, String> errorResponse = new HashMap<>();
                 errorResponse.put("error", "Criterio de búsqueda inválido");
-                errorResponse.put("message", "Criterios válidos: documento, numero_cuenta, telefono_principal");
+                errorResponse.put("message", "Criterios válidos: documento, numero_cuenta, telefono, telefono_principal");
                 yield ResponseEntity.badRequest().body(errorResponse);
             }
         };
@@ -488,5 +518,94 @@ public class CustomerController {
             return ResponseEntity.internalServerError()
                     .body("Error al cargar configuración: " + e.getMessage());
         }
+    }
+
+    @Operation(summary = "Obtener información de contacto del cliente para blacklist",
+               description = "Busca un cliente por documento y contexto (tenant, portfolio, subportfolio) y retorna email y teléfono principal")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "200", description = "Información encontrada"),
+        @ApiResponse(responseCode = "404", description = "Cliente no encontrado")
+    })
+    @GetMapping("/blacklist-contact-info")
+    public ResponseEntity<Map<String, String>> getBlacklistContactInfo(
+            @Parameter(description = "Número de documento") @RequestParam String document,
+            @Parameter(description = "ID del tenant") @RequestParam Long tenantId,
+            @Parameter(description = "ID del portfolio") @RequestParam(required = false) Long portfolioId,
+            @Parameter(description = "ID del subportfolio") @RequestParam(required = false) Long subPortfolioId) {
+
+        System.out.println("🔍 Buscando info de contacto para blacklist: documento=" + document +
+                           ", tenantId=" + tenantId + ", portfolioId=" + portfolioId + ", subPortfolioId=" + subPortfolioId);
+
+        // Buscar cliente por documento y tenantId (y opcionalmente portfolio/subportfolio)
+        var customerOpt = customerRepository.findByTenantIdAndDocumentWithContactMethods(tenantId, document);
+
+        if (customerOpt.isEmpty()) {
+            System.out.println("❌ Cliente no encontrado");
+            return ResponseEntity.notFound().build();
+        }
+
+        var customer = customerOpt.get();
+
+        // Si se especificaron portfolio y subportfolio, verificar que coincidan
+        if (portfolioId != null && !portfolioId.equals(customer.getPortfolioId())) {
+            System.out.println("❌ Cliente encontrado pero portfolio no coincide");
+            return ResponseEntity.notFound().build();
+        }
+
+        if (subPortfolioId != null && !subPortfolioId.equals(customer.getSubPortfolioId())) {
+            System.out.println("❌ Cliente encontrado pero subportfolio no coincide");
+            return ResponseEntity.notFound().build();
+        }
+
+        // Extraer email y teléfono principal
+        String email = "";
+        String phone = "";
+
+        if (customer.getContactMethods() != null) {
+            for (var contact : customer.getContactMethods()) {
+                if ("email".equalsIgnoreCase(contact.getContactType()) && email.isEmpty()) {
+                    email = contact.getValue();
+                } else if ("telefono".equalsIgnoreCase(contact.getContactType()) &&
+                          "telefono_principal".equalsIgnoreCase(contact.getSubtype()) &&
+                          phone.isEmpty()) {
+                    phone = contact.getValue();
+                }
+            }
+        }
+
+        Map<String, String> response = new HashMap<>();
+        response.put("customerId", String.valueOf(customer.getId()));
+        response.put("email", email);
+        response.put("phone", phone);
+
+        System.out.println("✅ Info encontrada: customerId=" + customer.getId() + ", email=" + email + ", phone=" + phone);
+        return ResponseEntity.ok(response);
+    }
+
+    @Operation(summary = "Buscar cliente por teléfono",
+               description = "Busca un cliente por número de teléfono en cualquier método de contacto, filtrando por tenant, portfolio y subportfolio")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "200", description = "Cliente encontrado"),
+        @ApiResponse(responseCode = "404", description = "Cliente no encontrado")
+    })
+    @GetMapping("/search-by-phone")
+    public ResponseEntity<CustomerResource> searchByPhone(
+            @Parameter(description = "Número de teléfono", required = true, example = "999888777") @RequestParam String phone,
+            @Parameter(description = "ID del tenant", required = true, example = "1") @RequestParam Long tenantId,
+            @Parameter(description = "ID del portfolio", required = true, example = "1") @RequestParam Long portfolioId,
+            @Parameter(description = "ID del subportfolio", required = true, example = "1") @RequestParam Long subPortfolioId) {
+
+        System.out.println("📞 Buscando cliente por teléfono: phone=" + phone +
+                          ", tenantId=" + tenantId + ", portfolioId=" + portfolioId + ", subPortfolioId=" + subPortfolioId);
+
+        return queryService.getCustomerByPhone(phone, tenantId, portfolioId, subPortfolioId)
+                .map(customer -> {
+                    System.out.println("✅ Cliente encontrado: " + customer.getFullName() + " (ID: " + customer.getId() + ")");
+                    return ResponseEntity.ok(assembler.toResourceFromEntity(customer));
+                })
+                .orElseGet(() -> {
+                    System.out.println("❌ Cliente no encontrado con ese teléfono");
+                    return ResponseEntity.notFound().build();
+                });
     }
 }

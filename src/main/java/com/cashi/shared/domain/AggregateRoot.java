@@ -23,11 +23,11 @@ public abstract class AggregateRoot implements Serializable {
     private Long id;
 
     @CreatedDate
-    @Column(name = "created_at", updatable = false)
+    @Column(name = "fecha_creacion", updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "fecha_actualizacion")
     private LocalDateTime updatedAt;
 
     protected AggregateRoot() {

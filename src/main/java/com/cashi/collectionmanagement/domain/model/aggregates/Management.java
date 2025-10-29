@@ -1,34 +1,30 @@
 package com.cashi.collectionmanagement.domain.model.aggregates;
 
-import com.cashi.collectionmanagement.domain.model.valueobjects.ContactResult;
-import com.cashi.collectionmanagement.domain.model.valueobjects.ManagementType;
-import com.cashi.shared.domain.AggregateRoot;
-import com.cashi.shared.domain.model.entities.Campaign;
 import com.cashi.shared.domain.model.entities.Portfolio;
+import com.cashi.shared.domain.model.entities.SubPortfolio;
 import com.cashi.shared.domain.model.entities.Tenant;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
+import java.time.LocalDate;
+import java.time.LocalTime;
 
 @Entity
 @Table(name = "gestiones", indexes = {
     @Index(name = "idx_gest_inquilino", columnList = "id_inquilino"),
     @Index(name = "idx_gest_cartera", columnList = "id_cartera"),
-    @Index(name = "idx_gest_campana", columnList = "id_campana"),
+    @Index(name = "idx_gest_subcartera", columnList = "id_subcartera"),
     @Index(name = "idx_gest_cliente", columnList = "id_cliente"),
-    @Index(name = "idx_gest_asesor", columnList = "id_asesor"),
-    @Index(name = "idx_gest_fecha", columnList = "fecha_gestion")
+    @Index(name = "idx_gest_asesor", columnList = "id_asesor")
 })
 @Getter
 @NoArgsConstructor
-public class Management extends AggregateRoot {
+public class Management {
 
-    // NOTE: id field is inherited from AggregateRoot (Long id with IDENTITY generation)
-    // No need for embedded ManagementId since we use database auto-increment
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
     // Multi-tenant fields (nullable for backward compatibility)
     @ManyToOne(fetch = FetchType.LAZY)
@@ -40,8 +36,8 @@ public class Management extends AggregateRoot {
     private Portfolio portfolio;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_campana")
-    private Campaign campaign;
+    @JoinColumn(name = "id_subcartera")
+    private SubPortfolio subPortfolio;
 
     @Column(name = "id_cliente")
     private String customerId;
@@ -49,25 +45,30 @@ public class Management extends AggregateRoot {
     @Column(name = "id_asesor")
     private String advisorId;
 
-    // @Column(name = "id_campana_legacy")  // ELIMINADO: Ya no se usa, usar campaign entity
-    // private String campaignId;
+    @Column(name = "telefono", length = 50)
+    private String phone;
 
-    @Column(name = "fecha_gestion")
-    private LocalDateTime managementDate;
+    // Niveles de categorización jerárquica
+    @Column(name = "nivel1_id")
+    private Long level1Id;
 
-    // CATEGORÍA: Grupo al que pertenece la tipificación
-    @Column(name = "codigo_categoria", length = 50)
-    private String categoryCode;
+    @Column(name = "nivel1_nombre", length = 255)
+    private String level1Name;
 
-    @Column(name = "descripcion_categoria", length = 255)
-    private String categoryDescription;
+    @Column(name = "nivel2_id")
+    private Long level2Id;
 
-    // TIPIFICACIÓN: Código específico/hoja (último nivel en jerarquía)
-    @Column(name = "codigo_tipificacion", length = 50)
-    private String typificationCode;
+    @Column(name = "nivel2_nombre", length = 255)
+    private String level2Name;
 
-    @Column(name = "descripcion_tipificacion", length = 255)
-    private String typificationDescription;
+    @Column(name = "nivel3_id")
+    private Long level3Id;
+
+    @Column(name = "nivel3_nombre", length = 255)
+    private String level3Name;
+
+    @Column(name = "observaciones", length = 2000)
+    private String observations;
 
     @Column(name = "tipificacion_requiere_pago")
     private Boolean typificationRequiresPayment;
@@ -75,82 +76,72 @@ public class Management extends AggregateRoot {
     @Column(name = "tipificacion_requiere_cronograma")
     private Boolean typificationRequiresSchedule;
 
-    @Column(name = "observaciones", length = 2000)
-    private String observations;
+    // Campos automáticos de fecha y hora de gestión
+    @Column(name = "fecha_gestion", nullable = false)
+    private LocalDate managementDate;
 
-    // COMENTADO: Campos dinámicos deshabilitados temporalmente
-    // @Column(name = "campos_dinamicos_json", columnDefinition = "JSON")
-    // private String dynamicFieldsJson;
+    @Column(name = "hora_gestion", nullable = false)
+    private LocalTime managementTime;
 
-    // Normalized typifications (supports N levels)
-    @OneToMany(mappedBy = "management", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
-    private List<com.cashi.collectionmanagement.domain.model.entities.ManagementTypification> typifications = new ArrayList<>();
-
-    // Legacy constructor (backward compatibility) - COMENTADO: campaignId eliminado
-    // public Management(String customerId, String advisorId, String campaignId) {
-    //     this.managementId = ManagementId.generate();
-    //     this.customerId = customerId;
-    //     this.advisorId = advisorId;
-    //     this.campaignId = campaignId;
-    //     this.managementDate = LocalDateTime.now();
-    // }
-
-    // Multi-tenant constructor
-    public Management(Tenant tenant, Portfolio portfolio, Campaign campaign,
-                     String customerId, String advisorId) {
-        // id will be auto-generated by database (IDENTITY strategy from AggregateRoot)
+    // Constructor
+    public Management(Tenant tenant, Portfolio portfolio, SubPortfolio subPortfolio,
+                     String customerId, String advisorId, String phone) {
         this.tenant = tenant;
         this.portfolio = portfolio;
-        this.campaign = campaign;
+        this.subPortfolio = subPortfolio;
         this.customerId = customerId;
         this.advisorId = advisorId;
-        this.managementDate = LocalDateTime.now();
+        this.phone = phone;
+        // Establecer fecha y hora automáticamente
+        this.managementDate = LocalDate.now();
+        this.managementTime = LocalTime.now();
     }
 
-    // Multi-tenant constructor (tenant only)
-    public Management(Tenant tenant, String customerId, String advisorId) {
-        // id will be auto-generated by database (IDENTITY strategy from AggregateRoot)
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public void setTenant(Tenant tenant) {
         this.tenant = tenant;
-        this.customerId = customerId;
-        this.advisorId = advisorId;
-        this.managementDate = LocalDateTime.now();
     }
 
-    // Classification management (normalized)
-    public void addClassification(com.cashi.collectionmanagement.domain.model.entities.ManagementTypification typification) {
-        typifications.add(typification);
-        typification.setManagement(this);
-    }
-
-    public void removeClassification(com.cashi.collectionmanagement.domain.model.entities.ManagementTypification typification) {
-        typifications.remove(typification);
-        typification.setManagement(null);
-    }
-
-    public void clearClassifications() {
-        typifications.clear();
+    public void setPortfolio(Portfolio portfolio) {
+        this.portfolio = portfolio;
     }
 
     public void setObservations(String observations) {
         this.observations = observations;
     }
 
-    // COMENTADO: Campos dinámicos deshabilitados temporalmente
-    // public void setDynamicFieldsJson(String dynamicFieldsJson) {
-    //     this.dynamicFieldsJson = dynamicFieldsJson;
-    // }
-
-    // New setters for Category and Typification
-    public void setCategory(String code, String description) {
-        this.categoryCode = code;
-        this.categoryDescription = description;
+    public void setTypificationRequiresPayment(Boolean typificationRequiresPayment) {
+        this.typificationRequiresPayment = typificationRequiresPayment;
     }
 
-    public void setTypification(String code, String description, Boolean requiresPayment, Boolean requiresSchedule) {
-        this.typificationCode = code;
-        this.typificationDescription = description;
-        this.typificationRequiresPayment = requiresPayment;
-        this.typificationRequiresSchedule = requiresSchedule;
+    public void setTypificationRequiresSchedule(Boolean typificationRequiresSchedule) {
+        this.typificationRequiresSchedule = typificationRequiresSchedule;
+    }
+
+    public void setSubPortfolio(SubPortfolio subPortfolio) {
+        this.subPortfolio = subPortfolio;
+    }
+
+    public void setPhone(String phone) {
+        this.phone = phone;
+    }
+
+    public void setLevel1(Long id, String name) {
+        this.level1Id = id;
+        this.level1Name = name;
+    }
+
+    public void setLevel2(Long id, String name) {
+        this.level2Id = id;
+        this.level2Name = name;
+    }
+
+    public void setLevel3(Long id, String name) {
+        this.level3Id = id;
+        this.level3Name = name;
     }
 
 }

@@ -13,13 +13,16 @@ public class CreateManagementCommandFromResourceAssembler {
                 resource.tenantId(),
                 resource.portfolioId(),
                 resource.subPortfolioId(),
-                resource.campaignId(),
-                // Tipificaciones jerárquicas (3 niveles)
-                resource.typificationLevel1Id(),
-                resource.typificationLevel2Id(),
-                resource.typificationLevel3Id(),
-                resource.observations(),
-                resource.dynamicFields()
+                // Contact info
+                resource.phone(),
+                // Hierarchical categorization (3 levels)
+                resource.level1Id(),
+                resource.level1Name(),
+                resource.level2Id(),
+                resource.level2Name(),
+                resource.level3Id(),
+                resource.level3Name(),
+                resource.observations()
         );
     }
 }
