@@ -38,11 +38,13 @@ public record CustomerResource(
         LocalDate importDate,
         // Métodos de contacto
         List<ContactMethodResource> contactMethods,
-        // Información de subcartera
+        // Información de jerarquía multi-tenant
+        Long tenantId,
+        String tenantName,
+        Long portfolioId,
+        String portfolioName,
         Long subPortfolioId,
         String subPortfolioName,
-        String subPortfolioCode,
-        String portfolioName,
-        String tenantName
+        String subPortfolioCode
 ) {
 }

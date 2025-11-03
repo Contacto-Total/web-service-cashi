@@ -80,12 +80,14 @@ public class CustomerResourceFromEntityAssembler {
                 entity.getImportDate(),
                 // Métodos de contacto
                 contactMethods,
-                // Información de jerarquía (ahora desde los campos directos)
+                // Información de jerarquía multi-tenant
+                entity.getTenantId(),
+                entity.getTenantName(),
+                entity.getPortfolioId(),
+                entity.getPortfolioName(),
                 entity.getSubPortfolioId(),
                 entity.getSubPortfolioName(),
-                subPortfolioCode,
-                entity.getPortfolioName(),
-                entity.getTenantName()
+                subPortfolioCode
         );
     }
 }

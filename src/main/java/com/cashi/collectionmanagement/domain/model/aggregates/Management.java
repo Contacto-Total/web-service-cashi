@@ -80,7 +80,7 @@ public class Management {
     @Column(name = "fecha_gestion", nullable = false)
     private LocalDate managementDate;
 
-    @Column(name = "hora_gestion", nullable = false)
+    @Column(name = "hora_gestion", nullable = false, columnDefinition = "TIME(0)")
     private LocalTime managementTime;
 
     // Constructor
@@ -94,7 +94,7 @@ public class Management {
         this.phone = phone;
         // Establecer fecha y hora automáticamente
         this.managementDate = LocalDate.now();
-        this.managementTime = LocalTime.now();
+        this.managementTime = LocalTime.now().withNano(0);
     }
 
     public void setId(Long id) {
