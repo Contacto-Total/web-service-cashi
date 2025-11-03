@@ -133,11 +133,23 @@ public class CustomerSyncService {
         Portfolio portfolio = subPortfolio.getPortfolio();
         Tenant tenant = portfolio.getTenant();
 
+        // 1.5. Obtener el LoadType de las configuraciones de headers
+        List<HeaderConfiguration> headers = headerConfigurationRepository
+                .findBySubPortfolio(subPortfolio);
+
+        if (headers.isEmpty()) {
+            throw new IllegalArgumentException("No hay configuraciones de headers para SubPortfolio: " + subPortfolioId);
+        }
+
+        LoadType loadType = headers.get(0).getLoadType();
+        System.out.println("📝 LoadType detectado: " + loadType);
+
         // 2. Construir nombre de tabla dinámica
         String tableName = buildDynamicTableName(
                 tenant.getTenantCode(),
                 portfolio.getPortfolioCode(),
-                subPortfolio.getSubPortfolioCode()
+                subPortfolio.getSubPortfolioCode(),
+                loadType
         );
 
         System.out.println("📊 Tabla dinámica: " + tableName);
@@ -160,7 +172,7 @@ public class CustomerSyncService {
             for (Map<String, Object> row : rows) {
                 try {
                     // Mapear columnas de financiera a sistema usando HeaderConfiguration
-                    Map<String, Object> mappedRow = mapColumnsToSystemFields(row, subPortfolio, LoadType.INICIAL);
+                    Map<String, Object> mappedRow = mapColumnsToSystemFields(row, subPortfolio, loadType);
 
                     // Aplicar reglas de transformación de campos
                     Map<String, Object> enrichedRow = applyFieldTransformations(mappedRow, tenant.getId().longValue());
@@ -221,8 +233,10 @@ public class CustomerSyncService {
     /**
      * Construye el nombre de la tabla dinámica de carga inicial
      */
-    private String buildDynamicTableName(String tenantCode, String portfolioCode, String subPortfolioCode) {
-        return String.format("ini_%s_%s_%s",
+    private String buildDynamicTableName(String tenantCode, String portfolioCode, String subPortfolioCode, LoadType loadType) {
+        String prefix = (loadType == LoadType.INICIAL) ? "ini_" : "";
+        return String.format("%s%s_%s_%s",
+                prefix,
                 tenantCode.toLowerCase(),
                 portfolioCode.toLowerCase(),
                 subPortfolioCode.toLowerCase()

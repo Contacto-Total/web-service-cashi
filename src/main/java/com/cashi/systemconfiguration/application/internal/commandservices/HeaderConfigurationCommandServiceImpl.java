@@ -545,6 +545,10 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         boolean firstColumn = true;
 
+        logger.debug("🔍 Insertando fila. Cabeceras configuradas: {}, Keys en CSV: {}",
+            headers.stream().map(HeaderConfiguration::getHeaderName).collect(java.util.stream.Collectors.toList()),
+            rowData.keySet());
+
         // Agregar columnas dinámicas
         for (HeaderConfiguration header : headers) {
             String columnName = sanitizeColumnName(header.getHeaderName());
@@ -552,8 +556,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             // Obtener el valor: puede venir directo o por transformación
             Object value;
             if (header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
-                // Este campo se deriva de otro mediante transformación
-                Object sourceValue = rowData.get(header.getSourceField());
+                // Este campo se deriva de otro mediante transformación (case-insensitive)
+                Object sourceValue = getValueFromRowData(rowData, header.getSourceField());
                 if (sourceValue != null) {
                     String sourceStr = sourceValue.toString();
 
@@ -570,8 +574,26 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     value = null;
                 }
             } else {
-                // Campo normal: obtener directamente del CSV
-                value = rowData.get(header.getHeaderName());
+                // Campo normal: obtener directamente del CSV (case-insensitive)
+                value = getValueFromRowData(rowData, header.getHeaderName());
+            }
+
+            // ========== VALIDACIÓN DE CAMPOS OBLIGATORIOS ==========
+            boolean isEmpty = value == null ||
+                             (value instanceof String && ((String) value).trim().isEmpty());
+
+            // Validar que campos obligatorios tengan valor
+            if (header.getRequired() != null && header.getRequired() == 1) {
+                if (isEmpty) {
+                    throw new IllegalArgumentException(
+                        "El campo obligatorio '" + header.getHeaderName() + "' no puede estar vacío"
+                    );
+                }
+            }
+
+            // Si el campo NO es obligatorio y está vacío, convertir a NULL
+            if (isEmpty) {
+                value = null;
             }
 
             if (firstColumn) {
@@ -594,7 +616,14 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                             if (value instanceof Number) {
                                 values.add(value);
                             } else {
-                                values.add(Double.parseDouble(value.toString()));
+                                String numStr = value.toString().trim();
+
+                                // Manejar casos como ".10" o ".20" agregando "0" al inicio
+                                if (numStr.startsWith(".")) {
+                                    numStr = "0" + numStr;
+                                }
+
+                                values.add(Double.parseDouble(numStr));
                             }
                         } catch (NumberFormatException e) {
                             throw new IllegalArgumentException("Valor no numérico para campo " + header.getHeaderName() + ": " + value);
@@ -857,6 +886,125 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             // Solo registrar el error
             logger.error("Error al crear cliente (no crítico): {}", e.getMessage());
         }
+    }
+
+    /**
+     * Obtiene un valor del rowData de forma case-insensitive y flexible con espacios/guiones
+     */
+    private Object getValueFromRowData(Map<String, Object> rowData, String headerName) {
+        if (headerName == null) return null;
+
+        // Primero intentar búsqueda exacta
+        if (rowData.containsKey(headerName)) {
+            return rowData.get(headerName);
+        }
+
+        // Normalizar el nombre buscado para comparación flexible
+        String normalizedSearch = normalizeHeaderName(headerName);
+
+        // Buscar en todas las keys del mapa
+        for (Map.Entry<String, Object> entry : rowData.entrySet()) {
+            String key = entry.getKey();
+            if (key != null && normalizeHeaderName(key).equals(normalizedSearch)) {
+                logger.debug("Mapeo flexible: '{}' encontrado como '{}' en CSV", headerName, key);
+                return entry.getValue();
+            }
+        }
+
+        // No encontrado
+        logger.warn("Cabecera '{}' no encontrada en el CSV. Keys disponibles: {}",
+                   headerName, rowData.keySet());
+        return null;
+    }
+
+    /**
+     * Normaliza un nombre de cabecera para comparación flexible:
+     * - A minúsculas
+     * - Espacios y guiones bajos se tratan igual
+     * - Sin acentos
+     * - Sin caracteres especiales excepto letras, números y _
+     */
+    private String normalizeHeaderName(String headerName) {
+        if (headerName == null) return "";
+
+        return headerName
+                .toLowerCase()
+                .trim()
+                // Normalizar acentos
+                .replaceAll("[áàäâ]", "a")
+                .replaceAll("[éèëê]", "e")
+                .replaceAll("[íìïî]", "i")
+                .replaceAll("[óòöô]", "o")
+                .replaceAll("[úùüû]", "u")
+                .replaceAll("[ñ]", "n")
+                // Reemplazar espacios por guión bajo para normalizar
+                .replaceAll("\\s+", "_")
+                // Eliminar caracteres especiales excepto letras, números y guión bajo
+                .replaceAll("[^a-z0-9_]", "")
+                // Eliminar guiones bajos duplicados
+                .replaceAll("_+", "_")
+                // Eliminar guiones bajos al inicio o final
+                .replaceAll("^_|_$", "");
+    }
+
+    /**
+     * Parsea una fecha de forma flexible intentando múltiples formatos comunes
+     */
+    private LocalDate parseFlexibleDate(String dateStr, String preferredFormat) {
+        if (dateStr == null || dateStr.trim().isEmpty()) {
+            return null;
+        }
+
+        dateStr = dateStr.trim();
+
+        // Lista de formatos a intentar (el preferido primero, luego comunes)
+        List<String> formatsToTry = new ArrayList<>();
+
+        // Agregar formato preferido si existe
+        if (preferredFormat != null && !preferredFormat.trim().isEmpty()) {
+            formatsToTry.add(preferredFormat);
+        }
+
+        // Formatos comunes a intentar
+        formatsToTry.addAll(List.of(
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd HH:mm",
+            "yyyy-MM-dd",
+            "dd/MM/yyyy HH:mm:ss",
+            "dd/MM/yyyy HH:mm",
+            "dd/MM/yyyy",
+            "d/M/yyyy HH:mm:ss",
+            "d/M/yyyy HH:mm",
+            "d/M/yyyy"
+        ));
+
+        // Intentar cada formato
+        for (String format : formatsToTry) {
+            try {
+                // Hacer el formato flexible (aceptar 1 o 2 dígitos)
+                String flexibleFormat = format
+                    .replace("dd", "d")
+                    .replace("MM", "M");
+
+                java.time.format.DateTimeFormatter formatter =
+                    java.time.format.DateTimeFormatter.ofPattern(flexibleFormat);
+
+                // Si incluye hora, parsear como LocalDateTime y extraer fecha
+                if (format.contains("HH") || format.contains("hh") || format.contains("mm") || format.contains("ss")) {
+                    java.time.LocalDateTime dateTime = java.time.LocalDateTime.parse(dateStr, formatter);
+                    return dateTime.toLocalDate();
+                } else {
+                    return LocalDate.parse(dateStr, formatter);
+                }
+            } catch (Exception e) {
+                // Continuar con el siguiente formato
+                continue;
+            }
+        }
+
+        // Si ningún formato funcionó, lanzar excepción
+        throw new IllegalArgumentException("No se pudo parsear la fecha: " + dateStr +
+            ". Formatos intentados: " + formatsToTry);
     }
 
     /**
