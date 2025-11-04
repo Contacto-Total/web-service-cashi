@@ -481,6 +481,40 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             throw new IllegalArgumentException("No hay cabeceras configuradas para esta subcartera y tipo de carga.");
         }
 
+        // ========== VALIDACIÓN DE CABECERAS DEL ARCHIVO ==========
+        // Verificar que al menos algunas cabeceras del archivo coincidan con las configuradas
+        if (!data.isEmpty()) {
+            Map<String, Object> firstRow = data.get(0);
+            Set<String> fileHeaders = firstRow.keySet();
+
+            // Verificar si al menos UNA cabecera del archivo coincide con alguna configurada
+            boolean hasMatchingHeader = false;
+            for (HeaderConfiguration header : headers) {
+                // Verificar cabecera directa
+                if (containsHeaderCaseInsensitive(fileHeaders, header.getHeaderName())) {
+                    hasMatchingHeader = true;
+                    break;
+                }
+                // Verificar también sourceField si está configurado
+                if (header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
+                    if (containsHeaderCaseInsensitive(fileHeaders, header.getSourceField())) {
+                        hasMatchingHeader = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!hasMatchingHeader) {
+                throw new IllegalArgumentException(
+                    "Las cabeceras del archivo no coinciden con ninguna de las configuradas. " +
+                    "Cabeceras del archivo: " + fileHeaders + ". " +
+                    "Cabeceras esperadas: " + headers.stream()
+                        .map(HeaderConfiguration::getHeaderName)
+                        .collect(java.util.stream.Collectors.toList())
+                );
+            }
+        }
+
         // ========== OPTIMIZACIÓN: BATCH INSERT ==========
         // Preparar todas las filas válidas para batch insert
         List<PreparedRowData> validRows = new ArrayList<>();
@@ -1164,7 +1198,22 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 // Eliminar guiones bajos al inicio o final
                 .replaceAll("^_|_$", "");
     }
-    
+
+    /**
+     * Verifica si un Set de cabeceras contiene una cabecera específica (case-insensitive)
+     */
+    private boolean containsHeaderCaseInsensitive(Set<String> headers, String searchHeader) {
+        if (searchHeader == null || headers == null) return false;
+
+        String normalizedSearch = normalizeHeaderName(searchHeader);
+        for (String header : headers) {
+            if (normalizeHeaderName(header).equals(normalizedSearch)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Aplica una transformación regex a un valor
      */

@@ -23,4 +23,13 @@ public interface ImportHistoryRepository extends JpaRepository<ImportHistory, Lo
     Optional<ImportHistory> findByFileHashAndStatus(String fileHash, String status);
 
     boolean existsByFileHashAndStatus(String fileHash, String status);
+
+    // Duplicate detection by file name instead of hash
+    // Allows same content with different file names to be processed
+    boolean existsByFileNameAndStatus(String fileName, String status);
+
+    // Duplicate detection by BOTH file name AND hash
+    // Only reject if BOTH name and hash match (complete duplicate)
+    // Allow if name is different even with same hash (different day, same content)
+    boolean existsByFileNameAndFileHashAndStatus(String fileName, String fileHash, String status);
 }

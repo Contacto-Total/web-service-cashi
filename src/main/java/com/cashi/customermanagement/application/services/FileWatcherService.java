@@ -115,21 +115,21 @@ public class FileWatcherService {
             // Buscar archivo a procesar
             File fileToProcess = findNextFileToProcess(config);
 
-            if (fileToProcess == null) {
-                return Map.of(
-                    "success", false,
-                    "message", "No se encontraron archivos para procesar"
-                );
-            }
-
             // Procesar archivo y capturar resultado
             return processFileWithResult(fileToProcess, config);
 
-        } catch (Exception e) {
-            logger.error("Error en trigger manual: {}", e.getMessage(), e);
+        } catch (IllegalArgumentException e) {
+            // Errores de validación (carpeta no existe, sin archivos, todos procesados)
+            logger.warn("⚠️  Validación fallida: {}", e.getMessage());
             return Map.of(
                 "success", false,
-                "message", "Error: " + e.getMessage(),
+                "message", e.getMessage()
+            );
+        } catch (Exception e) {
+            logger.error("❌ Error en trigger manual: {}", e.getMessage(), e);
+            return Map.of(
+                "success", false,
+                "message", "Error inesperado: " + e.getMessage(),
                 "errors", List.of(e.getMessage())
             );
         }
@@ -143,10 +143,20 @@ public class FileWatcherService {
         try {
             File directory = new File(config.getWatchDirectory());
 
-            if (!directory.exists() || !directory.isDirectory()) {
-                logger.warn("El directorio no existe: {}", config.getWatchDirectory());
-                return null;
+            if (!directory.exists()) {
+                logger.warn("❌ El directorio no existe: {}", config.getWatchDirectory());
+                throw new IllegalArgumentException("La carpeta no existe: " + config.getWatchDirectory());
             }
+
+            if (!directory.isDirectory()) {
+                logger.warn("❌ La ruta no es un directorio: {}", config.getWatchDirectory());
+                throw new IllegalArgumentException("La ruta no es una carpeta válida: " + config.getWatchDirectory());
+            }
+
+            // Listar TODOS los archivos en el directorio (para debugging)
+            File[] allFiles = directory.listFiles();
+            logger.info("📁 Carpeta: {}", config.getWatchDirectory());
+            logger.info("📊 Total de archivos en carpeta: {}", allFiles != null ? allFiles.length : 0);
 
             // Buscar archivos que coincidan con el patrón
             File[] files = directory.listFiles((dir, name) ->
@@ -156,48 +166,79 @@ public class FileWatcherService {
                                     name.toLowerCase().endsWith(".csv"))
             );
 
+            logger.info("🔍 Patrón de búsqueda: '{}'", config.getFilePattern());
+            logger.info("📄 Archivos que coinciden con patrón: {}", files != null ? files.length : 0);
+
             if (files == null || files.length == 0) {
-                logger.info("No se encontraron archivos que coincidan con el patrón: {}", config.getFilePattern());
-                return null;
+                // Mostrar qué archivos hay en la carpeta para ayudar al usuario
+                if (allFiles != null && allFiles.length > 0) {
+                    logger.warn("⚠️  Archivos encontrados en carpeta (que NO coinciden):");
+                    for (File f : allFiles) {
+                        if (f.isFile()) {
+                            logger.warn("   - {}", f.getName());
+                        }
+                    }
+                    throw new IllegalArgumentException(
+                        "No hay archivos que coincidan con el patrón '" + config.getFilePattern() + "'. " +
+                        "Archivos en carpeta: " + allFiles.length + ". " +
+                        "Verifica que el nombre del archivo contenga '" + config.getFilePattern() + "' y tenga extensión .xlsx, .xls o .csv"
+                    );
+                } else {
+                    throw new IllegalArgumentException("La carpeta está vacía: " + config.getWatchDirectory());
+                }
             }
 
             // Ordenar por fecha de modificación (más reciente primero)
             Arrays.sort(files, Comparator.comparingLong(File::lastModified).reversed());
 
-            // Buscar el primer archivo no procesado (verificación basada en hash MD5)
+            // Buscar el primer archivo no procesado
+            // Verificación: rechazar solo si NOMBRE Y HASH ya fueron procesados juntos
+            // Permitir si el nombre es diferente aunque el hash sea igual (diferente día, mismo contenido)
+            int processedCount = 0;
             for (File file : files) {
                 try {
-                    // Calcular hash MD5 del contenido del archivo
-                    String fileHash = calculateFileMD5(file);
-                    logger.debug("📄 Archivo: {} - Hash: {}", file.getName(), fileHash);
+                    String fileName = file.getName();
+                    logger.info("📄 Verificando archivo: {}", fileName);
 
-                    // Verificar si este contenido ya fue procesado exitosamente
-                    boolean alreadyProcessed = historyRepository.existsByFileHashAndStatus(
+                    // Calcular hash MD5 del contenido
+                    String fileHash = calculateFileMD5(file);
+                    logger.info("🔐 Hash: {}", fileHash);
+
+                    // Verificar si ESTE ARCHIVO EXACTO (nombre Y hash) ya fue procesado
+                    boolean alreadyProcessed = historyRepository.existsByFileNameAndFileHashAndStatus(
+                            fileName,
                             fileHash,
                             "EXITOSO"
                     );
 
                     if (alreadyProcessed) {
-                        logger.info("⏭️  Archivo {} ya procesado (hash duplicado: {})", file.getName(), fileHash);
+                        logger.info("⏭️  Archivo {} ya procesado (mismo nombre y contenido)", fileName);
+                        processedCount++;
                         continue;
                     }
 
-                    logger.info("✅ Archivo {} es nuevo (hash: {})", file.getName(), fileHash);
+                    logger.info("✅ Archivo {} se puede procesar", fileName);
                     return file;
 
-                } catch (Exception hashException) {
-                    logger.error("Error al calcular hash para {}: {}", file.getName(), hashException.getMessage());
-                    // Si falla el hash, saltar este archivo
+                } catch (Exception checkException) {
+                    logger.error("Error al verificar archivo {}: {}", file.getName(), checkException.getMessage());
                     continue;
                 }
             }
 
-            logger.info("Todos los archivos ya fueron procesados");
-            return null;
+            logger.warn("⚠️  Todos los archivos encontrados ({}) ya fueron procesados", files.length);
+            throw new IllegalArgumentException(
+                "Todos los archivos que coinciden con el patrón ya fueron procesados. " +
+                "Archivos procesados: " + processedCount + " de " + files.length + ". " +
+                "Coloca un archivo nuevo o con diferente contenido en la carpeta."
+            );
 
+        } catch (IllegalArgumentException e) {
+            // Re-lanzar excepciones de validación para que sean capturadas por triggerManualImport
+            throw e;
         } catch (Exception e) {
-            logger.error("Error al buscar archivos: {}", e.getMessage(), e);
-            return null;
+            logger.error("Error inesperado al buscar archivos: {}", e.getMessage(), e);
+            throw new RuntimeException("Error al buscar archivos: " + e.getMessage(), e);
         }
     }
 
@@ -226,34 +267,40 @@ public class FileWatcherService {
             // Ordenar por fecha de modificación (más reciente primero)
             Arrays.sort(files, Comparator.comparingLong(File::lastModified).reversed());
 
-            // Buscar el primer archivo no procesado (verificar por HASH MD5, no por ruta)
+            // Buscar el primer archivo no procesado
+            // Verificación: rechazar solo si NOMBRE Y HASH ya fueron procesados juntos
+            // Permitir si el nombre es diferente aunque el hash sea igual (diferente día, mismo contenido)
             File fileToProcess = null;
             logger.info("📂 Encontrados {} archivos que coinciden con el patrón", files.length);
 
             for (File file : files) {
                 try {
-                    logger.info("🔍 Verificando archivo: {}", file.getName());
+                    String fileName = file.getName();
+                    logger.info("🔍 Verificando archivo: {}", fileName);
 
-                    // Calcular hash MD5 del contenido del archivo
+                    // Calcular hash MD5 del contenido
                     String fileHash = calculateFileMD5(file);
                     logger.info("🔐 Hash calculado: {}", fileHash);
 
-                    // Verificar si el CONTENIDO (hash) ya fue procesado exitosamente
-                    boolean alreadyProcessed = historyRepository.existsByFileHashAndStatus(
+                    // Verificar si ESTE ARCHIVO EXACTO (nombre Y hash) ya fue procesado
+                    boolean alreadyProcessed = historyRepository.existsByFileNameAndFileHashAndStatus(
+                            fileName,
                             fileHash,
                             "EXITOSO"
                     );
 
-                    if (!alreadyProcessed) {
-                        logger.info("✅ Archivo {} no procesado, se seleccionará para importar", file.getName());
-                        fileToProcess = file;
-                        break;
-                    } else {
-                        logger.info("⏭️  Archivo {} ya procesado (hash: {}), se omite", file.getName(), fileHash);
+                    if (alreadyProcessed) {
+                        logger.info("⏭️  Archivo {} ya procesado (mismo nombre y contenido), se omite", fileName);
+                        continue;
                     }
+
+                    logger.info("✅ Archivo {} no procesado, se seleccionará para importar", fileName);
+                    fileToProcess = file;
+                    break;
+
                 } catch (Exception e) {
-                    logger.error("❌ Error al calcular hash de {}: {}", file.getName(), e.getMessage());
-                    // Si hay error calculando hash, intentar procesarlo de todas formas
+                    logger.error("❌ Error al verificar archivo {}: {}", file.getName(), e.getMessage());
+                    // Si hay error, intentar procesarlo de todas formas
                     fileToProcess = file;
                     break;
                 }
@@ -289,13 +336,17 @@ public class FileWatcherService {
             fileHash = calculateFileMD5(file);
             logger.info("🔐 Hash MD5 del archivo: {}", fileHash);
 
-            // Verificar si el contenido ya fue procesado
-            boolean alreadyProcessed = historyRepository.existsByFileHashAndStatus(fileHash, "EXITOSO");
+            // Verificación: rechazar solo si NOMBRE Y HASH ya fueron procesados juntos
+            // Permitir si el nombre es diferente aunque el hash sea igual (diferente día, mismo contenido)
+            logger.info("🔍 Verificando si existe fileName='{}' Y fileHash='{}' con status='EXITOSO'", fileName, fileHash);
+            boolean alreadyProcessed = historyRepository.existsByFileNameAndFileHashAndStatus(fileName, fileHash, "EXITOSO");
+            logger.info("📊 Resultado verificación (nombre Y hash): {}", alreadyProcessed);
+
             if (alreadyProcessed) {
-                logger.warn("⚠️  El contenido de este archivo ya fue procesado anteriormente");
+                logger.warn("⚠️  Este archivo ya fue procesado anteriormente (mismo nombre y contenido)");
                 return Map.of(
                     "success", false,
-                    "message", "El contenido de este archivo ya fue procesado anteriormente (archivo duplicado)",
+                    "message", "Este archivo ya fue procesado anteriormente (mismo nombre y contenido)",
                     "fileName", fileName,
                     "fileHash", fileHash,
                     "duplicate", true
@@ -363,15 +414,29 @@ public class FileWatcherService {
             logger.info("Archivo procesado: {} ({} registros, {} errores)",
                     fileName, recordsProcessed, errors != null ? errors.size() : 0);
 
-            // Mover archivo a carpeta de procesados si está configurado
-            if (config.getMoveAfterProcess() && config.getProcessedDirectory() != null) {
-                moveFileToProcessed(file, config.getProcessedDirectory());
+            // Mover archivo según resultado: procesados si es exitoso, errores si tiene errores
+            if (config.getMoveAfterProcess()) {
+                if (errors != null && !errors.isEmpty()) {
+                    // Tiene errores → mover a carpeta de errores
+                    if (config.getErrorDirectory() != null) {
+                        moveFileToError(file, config.getErrorDirectory());
+                        logger.warn("⚠️  Archivo con errores movido a carpeta de errores");
+                    }
+                } else {
+                    // Sin errores → mover a carpeta de procesados
+                    if (config.getProcessedDirectory() != null) {
+                        moveFileToProcessed(file, config.getProcessedDirectory());
+                        logger.info("✅ Archivo exitoso movido a carpeta de procesados");
+                    }
+                }
             }
 
             // Retornar resultado completo
             return Map.of(
-                "success", true,
-                "message", "Archivo procesado exitosamente",
+                "success", errors == null || errors.isEmpty(),
+                "message", errors != null && !errors.isEmpty()
+                    ? "Archivo procesado con " + errors.size() + " errores"
+                    : "Archivo procesado exitosamente",
                 "fileName", fileName,
                 "insertedRows", recordsProcessed,
                 "errors", errors != null ? errors : List.of(),

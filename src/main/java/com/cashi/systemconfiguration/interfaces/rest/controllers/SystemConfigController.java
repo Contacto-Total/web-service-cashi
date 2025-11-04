@@ -26,6 +26,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/system-config")
@@ -174,7 +175,7 @@ public class SystemConfigController {
         @ApiResponse(responseCode = "404", description = "Tenant no encontrado")
     })
     @DeleteMapping("/tenants/{id}")
-    public ResponseEntity<Void> deleteTenant(
+    public ResponseEntity<?> deleteTenant(
             @Parameter(description = "ID del tenant", example = "1")
             @PathVariable Integer id) {
         try {
@@ -182,6 +183,9 @@ public class SystemConfigController {
             return ResponseEntity.noContent().build();
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();
+        } catch (IllegalStateException e) {
+            // Tenant tiene carteras asociadas
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
 

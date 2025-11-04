@@ -135,8 +135,10 @@ public class ImportConfigService {
                         // Calcular hash MD5 del archivo
                         String fileHash = calculateFileMD5(file);
 
-                        // Verificar si el CONTENIDO (hash) ya fue procesado exitosamente
-                        boolean processed = historyRepository.existsByFileHashAndStatus(
+                        // Verificar si ESTE ARCHIVO EXACTO (nombre Y hash) ya fue procesado
+                        // Solo marcar como procesado si AMBOS coinciden
+                        boolean processed = historyRepository.existsByFileNameAndFileHashAndStatus(
+                                file.getName(),
                                 fileHash,
                                 "EXITOSO"
                         );
