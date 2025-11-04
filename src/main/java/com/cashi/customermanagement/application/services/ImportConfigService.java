@@ -49,7 +49,6 @@ public class ImportConfigService {
         config.setWatchDirectory(request.watchDirectory());
         config.setFilePattern(request.filePattern());
         config.setSubPortfolioId(request.subPortfolioId());
-        config.setCheckFrequencyMinutes(request.checkFrequencyMinutes());
         config.setScheduledTime(request.scheduledTime());
         config.setActive(request.active());
         config.setProcessedDirectory(request.processedDirectory());
@@ -72,8 +71,7 @@ public class ImportConfigService {
                     "",
                     "",
                     null,
-                    15,
-                    null, // scheduledTime
+                    "02:00:00", // scheduledTime por defecto
                     false,
                     "",
                     "",
@@ -103,7 +101,8 @@ public class ImportConfigService {
     }
 
     public List<FilePreviewResource> scanFolder(String watchDirectory, String filePattern) {
-        List<FilePreviewResource> files = new ArrayList<>();
+        List<FilePreviewResource> pendingFiles = new ArrayList<>();
+        List<FilePreviewResource> processedFiles = new ArrayList<>();
 
         try {
             File directory = new File(watchDirectory);
@@ -120,6 +119,9 @@ public class ImportConfigService {
             );
 
             if (foundFiles != null) {
+                // Ordenar archivos por fecha de modificación (más reciente primero)
+                Arrays.sort(foundFiles, Comparator.comparingLong(File::lastModified).reversed());
+
                 for (File file : foundFiles) {
                     try {
                         Path filePath = file.toPath();
@@ -130,32 +132,84 @@ public class ImportConfigService {
                                 ZoneId.systemDefault()
                         );
 
-                        // Verificar si ya fue procesado
-                        boolean processed = historyRepository.existsByFilePathAndStatus(
-                                file.getAbsolutePath(),
-                                "SUCCESS"
+                        // Calcular hash MD5 del archivo
+                        String fileHash = calculateFileMD5(file);
+
+                        // Verificar si el CONTENIDO (hash) ya fue procesado exitosamente
+                        boolean processed = historyRepository.existsByFileHashAndStatus(
+                                fileHash,
+                                "EXITOSO"
                         );
 
-                        files.add(new FilePreviewResource(
+                        FilePreviewResource resource = new FilePreviewResource(
                                 file.getName(),
                                 formatFileSize(file.length()),
                                 modifiedDate.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
                                 processed
-                        ));
+                        );
+
+                        // Separar en dos listas: pendientes vs procesados
+                        if (processed) {
+                            processedFiles.add(resource);
+                        } else {
+                            pendingFiles.add(resource);
+                        }
+
                     } catch (Exception e) {
                         System.err.println("Error leyendo archivo: " + file.getName() + " - " + e.getMessage());
                     }
                 }
-
-                // Ordenar por fecha de modificación (más reciente primero)
-                files.sort((f1, f2) -> f2.modifiedDate().compareTo(f1.modifiedDate()));
             }
 
         } catch (Exception e) {
             throw new RuntimeException("Error al escanear la carpeta: " + e.getMessage(), e);
         }
 
-        return files;
+        // Construir resultado: Máximo 1 pendiente + Máximo 3 procesados
+        List<FilePreviewResource> result = new ArrayList<>();
+
+        // Agregar máximo 1 archivo pendiente (el más reciente)
+        if (!pendingFiles.isEmpty()) {
+            result.add(pendingFiles.get(0));
+        }
+
+        // Agregar máximo 3 archivos procesados (los 3 más recientes)
+        int processedLimit = Math.min(3, processedFiles.size());
+        for (int i = 0; i < processedLimit; i++) {
+            result.add(processedFiles.get(i));
+        }
+
+        return result;
+    }
+
+    /**
+     * Calcula el hash MD5 del contenido de un archivo
+     */
+    private String calculateFileMD5(File file) throws Exception {
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+
+        try (FileInputStream fis = new FileInputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+
+            while ((bytesRead = fis.read(buffer)) != -1) {
+                md.update(buffer, 0, bytesRead);
+            }
+        }
+
+        byte[] digest = md.digest();
+
+        // Convertir bytes a hexadecimal
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : digest) {
+            String hex = Integer.toHexString(0xff & b);
+            if (hex.length() == 1) {
+                hexString.append('0');
+            }
+            hexString.append(hex);
+        }
+
+        return hexString.toString();
     }
 
     private ImportConfigResource toResource(ImportConfiguration config) {
@@ -164,7 +218,6 @@ public class ImportConfigService {
                 config.getWatchDirectory(),
                 config.getFilePattern(),
                 config.getSubPortfolioId(),
-                config.getCheckFrequencyMinutes(),
                 config.getScheduledTime(),
                 config.getActive(),
                 config.getProcessedDirectory(),

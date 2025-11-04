@@ -22,6 +22,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -60,46 +61,25 @@ public class FileWatcherService {
 
             ImportConfiguration config = configOpt.get();
 
-            // Si hay hora programada, verificar que sea la hora correcta
-            if (config.getScheduledTime() != null && !config.getScheduledTime().isEmpty()) {
-                String currentTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
-                String scheduledTime = config.getScheduledTime().substring(0, 5); // "HH:mm:ss" -> "HH:mm"
+            // Verificar que sea la hora programada para ejecutar
+            String currentTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
+            String scheduledTime = config.getScheduledTime().substring(0, 5); // "HH:mm:ss" -> "HH:mm"
 
-                // Solo ejecutar si la hora actual coincide con la hora programada
-                if (!currentTime.equals(scheduledTime)) {
+            // Solo ejecutar si la hora actual coincide con la hora programada
+            if (!currentTime.equals(scheduledTime)) {
+                return;
+            }
+
+            // Verificar si ya se ejecutó en esta hora (evitar múltiples ejecuciones)
+            if (config.getLastCheckAt() != null) {
+                String lastCheckTime = config.getLastCheckAt().format(DateTimeFormatter.ofPattern("HH:mm"));
+                if (lastCheckTime.equals(currentTime)) {
+                    logger.debug("Ya se ejecutó la importación en esta hora: {}", currentTime);
                     return;
                 }
-
-                // Verificar si ya se ejecutó en esta hora (evitar múltiples ejecuciones)
-                if (config.getLastCheckAt() != null) {
-                    String lastCheckTime = config.getLastCheckAt().format(DateTimeFormatter.ofPattern("HH:mm"));
-                    if (lastCheckTime.equals(currentTime)) {
-                        logger.debug("Ya se ejecutó la importación en esta hora: {}", currentTime);
-                        return;
-                    }
-                }
-
-                logger.info("⏰ Hora programada alcanzada: {}. Iniciando importación automática.", scheduledTime);
-            } else {
-                // Modo legacy: usar frecuencia en minutos
-                if (config.getLastCheckAt() != null) {
-                    LocalDateTime nextCheck;
-
-                    // Si checkFrequencyMinutes es 0, usar 5 segundos (para testing)
-                    if (config.getCheckFrequencyMinutes() == 0) {
-                        nextCheck = config.getLastCheckAt().plusSeconds(5);
-                        logger.debug("Modo testing: revisando cada 5 segundos");
-                    } else {
-                        nextCheck = config.getLastCheckAt().plusMinutes(config.getCheckFrequencyMinutes());
-                    }
-
-                    if (LocalDateTime.now().isBefore(nextCheck)) {
-                        return; // Aún no es tiempo de revisar
-                    }
-                }
-
-                logger.info("Iniciando revisión de archivos. Patrón: {}", config.getFilePattern());
             }
+
+            logger.info("⏰ Hora programada alcanzada: {}. Iniciando importación automática.", scheduledTime);
 
             // Actualizar última revisión
             config.setLastCheckAt(LocalDateTime.now());
@@ -157,6 +137,7 @@ public class FileWatcherService {
 
     /**
      * Busca el siguiente archivo a procesar
+     * Usa MD5 hash del contenido para detectar duplicados
      */
     private File findNextFileToProcess(ImportConfiguration config) {
         try {
@@ -183,15 +164,31 @@ public class FileWatcherService {
             // Ordenar por fecha de modificación (más reciente primero)
             Arrays.sort(files, Comparator.comparingLong(File::lastModified).reversed());
 
-            // Buscar el primer archivo no procesado
+            // Buscar el primer archivo no procesado (verificación basada en hash MD5)
             for (File file : files) {
-                boolean alreadyProcessed = historyRepository.existsByFilePathAndStatus(
-                        file.getAbsolutePath(),
-                        "SUCCESS"
-                );
+                try {
+                    // Calcular hash MD5 del contenido del archivo
+                    String fileHash = calculateFileMD5(file);
+                    logger.debug("📄 Archivo: {} - Hash: {}", file.getName(), fileHash);
 
-                if (!alreadyProcessed) {
+                    // Verificar si este contenido ya fue procesado exitosamente
+                    boolean alreadyProcessed = historyRepository.existsByFileHashAndStatus(
+                            fileHash,
+                            "EXITOSO"
+                    );
+
+                    if (alreadyProcessed) {
+                        logger.info("⏭️  Archivo {} ya procesado (hash duplicado: {})", file.getName(), fileHash);
+                        continue;
+                    }
+
+                    logger.info("✅ Archivo {} es nuevo (hash: {})", file.getName(), fileHash);
                     return file;
+
+                } catch (Exception hashException) {
+                    logger.error("Error al calcular hash para {}: {}", file.getName(), hashException.getMessage());
+                    // Si falla el hash, saltar este archivo
+                    continue;
                 }
             }
 
@@ -229,15 +226,34 @@ public class FileWatcherService {
             // Ordenar por fecha de modificación (más reciente primero)
             Arrays.sort(files, Comparator.comparingLong(File::lastModified).reversed());
 
-            // Buscar el primer archivo no procesado
+            // Buscar el primer archivo no procesado (verificar por HASH MD5, no por ruta)
             File fileToProcess = null;
-            for (File file : files) {
-                boolean alreadyProcessed = historyRepository.existsByFilePathAndStatus(
-                        file.getAbsolutePath(),
-                        "SUCCESS"
-                );
+            logger.info("📂 Encontrados {} archivos que coinciden con el patrón", files.length);
 
-                if (!alreadyProcessed) {
+            for (File file : files) {
+                try {
+                    logger.info("🔍 Verificando archivo: {}", file.getName());
+
+                    // Calcular hash MD5 del contenido del archivo
+                    String fileHash = calculateFileMD5(file);
+                    logger.info("🔐 Hash calculado: {}", fileHash);
+
+                    // Verificar si el CONTENIDO (hash) ya fue procesado exitosamente
+                    boolean alreadyProcessed = historyRepository.existsByFileHashAndStatus(
+                            fileHash,
+                            "EXITOSO"
+                    );
+
+                    if (!alreadyProcessed) {
+                        logger.info("✅ Archivo {} no procesado, se seleccionará para importar", file.getName());
+                        fileToProcess = file;
+                        break;
+                    } else {
+                        logger.info("⏭️  Archivo {} ya procesado (hash: {}), se omite", file.getName(), fileHash);
+                    }
+                } catch (Exception e) {
+                    logger.error("❌ Error al calcular hash de {}: {}", file.getName(), e.getMessage());
+                    // Si hay error calculando hash, intentar procesarlo de todas formas
                     fileToProcess = file;
                     break;
                 }
@@ -264,9 +280,27 @@ public class FileWatcherService {
     private Map<String, Object> processFileWithResult(File file, ImportConfiguration config) {
         String filePath = file.getAbsolutePath();
         String fileName = file.getName();
+        String fileHash = null;
 
         try {
             logger.info("Importando datos del archivo: {}", fileName);
+
+            // Calcular hash MD5 del archivo
+            fileHash = calculateFileMD5(file);
+            logger.info("🔐 Hash MD5 del archivo: {}", fileHash);
+
+            // Verificar si el contenido ya fue procesado
+            boolean alreadyProcessed = historyRepository.existsByFileHashAndStatus(fileHash, "EXITOSO");
+            if (alreadyProcessed) {
+                logger.warn("⚠️  El contenido de este archivo ya fue procesado anteriormente");
+                return Map.of(
+                    "success", false,
+                    "message", "El contenido de este archivo ya fue procesado anteriormente (archivo duplicado)",
+                    "fileName", fileName,
+                    "fileHash", fileHash,
+                    "duplicate", true
+                );
+            }
 
             // Obtener subPortfolioId de la configuración
             Integer subPortfolioId = config.getSubPortfolioId();
@@ -313,12 +347,13 @@ public class FileWatcherService {
                 logger.warn("Errores en importación: {}", errors);
             }
 
-            // Registrar en historial
-            String status = (errors == null || errors.isEmpty()) ? "SUCCESS" : "SUCCESS_WITH_ERRORS";
+            // Registrar en historial con hash
+            String status = (errors == null || errors.isEmpty()) ? "EXITOSO" : "EXITOSO_CON_ERRORES";
             ImportHistory history = new ImportHistory(
                     subPortfolioId.longValue(),
                     fileName,
                     filePath,
+                    fileHash,
                     status,
                     recordsProcessed,
                     errorMessage
@@ -346,11 +381,12 @@ public class FileWatcherService {
         } catch (Exception e) {
             logger.error("Error al procesar archivo {}: {}", fileName, e.getMessage(), e);
 
-            // Registrar en historial como error
+            // Registrar en historial como error (con hash si se pudo calcular)
             ImportHistory history = new ImportHistory(
                     config.getSubPortfolioId() != null ? config.getSubPortfolioId().longValue() : null,
                     fileName,
                     filePath,
+                    fileHash, // Puede ser null si el error ocurrió antes de calcular el hash
                     "ERROR",
                     0,
                     e.getMessage()
@@ -563,5 +599,38 @@ public class FileWatcherService {
         Files.move(file.toPath(), targetPath, StandardCopyOption.REPLACE_EXISTING);
 
         logger.info("Archivo con error movido a: {}", targetPath);
+    }
+
+    /**
+     * Calcula el hash MD5 del contenido de un archivo
+     * MD5 es suficientemente rápido y adecuado para detectar duplicados
+     * @param file Archivo para calcular hash
+     * @return String con el hash MD5 en formato hexadecimal (32 caracteres)
+     */
+    private String calculateFileMD5(File file) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("MD5");
+
+        try (FileInputStream fis = new FileInputStream(file)) {
+            byte[] buffer = new byte[8192]; // Buffer de 8KB para lectura eficiente
+            int bytesRead;
+
+            while ((bytesRead = fis.read(buffer)) != -1) {
+                md.update(buffer, 0, bytesRead);
+            }
+        }
+
+        byte[] digest = md.digest();
+
+        // Convertir bytes a hexadecimal
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : digest) {
+            String hex = Integer.toHexString(0xff & b);
+            if (hex.length() == 1) {
+                hexString.append('0');
+            }
+            hexString.append(hex);
+        }
+
+        return hexString.toString();
     }
 }

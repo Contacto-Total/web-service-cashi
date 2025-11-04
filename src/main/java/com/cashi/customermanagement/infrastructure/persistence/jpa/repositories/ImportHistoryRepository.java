@@ -18,4 +18,9 @@ public interface ImportHistoryRepository extends JpaRepository<ImportHistory, Lo
     Optional<ImportHistory> findByFilePathAndStatus(String filePath, String status);
 
     boolean existsByFilePathAndStatus(String filePath, String status);
+
+    // New methods for hash-based duplicate detection
+    Optional<ImportHistory> findByFileHashAndStatus(String fileHash, String status);
+
+    boolean existsByFileHashAndStatus(String fileHash, String status);
 }

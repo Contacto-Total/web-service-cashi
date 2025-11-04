@@ -84,7 +84,6 @@ public class ImportConfigController {
                     current.watchDirectory(),
                     current.filePattern(),
                     current.subPortfolioId(),
-                    current.checkFrequencyMinutes(),
                     current.scheduledTime(),
                     active,
                     current.processedDirectory(),

@@ -26,10 +26,7 @@ public class ImportConfiguration {
     @Column(name = "id_subcartera", nullable = false)
     private Integer subPortfolioId;
 
-    @Column(name = "frecuencia_revision_minutos", nullable = false)
-    private Integer checkFrequencyMinutes;
-
-    @Column(name = "hora_programada", length = 8)
+    @Column(name = "hora_programada", length = 8, nullable = false)
     private String scheduledTime; // Formato: "HH:mm:ss" (ej: "02:00:00")
 
     @Column(name = "activo", nullable = false)
@@ -62,8 +59,8 @@ public class ImportConfiguration {
         if (moveAfterProcess == null) {
             moveAfterProcess = true;
         }
-        if (checkFrequencyMinutes == null) {
-            checkFrequencyMinutes = 15;
+        if (scheduledTime == null) {
+            scheduledTime = "02:00:00"; // Default: 2:00 AM
         }
     }
 
@@ -75,10 +72,10 @@ public class ImportConfiguration {
     public ImportConfiguration() {
     }
 
-    public ImportConfiguration(String watchDirectory, String filePattern, Integer checkFrequencyMinutes) {
+    public ImportConfiguration(String watchDirectory, String filePattern, String scheduledTime) {
         this.watchDirectory = watchDirectory;
         this.filePattern = filePattern;
-        this.checkFrequencyMinutes = checkFrequencyMinutes;
+        this.scheduledTime = scheduledTime;
         this.active = true;
         this.moveAfterProcess = true;
     }

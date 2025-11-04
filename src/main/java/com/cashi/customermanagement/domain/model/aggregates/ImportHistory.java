@@ -38,6 +38,9 @@ public class ImportHistory {
     @Column(name = "mensaje_error", columnDefinition = "TEXT")
     private String errorMessage;
 
+    @Column(name = "file_hash", length = 32)
+    private String fileHash; // MD5 hash of file content for duplicate detection
+
     @Column(name = "fecha_creacion", nullable = false)
     private LocalDateTime createdAt;
 
@@ -57,6 +60,18 @@ public class ImportHistory {
         this.subPortfolioId = subPortfolioId;
         this.fileName = fileName;
         this.filePath = filePath;
+        this.status = status;
+        this.recordsProcessed = recordsProcessed;
+        this.errorMessage = errorMessage;
+        this.processedAt = LocalDateTime.now();
+    }
+
+    public ImportHistory(Long subPortfolioId, String fileName, String filePath, String fileHash,
+                        String status, Integer recordsProcessed, String errorMessage) {
+        this.subPortfolioId = subPortfolioId;
+        this.fileName = fileName;
+        this.filePath = filePath;
+        this.fileHash = fileHash;
         this.status = status;
         this.recordsProcessed = recordsProcessed;
         this.errorMessage = errorMessage;
