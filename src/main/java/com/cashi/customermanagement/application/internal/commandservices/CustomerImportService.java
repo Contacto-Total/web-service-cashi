@@ -25,7 +25,6 @@ import java.util.*;
 public class CustomerImportService {
 
     private final CustomerRepository customerRepository;
-    private final FieldTransformationService fieldTransformationService;
 
     /**
      * Importa clientes desde un archivo Excel/CSV usando SOLO configuración de base de datos
@@ -233,13 +232,9 @@ public class CustomerImportService {
      * Mapea una fila de datos a un objeto Customer usando SOLO base de datos (sin JSON)
      */
     private Customer mapToCustomer(Long tenantId, Integer subPortfolioId, Map<String, String> rowData) {
-        // Aplicar reglas de transformación desde la base de datos
         Map<String, Object> enrichedRowDataObj = new HashMap<>(rowData);
-        enrichedRowDataObj = fieldTransformationService.applyTransformationRules(
-            enrichedRowDataObj, tenantId, subPortfolioId
-        );
 
-        // Buscar directamente el campo "documento" generado por las transformaciones
+        // Buscar directamente el campo "documento"
         String documento = getString(enrichedRowDataObj, "documento");
 
         // Buscar nombre - puede venir de diferentes columnas
@@ -249,7 +244,7 @@ public class CustomerImportService {
         }
 
         if (documento == null || documento.isEmpty()) {
-            throw new IllegalArgumentException("Documento requerido (debe generarse mediante regla de transformación)");
+            throw new IllegalArgumentException("Documento requerido");
         }
         if (fullName == null || fullName.isEmpty()) {
             throw new IllegalArgumentException("Nombre completo requerido");

@@ -2,10 +2,8 @@ package com.cashi.customermanagement.application.internal.commandservices;
 
 import com.cashi.customermanagement.domain.model.aggregates.Customer;
 import com.cashi.customermanagement.domain.model.entities.ContactMethod;
-import com.cashi.customermanagement.domain.model.entities.FieldTransformationRule;
 import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.ContactMethodRepository;
 import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.CustomerRepository;
-import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.FieldTransformationRuleRepository;
 import com.cashi.shared.domain.model.entities.HeaderConfiguration;
 import com.cashi.shared.domain.model.entities.Portfolio;
 import com.cashi.shared.domain.model.entities.SubPortfolio;
@@ -39,7 +37,6 @@ public class CustomerSyncService {
     private final CustomerRepository customerRepository;
     private final ContactMethodRepository contactMethodRepository;
     private final SubPortfolioRepository subPortfolioRepository;
-    private final FieldTransformationRuleRepository transformationRuleRepository;
     private final HeaderConfigurationRepository headerConfigurationRepository;
 
     /**
@@ -80,11 +77,8 @@ public class CustomerSyncService {
             // Procesar cada registro (preparación sin save individual)
             for (Map<String, Object> row : rows) {
                 try {
-                    // Aplicar reglas de transformación de campos
-                    Map<String, Object> enrichedRow = applyFieldTransformations(row, tenantId);
-
-                    String identificationCode = getStringValue(enrichedRow, "codigo_identificacion");
-                    String document = getStringValue(enrichedRow, "documento");
+                    String identificationCode = getStringValue(row, "codigo_identificacion");
+                    String document = getStringValue(row, "documento");
 
                     if (document == null || document.isEmpty()) {
                         errors.add("Documento vacío en registro");
@@ -100,16 +94,16 @@ public class CustomerSyncService {
                         customer = existingCustomer;
                         customer.setTenantId(tenantId);
                         // Note: portfolioId y subPortfolioId quedarán null ya que este método directo no los tiene
-                        updateCustomerFromRow(customer, enrichedRow);
+                        updateCustomerFromRow(customer, row);
                         customersUpdated++;
                     } else {
                         // Crear nuevo cliente (sin portfolio/subportfolio ya que este método directo no los tiene)
-                        customer = createCustomerFromRowLegacy(enrichedRow, tenantId);
+                        customer = createCustomerFromRowLegacy(row, tenantId);
                         customersCreated++;
                     }
 
                     customersToSave.add(customer);
-                    rowsToSync.add(enrichedRow);
+                    rowsToSync.add(row);
 
                 } catch (Exception e) {
                     errors.add("Error procesando registro: " + e.getMessage());
@@ -124,9 +118,9 @@ public class CustomerSyncService {
                 int contactsCreated = 0;
                 for (int i = 0; i < customersToSave.size(); i++) {
                     Customer customer = customersToSave.get(i);
-                    Map<String, Object> enrichedRow = rowsToSync.get(i);
+                    Map<String, Object> row = rowsToSync.get(i);
                     try {
-                        contactsCreated += syncCustomerContacts(customer, enrichedRow);
+                        contactsCreated += syncCustomerContacts(customer, row);
                     } catch (Exception e) {
                         errors.add("Error sincronizando contactos para " + customer.getIdentificationCode() + ": " + e.getMessage());
                     }
@@ -201,11 +195,8 @@ public class CustomerSyncService {
                     // Mapear columnas de financiera a sistema usando HeaderConfiguration
                     Map<String, Object> mappedRow = mapColumnsToSystemFields(row, subPortfolio, loadType);
 
-                    // Aplicar reglas de transformación de campos
-                    Map<String, Object> enrichedRow = applyFieldTransformations(mappedRow, tenant.getId().longValue());
-
-                    String identificationCode = getStringValue(enrichedRow, "codigo_identificacion");
-                    String document = getStringValue(enrichedRow, "documento");
+                    String identificationCode = getStringValue(mappedRow, "codigo_identificacion");
+                    String document = getStringValue(mappedRow, "documento");
 
                     if (document == null || document.isEmpty()) {
                         errors.add("Documento vacío en registro");
@@ -226,16 +217,16 @@ public class CustomerSyncService {
                         customer.setPortfolioName(portfolio.getPortfolioName());
                         customer.setSubPortfolioId(subPortfolioId.longValue());
                         customer.setSubPortfolioName(subPortfolio.getSubPortfolioName());
-                        updateCustomerFromRow(customer, enrichedRow);
+                        updateCustomerFromRow(customer, mappedRow);
                         customersUpdated++;
                     } else {
                         // Crear nuevo cliente
-                        customer = createCustomerFromRow(enrichedRow, tenant, portfolio, subPortfolio);
+                        customer = createCustomerFromRow(mappedRow, tenant, portfolio, subPortfolio);
                         customersCreated++;
                     }
 
                     customersToSave.add(customer);
-                    rowsToSync.add(enrichedRow);
+                    rowsToSync.add(mappedRow);
 
                 } catch (Exception e) {
                     errors.add("Error procesando registro: " + e.getMessage());
@@ -250,9 +241,9 @@ public class CustomerSyncService {
                 int contactsCreated = 0;
                 for (int i = 0; i < customersToSave.size(); i++) {
                     Customer customer = customersToSave.get(i);
-                    Map<String, Object> enrichedRow = rowsToSync.get(i);
+                    Map<String, Object> row = rowsToSync.get(i);
                     try {
-                        contactsCreated += syncCustomerContacts(customer, enrichedRow);
+                        contactsCreated += syncCustomerContacts(customer, row);
                     } catch (Exception e) {
                         errors.add("Error sincronizando contactos para " + customer.getIdentificationCode() + ": " + e.getMessage());
                     }
@@ -638,112 +629,6 @@ public class CustomerSyncService {
                 .replaceAll("[úùüû]", "u")
                 .replaceAll("ñ", "n")
                 .replaceAll("[^a-z0-9_]", "_");
-    }
-
-    /**
-     * Aplica reglas de transformación de campos desde la base de datos
-     */
-    private Map<String, Object> applyFieldTransformations(Map<String, Object> row, Long tenantId) {
-        Map<String, Object> enrichedData = new HashMap<>(row);
-
-        // Obtener todas las reglas activas para este tenant
-        List<FieldTransformationRule> rules = transformationRuleRepository
-                .findByTenantIdAndIsActiveTrueOrderByRuleOrderAsc(tenantId);
-
-        // Agrupar reglas por campo destino
-        Map<String, List<FieldTransformationRule>> rulesByTarget = new HashMap<>();
-        for (FieldTransformationRule rule : rules) {
-            rulesByTarget.computeIfAbsent(rule.getTargetField(), k -> new ArrayList<>()).add(rule);
-        }
-
-        // Aplicar reglas para cada campo destino
-        for (Map.Entry<String, List<FieldTransformationRule>> entry : rulesByTarget.entrySet()) {
-            String targetField = entry.getKey();
-            List<FieldTransformationRule> targetRules = entry.getValue();
-
-            // Verificar si el campo ya existe en los datos
-            Object existingValue = enrichedData.get(targetField);
-            boolean fieldExists = existingValue != null &&
-                                 !existingValue.toString().trim().isEmpty();
-
-            if (!fieldExists && !targetRules.isEmpty()) {
-                // Obtener el campo fuente
-                String sourceField = targetRules.get(0).getSourceField();
-                Object sourceValueObj = enrichedData.get(sourceField);
-
-                if (sourceValueObj != null) {
-                    String sourceValue = sourceValueObj.toString();
-
-                    if (!sourceValue.isEmpty()) {
-                        // Aplicar reglas hasta que una funcione
-                        String derivedValue = applyTransformationRules(sourceValue, targetRules);
-
-                        if (derivedValue != null) {
-                            enrichedData.put(targetField, derivedValue);
-                            System.out.println("🔄 Campo derivado: " + targetField + " = " + derivedValue +
-                                             " (desde " + sourceField + " = " + sourceValue + ")");
-                        }
-                    }
-                }
-            }
-        }
-
-        return enrichedData;
-    }
-
-    /**
-     * Aplica reglas de transformación a un valor
-     */
-    private String applyTransformationRules(String value, List<FieldTransformationRule> rules) {
-        if (rules == null || rules.isEmpty()) {
-            return value;
-        }
-
-        for (FieldTransformationRule rule : rules) {
-            // Si no hay condiciones de transformación, copiar el valor tal cual
-            if (rule.getStartsWithPrefix() == null &&
-                rule.getExtractLastNChars() == null &&
-                rule.getRegexPattern() == null) {
-                return value;
-            }
-
-            // Verificar si coincide con el prefijo
-            if (rule.getStartsWithPrefix() != null) {
-                if (value.startsWith(rule.getStartsWithPrefix())) {
-                    // Aplicar extracción de últimos N caracteres
-                    if (rule.getExtractLastNChars() != null && rule.getExtractLastNChars() > 0) {
-                        int length = value.length();
-                        int charsToExtract = rule.getExtractLastNChars();
-
-                        if (length >= charsToExtract) {
-                            return value.substring(length - charsToExtract);
-                        }
-                    } else {
-                        // Si solo tiene prefijo pero no extracción, retornar el valor completo
-                        return value;
-                    }
-                }
-            }
-
-            // Aplicar regex si está especificado
-            if (rule.getRegexPattern() != null) {
-                try {
-                    java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(rule.getRegexPattern());
-                    java.util.regex.Matcher matcher = pattern.matcher(value);
-
-                    if (matcher.find()) {
-                        int captureGroup = rule.getRegexCaptureGroup() != null ? rule.getRegexCaptureGroup() : 1;
-                        if (matcher.groupCount() >= captureGroup) {
-                            return matcher.group(captureGroup);
-                        }
-                    }
-                } catch (Exception e) {
-                    System.err.println("⚠️ Error aplicando regex: " + e.getMessage());
-                }
-            }
-        }
-
-        return null;  // No se aplicó ninguna regla
     }
 
     /**

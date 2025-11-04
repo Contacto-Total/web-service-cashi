@@ -404,13 +404,18 @@ public class CustomerController {
     })
     @PostMapping("/sync/{subPortfolioId}")
     public ResponseEntity<?> syncCustomers(
-            @Parameter(description = "ID de la sub-cartera", example = "1") @PathVariable Long subPortfolioId) {
+            @Parameter(description = "ID de la sub-cartera", example = "1") @PathVariable Long subPortfolioId,
+            @Parameter(description = "Tipo de carga (INICIAL o ACTUALIZACION)", example = "ACTUALIZACION")
+            @RequestParam(defaultValue = "ACTUALIZACION") String loadType) {
 
-        System.out.println("🔄 POST /api/v1/customers/sync/" + subPortfolioId);
+        System.out.println("🔄 POST /api/v1/customers/sync/" + subPortfolioId + " - LoadType: " + loadType);
 
         try {
+            com.cashi.shared.domain.model.valueobjects.LoadType loadTypeEnum =
+                com.cashi.shared.domain.model.valueobjects.LoadType.valueOf(loadType.toUpperCase());
+
             com.cashi.customermanagement.application.internal.commandservices.CustomerSyncService.SyncResult result =
-                    customerSyncService.syncCustomersFromSubPortfolio(subPortfolioId);
+                    customerSyncService.syncCustomersFromSubPortfolio(subPortfolioId, loadTypeEnum);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);

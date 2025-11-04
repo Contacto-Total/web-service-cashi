@@ -7,7 +7,7 @@ import lombok.Setter;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "configuraciones_importacion")
+@Table(name = "configuracion_importacion")
 @Getter
 @Setter
 public class ImportConfiguration {
