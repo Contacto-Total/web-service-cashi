@@ -45,10 +45,10 @@ public class FileWatcherService {
     }
 
     /**
-     * Scheduled task que se ejecuta cada 5 segundos (para testing)
-     * Verifica si hay una configuración activa y si es tiempo de revisar
+     * Scheduled task que se ejecuta cada minuto
+     * Verifica si es la hora programada para ejecutar la importación automática
      */
-    @Scheduled(fixedDelay = 5000) // Cada 5 segundos (testing)
+    @Scheduled(fixedDelay = 60000) // Cada 1 minuto
     public void checkForNewFiles() {
         try {
             // Buscar configuración activa
@@ -60,24 +60,46 @@ public class FileWatcherService {
 
             ImportConfiguration config = configOpt.get();
 
-            // Verificar si es tiempo de revisar según la frecuencia configurada
-            if (config.getLastCheckAt() != null) {
-                LocalDateTime nextCheck;
+            // Si hay hora programada, verificar que sea la hora correcta
+            if (config.getScheduledTime() != null && !config.getScheduledTime().isEmpty()) {
+                String currentTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
+                String scheduledTime = config.getScheduledTime().substring(0, 5); // "HH:mm:ss" -> "HH:mm"
 
-                // Si checkFrequencyMinutes es 0, usar 5 segundos (para testing)
-                if (config.getCheckFrequencyMinutes() == 0) {
-                    nextCheck = config.getLastCheckAt().plusSeconds(5);
-                    logger.debug("Modo testing: revisando cada 5 segundos");
-                } else {
-                    nextCheck = config.getLastCheckAt().plusMinutes(config.getCheckFrequencyMinutes());
+                // Solo ejecutar si la hora actual coincide con la hora programada
+                if (!currentTime.equals(scheduledTime)) {
+                    return;
                 }
 
-                if (LocalDateTime.now().isBefore(nextCheck)) {
-                    return; // Aún no es tiempo de revisar
+                // Verificar si ya se ejecutó en esta hora (evitar múltiples ejecuciones)
+                if (config.getLastCheckAt() != null) {
+                    String lastCheckTime = config.getLastCheckAt().format(DateTimeFormatter.ofPattern("HH:mm"));
+                    if (lastCheckTime.equals(currentTime)) {
+                        logger.debug("Ya se ejecutó la importación en esta hora: {}", currentTime);
+                        return;
+                    }
                 }
+
+                logger.info("⏰ Hora programada alcanzada: {}. Iniciando importación automática.", scheduledTime);
+            } else {
+                // Modo legacy: usar frecuencia en minutos
+                if (config.getLastCheckAt() != null) {
+                    LocalDateTime nextCheck;
+
+                    // Si checkFrequencyMinutes es 0, usar 5 segundos (para testing)
+                    if (config.getCheckFrequencyMinutes() == 0) {
+                        nextCheck = config.getLastCheckAt().plusSeconds(5);
+                        logger.debug("Modo testing: revisando cada 5 segundos");
+                    } else {
+                        nextCheck = config.getLastCheckAt().plusMinutes(config.getCheckFrequencyMinutes());
+                    }
+
+                    if (LocalDateTime.now().isBefore(nextCheck)) {
+                        return; // Aún no es tiempo de revisar
+                    }
+                }
+
+                logger.info("Iniciando revisión de archivos. Patrón: {}", config.getFilePattern());
             }
-
-            logger.info("Iniciando revisión de archivos. Patrón: {}", config.getFilePattern());
 
             // Actualizar última revisión
             config.setLastCheckAt(LocalDateTime.now());
@@ -88,6 +110,97 @@ public class FileWatcherService {
 
         } catch (Exception e) {
             logger.error("Error en FileWatcherService: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Método público para trigger manual de importación
+     * Retorna el resultado de la importación incluyendo errores
+     */
+    public Map<String, Object> triggerManualImport() {
+        try {
+            // Buscar configuración activa
+            Optional<ImportConfiguration> configOpt = configRepository.findByActiveTrue();
+
+            if (configOpt.isEmpty()) {
+                return Map.of(
+                    "success", false,
+                    "message", "No hay configuración de importación activa"
+                );
+            }
+
+            ImportConfiguration config = configOpt.get();
+            logger.info("🔄 Trigger manual de importación iniciado");
+
+            // Buscar archivo a procesar
+            File fileToProcess = findNextFileToProcess(config);
+
+            if (fileToProcess == null) {
+                return Map.of(
+                    "success", false,
+                    "message", "No se encontraron archivos para procesar"
+                );
+            }
+
+            // Procesar archivo y capturar resultado
+            return processFileWithResult(fileToProcess, config);
+
+        } catch (Exception e) {
+            logger.error("Error en trigger manual: {}", e.getMessage(), e);
+            return Map.of(
+                "success", false,
+                "message", "Error: " + e.getMessage(),
+                "errors", List.of(e.getMessage())
+            );
+        }
+    }
+
+    /**
+     * Busca el siguiente archivo a procesar
+     */
+    private File findNextFileToProcess(ImportConfiguration config) {
+        try {
+            File directory = new File(config.getWatchDirectory());
+
+            if (!directory.exists() || !directory.isDirectory()) {
+                logger.warn("El directorio no existe: {}", config.getWatchDirectory());
+                return null;
+            }
+
+            // Buscar archivos que coincidan con el patrón
+            File[] files = directory.listFiles((dir, name) ->
+                    name.toLowerCase().contains(config.getFilePattern().toLowerCase()) &&
+                            (name.toLowerCase().endsWith(".xlsx") ||
+                                    name.toLowerCase().endsWith(".xls") ||
+                                    name.toLowerCase().endsWith(".csv"))
+            );
+
+            if (files == null || files.length == 0) {
+                logger.info("No se encontraron archivos que coincidan con el patrón: {}", config.getFilePattern());
+                return null;
+            }
+
+            // Ordenar por fecha de modificación (más reciente primero)
+            Arrays.sort(files, Comparator.comparingLong(File::lastModified).reversed());
+
+            // Buscar el primer archivo no procesado
+            for (File file : files) {
+                boolean alreadyProcessed = historyRepository.existsByFilePathAndStatus(
+                        file.getAbsolutePath(),
+                        "SUCCESS"
+                );
+
+                if (!alreadyProcessed) {
+                    return file;
+                }
+            }
+
+            logger.info("Todos los archivos ya fueron procesados");
+            return null;
+
+        } catch (Exception e) {
+            logger.error("Error al buscar archivos: {}", e.getMessage(), e);
+            return null;
         }
     }
 
@@ -145,7 +258,10 @@ public class FileWatcherService {
         }
     }
 
-    private void processFile(File file, ImportConfiguration config) {
+    /**
+     * Procesa un archivo y retorna el resultado (usado para trigger manual)
+     */
+    private Map<String, Object> processFileWithResult(File file, ImportConfiguration config) {
         String filePath = file.getAbsolutePath();
         String fileName = file.getName();
 
@@ -166,7 +282,11 @@ public class FileWatcherService {
 
             if (data.isEmpty()) {
                 logger.warn("El archivo {} no contiene datos para importar", fileName);
-                return;
+                return Map.of(
+                    "success", false,
+                    "message", "El archivo no contiene datos para importar",
+                    "fileName", fileName
+                );
             }
 
             logger.info("Datos leídos: {} filas", data.size());
@@ -193,23 +313,35 @@ public class FileWatcherService {
                 logger.warn("Errores en importación: {}", errors);
             }
 
-            // Registrar en historial como exitoso (incluso si hubo errores parciales)
+            // Registrar en historial
+            String status = (errors == null || errors.isEmpty()) ? "SUCCESS" : "SUCCESS_WITH_ERRORS";
             ImportHistory history = new ImportHistory(
                     subPortfolioId.longValue(),
                     fileName,
                     filePath,
-                    "SUCCESS",
+                    status,
                     recordsProcessed,
                     errorMessage
             );
             historyRepository.save(history);
 
-            logger.info("Archivo procesado exitosamente: {} ({} registros)", fileName, recordsProcessed);
+            logger.info("Archivo procesado: {} ({} registros, {} errores)",
+                    fileName, recordsProcessed, errors != null ? errors.size() : 0);
 
             // Mover archivo a carpeta de procesados si está configurado
             if (config.getMoveAfterProcess() && config.getProcessedDirectory() != null) {
                 moveFileToProcessed(file, config.getProcessedDirectory());
             }
+
+            // Retornar resultado completo
+            return Map.of(
+                "success", true,
+                "message", "Archivo procesado exitosamente",
+                "fileName", fileName,
+                "insertedRows", recordsProcessed,
+                "errors", errors != null ? errors : List.of(),
+                "hasErrors", errors != null && !errors.isEmpty()
+            );
 
         } catch (Exception e) {
             logger.error("Error al procesar archivo {}: {}", fileName, e.getMessage(), e);
@@ -238,7 +370,22 @@ public class FileWatcherService {
                     logger.error("Error al mover archivo a carpeta de errores: {}", moveException.getMessage());
                 }
             }
+
+            // Retornar error
+            return Map.of(
+                "success", false,
+                "message", "Error al procesar archivo: " + e.getMessage(),
+                "fileName", fileName,
+                "errors", List.of(e.getMessage())
+            );
         }
+    }
+
+    /**
+     * Procesa un archivo (versión legacy para scheduled task)
+     */
+    private void processFile(File file, ImportConfiguration config) {
+        processFileWithResult(file, config);
     }
 
     /**

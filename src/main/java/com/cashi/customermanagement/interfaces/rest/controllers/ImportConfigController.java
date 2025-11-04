@@ -1,6 +1,7 @@
 package com.cashi.customermanagement.interfaces.rest.controllers;
 
 import com.cashi.customermanagement.application.services.ImportConfigService;
+import com.cashi.customermanagement.application.services.FileWatcherService;
 import com.cashi.customermanagement.interfaces.rest.resources.*;
 import com.cashi.shared.domain.model.valueobjects.LoadType;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,9 +21,12 @@ import java.util.Map;
 public class ImportConfigController {
 
     private final ImportConfigService importConfigService;
+    private final FileWatcherService fileWatcherService;
 
-    public ImportConfigController(ImportConfigService importConfigService) {
+    public ImportConfigController(ImportConfigService importConfigService,
+                                 FileWatcherService fileWatcherService) {
         this.importConfigService = importConfigService;
+        this.fileWatcherService = fileWatcherService;
     }
 
     @Operation(summary = "Obtener configuración actual", description = "Retorna la configuración de importación automática")
@@ -81,6 +85,7 @@ public class ImportConfigController {
                     current.filePattern(),
                     current.subPortfolioId(),
                     current.checkFrequencyMinutes(),
+                    current.scheduledTime(),
                     active,
                     current.processedDirectory(),
                     current.errorDirectory(),
@@ -109,6 +114,26 @@ public class ImportConfigController {
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "Error al validar cabeceras: " + e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Trigger manual de importación", description = "Ejecuta la importación inmediatamente sin esperar la hora programada. Retorna errores de validación para mostrar en log.")
+    @PostMapping("/trigger-import")
+    public ResponseEntity<?> triggerManualImport() {
+        try {
+            Map<String, Object> result = fileWatcherService.triggerManualImport();
+
+            // Si hay errores, retornar con status 200 pero indicando que hay errores
+            // para que el frontend pueda mostrarlos en el log rojo
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(
+                        "success", false,
+                        "message", "Error inesperado: " + e.getMessage(),
+                        "errors", List.of(e.getMessage())
+                    ));
         }
     }
 }

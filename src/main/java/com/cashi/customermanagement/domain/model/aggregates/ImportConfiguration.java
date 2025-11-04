@@ -29,6 +29,9 @@ public class ImportConfiguration {
     @Column(name = "frecuencia_revision_minutos", nullable = false)
     private Integer checkFrequencyMinutes;
 
+    @Column(name = "hora_programada", length = 8)
+    private String scheduledTime; // Formato: "HH:mm:ss" (ej: "02:00:00")
+
     @Column(name = "activo", nullable = false)
     private Boolean active;
 

@@ -5,6 +5,7 @@ public record ImportConfigRequest(
         String filePattern,
         Integer subPortfolioId,
         Integer checkFrequencyMinutes,
+        String scheduledTime, // Formato: "HH:mm:ss" (ej: "02:00:00")
         Boolean active,
         String processedDirectory,
         String errorDirectory,

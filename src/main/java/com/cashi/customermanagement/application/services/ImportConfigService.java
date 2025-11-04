@@ -50,6 +50,7 @@ public class ImportConfigService {
         config.setFilePattern(request.filePattern());
         config.setSubPortfolioId(request.subPortfolioId());
         config.setCheckFrequencyMinutes(request.checkFrequencyMinutes());
+        config.setScheduledTime(request.scheduledTime());
         config.setActive(request.active());
         config.setProcessedDirectory(request.processedDirectory());
         config.setErrorDirectory(request.errorDirectory());
@@ -72,6 +73,7 @@ public class ImportConfigService {
                     "",
                     null,
                     15,
+                    null, // scheduledTime
                     false,
                     "",
                     "",
@@ -163,6 +165,7 @@ public class ImportConfigService {
                 config.getFilePattern(),
                 config.getSubPortfolioId(),
                 config.getCheckFrequencyMinutes(),
+                config.getScheduledTime(),
                 config.getActive(),
                 config.getProcessedDirectory(),
                 config.getErrorDirectory(),
