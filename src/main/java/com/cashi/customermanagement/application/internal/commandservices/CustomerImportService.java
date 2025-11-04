@@ -25,7 +25,6 @@ import java.util.*;
 public class CustomerImportService {
 
     private final CustomerRepository customerRepository;
-    private final FieldTransformationService fieldTransformationService;
 
     /**
      * Importa clientes desde un archivo Excel/CSV usando SOLO configuración de base de datos
@@ -47,9 +46,16 @@ public class CustomerImportService {
         }
 
         try {
-            if (filename.endsWith(".xlsx") || filename.endsWith(".xls")) {
-                importedCustomers = importFromExcel(tenantId, subPortfolioId, file.getInputStream(), errors);
-            } else if (filename.endsWith(".csv")) {
+            // Try to detect and import based on extension, with fallback to CSV
+            if (filename.toLowerCase().endsWith(".xlsx") || filename.toLowerCase().endsWith(".xls")) {
+                try {
+                    importedCustomers = importFromExcel(tenantId, subPortfolioId, file.getInputStream(), errors);
+                } catch (Exception excelError) {
+                    // If Excel parsing fails, try as CSV (many .xls files are actually CSV)
+                    System.out.println("⚠️ Archivo con extensión Excel no es válido, intentando como CSV...");
+                    importedCustomers = importFromCSV(tenantId, subPortfolioId, file.getInputStream(), errors);
+                }
+            } else if (filename.toLowerCase().endsWith(".csv")) {
                 importedCustomers = importFromCSV(tenantId, subPortfolioId, file.getInputStream(), errors);
             } else {
                 throw new IllegalArgumentException("Formato de archivo no soportado. Use .xlsx, .xls o .csv");
@@ -68,6 +74,57 @@ public class CustomerImportService {
 
         } catch (Exception e) {
             System.err.println("❌ Error en importación: " + e.getMessage());
+            throw new RuntimeException("Error al importar clientes: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Importa clientes desde un archivo en disco (para importación automática)
+     */
+    @Transactional
+    public ImportResult importCustomersFromFile(Long tenantId, java.io.File file, Integer subPortfolioId) throws IOException {
+        System.out.println("📥 Iniciando importación automática de archivo: " + file.getName());
+        if (subPortfolioId == null) {
+            throw new IllegalArgumentException("SubPortfolioId es requerido para la importación");
+        }
+
+        List<Customer> importedCustomers = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+
+        String filename = file.getName();
+
+        try (InputStream inputStream = new java.io.FileInputStream(file)) {
+            // Try to detect and import based on extension, with fallback to CSV
+            if (filename.toLowerCase().endsWith(".xlsx") || filename.toLowerCase().endsWith(".xls")) {
+                try {
+                    importedCustomers = importFromExcel(tenantId, subPortfolioId, inputStream, errors);
+                } catch (Exception excelError) {
+                    // If Excel parsing fails, try as CSV (many .xls files are actually CSV)
+                    System.out.println("⚠️ Archivo con extensión Excel no es válido, intentando como CSV...");
+                    inputStream.close(); // Close previous stream
+                    try (InputStream csvStream = new java.io.FileInputStream(file)) {
+                        importedCustomers = importFromCSV(tenantId, subPortfolioId, csvStream, errors);
+                    }
+                }
+            } else if (filename.toLowerCase().endsWith(".csv")) {
+                importedCustomers = importFromCSV(tenantId, subPortfolioId, inputStream, errors);
+            } else {
+                throw new IllegalArgumentException("Formato de archivo no soportado. Use .xlsx, .xls o .csv");
+            }
+
+            // Guardar todos los clientes importados
+            customerRepository.saveAll(importedCustomers);
+
+            System.out.println("✅ Importación automática completada: " + importedCustomers.size() + " clientes importados");
+            if (!errors.isEmpty()) {
+                System.out.println("⚠️ Errores encontrados: " + errors.size());
+                errors.forEach(error -> System.out.println("   - " + error));
+            }
+
+            return new ImportResult(importedCustomers.size(), errors);
+
+        } catch (Exception e) {
+            System.err.println("❌ Error en importación automática: " + e.getMessage());
             throw new RuntimeException("Error al importar clientes: " + e.getMessage(), e);
         }
     }
@@ -120,15 +177,38 @@ public class CustomerImportService {
 
     /**
      * Importa clientes desde archivo CSV
+     * Auto-detects separator (comma or semicolon)
      */
     private List<Customer> importFromCSV(Long tenantId, Integer subPortfolioId, InputStream inputStream,
                                         List<String> errors) throws IOException {
         List<Customer> customers = new ArrayList<>();
 
+        // Read all bytes to detect separator from first line
+        byte[] allBytes = inputStream.readAllBytes();
+        String content = new String(allBytes);
+
+        // Auto-detect separator from first line
+        String firstLine = content.lines().findFirst().orElse("");
+        char delimiter = ',';
+        if (firstLine.contains(";") && !firstLine.contains(",")) {
+            delimiter = ';';
+        } else if (firstLine.contains(";") && firstLine.contains(",")) {
+            long commas = firstLine.chars().filter(ch -> ch == ',').count();
+            long semicolons = firstLine.chars().filter(ch -> ch == ';').count();
+            delimiter = semicolons > commas ? ';' : ',';
+        }
+
+        System.out.println("📄 CSV con separador detectado: '" + delimiter + "'");
+
+        // Parse with detected delimiter
         try (CSVParser parser = CSVFormat.DEFAULT
-                .withFirstRecordAsHeader()
-                .withTrim()
-                .parse(new InputStreamReader(inputStream))) {
+                .builder()
+                .setDelimiter(delimiter)
+                .setHeader()
+                .setSkipHeaderRecord(true)
+                .setTrim(true)
+                .build()
+                .parse(new java.io.StringReader(content))) {
 
             int rowNum = 1;
             for (CSVRecord record : parser) {
@@ -152,13 +232,9 @@ public class CustomerImportService {
      * Mapea una fila de datos a un objeto Customer usando SOLO base de datos (sin JSON)
      */
     private Customer mapToCustomer(Long tenantId, Integer subPortfolioId, Map<String, String> rowData) {
-        // Aplicar reglas de transformación desde la base de datos
         Map<String, Object> enrichedRowDataObj = new HashMap<>(rowData);
-        enrichedRowDataObj = fieldTransformationService.applyTransformationRules(
-            enrichedRowDataObj, tenantId, subPortfolioId
-        );
 
-        // Buscar directamente el campo "documento" generado por las transformaciones
+        // Buscar directamente el campo "documento"
         String documento = getString(enrichedRowDataObj, "documento");
 
         // Buscar nombre - puede venir de diferentes columnas
@@ -168,7 +244,7 @@ public class CustomerImportService {
         }
 
         if (documento == null || documento.isEmpty()) {
-            throw new IllegalArgumentException("Documento requerido (debe generarse mediante regla de transformación)");
+            throw new IllegalArgumentException("Documento requerido");
         }
         if (fullName == null || fullName.isEmpty()) {
             throw new IllegalArgumentException("Nombre completo requerido");

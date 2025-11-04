@@ -99,4 +99,9 @@ public interface ContactMethodRepository extends JpaRepository<ContactMethod, Lo
         @Param("contactType") String contactType,
         @Param("value") String value
     );
+
+    /**
+     * Elimina todos los métodos de contacto de un cliente
+     */
+    void deleteByCustomerId(Long customerId);
 }

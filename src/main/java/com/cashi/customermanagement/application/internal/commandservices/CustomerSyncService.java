@@ -1,9 +1,9 @@
 package com.cashi.customermanagement.application.internal.commandservices;
 
 import com.cashi.customermanagement.domain.model.aggregates.Customer;
-import com.cashi.customermanagement.domain.model.entities.FieldTransformationRule;
+import com.cashi.customermanagement.domain.model.entities.ContactMethod;
+import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.ContactMethodRepository;
 import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.CustomerRepository;
-import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.FieldTransformationRuleRepository;
 import com.cashi.shared.domain.model.entities.HeaderConfiguration;
 import com.cashi.shared.domain.model.entities.Portfolio;
 import com.cashi.shared.domain.model.entities.SubPortfolio;
@@ -35,8 +35,8 @@ public class CustomerSyncService {
     private final EntityManager entityManager;
 
     private final CustomerRepository customerRepository;
+    private final ContactMethodRepository contactMethodRepository;
     private final SubPortfolioRepository subPortfolioRepository;
-    private final FieldTransformationRuleRepository transformationRuleRepository;
     private final HeaderConfigurationRepository headerConfigurationRepository;
 
     /**
@@ -58,58 +58,75 @@ public class CustomerSyncService {
 
             // Leer datos de la tabla dinámica
             List<Map<String, Object>> rows = readDynamicTableData(tableName);
-            System.out.println("📋 Registros encontrados: " + rows.size());
 
-            // Procesar cada registro
+            // ========== OPTIMIZACIÓN: CARGAR CLIENTES EXISTENTES DE UNA VEZ ==========
+            List<Customer> existingCustomers = customerRepository.findByTenantId(tenantId);
+
+            // Crear un Map para búsqueda O(1) por codigo_identificacion
+            Map<String, Customer> existingCustomersMap = new HashMap<>();
+            for (Customer c : existingCustomers) {
+                if (c.getIdentificationCode() != null) {
+                    existingCustomersMap.put(c.getIdentificationCode(), c);
+                }
+            }
+
+            // Listas para batch operations
+            List<Customer> customersToSave = new ArrayList<>();
+            List<Map<String, Object>> rowsToSync = new ArrayList<>(); // Para sincronizar contactos después
+
+            // Procesar cada registro (preparación sin save individual)
             for (Map<String, Object> row : rows) {
                 try {
-                    System.out.println("📝 Registro ANTES de transformación: " + row);
-
-                    // Aplicar reglas de transformación de campos
-                    Map<String, Object> enrichedRow = applyFieldTransformations(row, tenantId);
-
-                    System.out.println("📝 Registro DESPUÉS de transformación: " + enrichedRow);
-
-                    String identificationCode = getStringValue(enrichedRow, "codigo_identificacion");
-                    String document = getStringValue(enrichedRow, "documento");
-
-                    System.out.println("📝 identificationCode=" + identificationCode + ", documento=" + document);
+                    String identificationCode = getStringValue(row, "codigo_identificacion");
+                    String document = getStringValue(row, "documento");
 
                     if (document == null || document.isEmpty()) {
                         errors.add("Documento vacío en registro");
                         continue;
                     }
 
-                    // Verificar si el cliente ya existe
-                    Optional<Customer> existingCustomer = customerRepository.findByTenantIdAndIdentificationCode(
-                            tenantId, identificationCode);
+                    // Buscar en Map en lugar de query a BD
+                    Customer existingCustomer = existingCustomersMap.get(identificationCode);
 
                     Customer customer;
-                    if (existingCustomer.isPresent()) {
+                    if (existingCustomer != null) {
                         // Actualizar cliente existente
-                        customer = existingCustomer.get();
+                        customer = existingCustomer;
                         customer.setTenantId(tenantId);
-                        // Note: portfolioId y subPortfolioId quedarán null ya que este método solo tiene tenantId
-                        updateCustomerFromRow(customer, enrichedRow);
+                        // Note: portfolioId y subPortfolioId quedarán null ya que este método directo no los tiene
+                        updateCustomerFromRow(customer, row);
                         customersUpdated++;
                     } else {
                         // Crear nuevo cliente (sin portfolio/subportfolio ya que este método directo no los tiene)
-                        customer = createCustomerFromRowLegacy(enrichedRow, tenantId);
+                        customer = createCustomerFromRowLegacy(row, tenantId);
                         customersCreated++;
                     }
 
-                    customerRepository.save(customer);
+                    customersToSave.add(customer);
+                    rowsToSync.add(row);
 
                 } catch (Exception e) {
                     errors.add("Error procesando registro: " + e.getMessage());
-                    System.err.println("❌ Error: " + e.getMessage());
                 }
             }
 
-            System.out.println("✅ Sincronización completada:");
-            System.out.println("   - Clientes creados: " + customersCreated);
-            System.out.println("   - Clientes actualizados: " + customersUpdated);
-            System.out.println("   - Errores: " + errors.size());
+            // ========== BATCH SAVE: Guardar todos los clientes de una vez ==========
+            if (!customersToSave.isEmpty()) {
+                customerRepository.saveAll(customersToSave);
+
+                // ========== SINCRONIZAR CONTACTOS DESPUÉS DEL BATCH SAVE ==========
+                int contactsCreated = 0;
+                for (int i = 0; i < customersToSave.size(); i++) {
+                    Customer customer = customersToSave.get(i);
+                    Map<String, Object> row = rowsToSync.get(i);
+                    try {
+                        contactsCreated += syncCustomerContacts(customer, row);
+                    } catch (Exception e) {
+                        errors.add("Error sincronizando contactos para " + customer.getIdentificationCode() + ": " + e.getMessage());
+                    }
+                }
+                System.out.println("📞 Contactos creados: " + contactsCreated);
+            }
 
             return new SyncResult(customersCreated, customersUpdated, errors);
 
@@ -120,11 +137,11 @@ public class CustomerSyncService {
     }
 
     /**
-     * Sincroniza clientes de una sub-cartera específica
+     * Sincroniza clientes de una sub-cartera específica con un LoadType específico
      */
     @Transactional
-    public SyncResult syncCustomersFromSubPortfolio(Long subPortfolioId) {
-        System.out.println("🔄 Iniciando sincronización de clientes para SubPortfolio ID: " + subPortfolioId);
+    public SyncResult syncCustomersFromSubPortfolio(Long subPortfolioId, LoadType loadType) {
+        System.out.println("🔄 Iniciando sincronización de clientes para SubPortfolio ID: " + subPortfolioId + ", LoadType: " + loadType);
 
         // 1. Obtener SubPortfolio con sus relaciones
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
@@ -137,7 +154,8 @@ public class CustomerSyncService {
         String tableName = buildDynamicTableName(
                 tenant.getTenantCode(),
                 portfolio.getPortfolioCode(),
-                subPortfolio.getSubPortfolioCode()
+                subPortfolio.getSubPortfolioCode(),
+                loadType
         );
 
         System.out.println("📊 Tabla dinámica: " + tableName);
@@ -154,33 +172,44 @@ public class CustomerSyncService {
 
             // 4. Leer datos de la tabla dinámica
             List<Map<String, Object>> rows = readDynamicTableData(tableName);
-            System.out.println("📋 Registros encontrados: " + rows.size());
 
-            // 5. Procesar cada registro
+            // ========== OPTIMIZACIÓN: CARGAR CLIENTES EXISTENTES DE UNA VEZ ==========
+            // En lugar de hacer 4063 queries individuales, cargamos todos los clientes del tenant de una vez
+            List<Customer> existingCustomers = customerRepository.findByTenantId(tenant.getId().longValue());
+
+            // Crear un Map para búsqueda O(1) por codigo_identificacion
+            Map<String, Customer> existingCustomersMap = new HashMap<>();
+            for (Customer c : existingCustomers) {
+                if (c.getIdentificationCode() != null) {
+                    existingCustomersMap.put(c.getIdentificationCode(), c);
+                }
+            }
+
+            // Listas para batch operations
+            List<Customer> customersToSave = new ArrayList<>();
+            List<Map<String, Object>> rowsToSync = new ArrayList<>(); // Para sincronizar contactos después
+
+            // 5. Procesar cada registro (preparación sin save individual)
             for (Map<String, Object> row : rows) {
                 try {
                     // Mapear columnas de financiera a sistema usando HeaderConfiguration
-                    Map<String, Object> mappedRow = mapColumnsToSystemFields(row, subPortfolio, LoadType.INICIAL);
+                    Map<String, Object> mappedRow = mapColumnsToSystemFields(row, subPortfolio, loadType);
 
-                    // Aplicar reglas de transformación de campos
-                    Map<String, Object> enrichedRow = applyFieldTransformations(mappedRow, tenant.getId().longValue());
-
-                    String identificationCode = getStringValue(enrichedRow, "codigo_identificacion");
-                    String document = getStringValue(enrichedRow, "documento");
+                    String identificationCode = getStringValue(mappedRow, "codigo_identificacion");
+                    String document = getStringValue(mappedRow, "documento");
 
                     if (document == null || document.isEmpty()) {
                         errors.add("Documento vacío en registro");
                         continue;
                     }
 
-                    // Verificar si el cliente ya existe
-                    Optional<Customer> existingCustomer = customerRepository.findByTenantIdAndIdentificationCode(
-                            tenant.getId().longValue(), identificationCode);
+                    // Buscar en Map en lugar de query a BD (O(1) vs O(n))
+                    Customer existingCustomer = existingCustomersMap.get(identificationCode);
 
                     Customer customer;
-                    if (existingCustomer.isPresent()) {
+                    if (existingCustomer != null) {
                         // Actualizar cliente existente
-                        customer = existingCustomer.get();
+                        customer = existingCustomer;
                         // Actualizar jerarquía completa
                         customer.setTenantId(tenant.getId().longValue());
                         customer.setTenantName(tenant.getTenantName());
@@ -188,27 +217,39 @@ public class CustomerSyncService {
                         customer.setPortfolioName(portfolio.getPortfolioName());
                         customer.setSubPortfolioId(subPortfolioId.longValue());
                         customer.setSubPortfolioName(subPortfolio.getSubPortfolioName());
-                        updateCustomerFromRow(customer, enrichedRow);
+                        updateCustomerFromRow(customer, mappedRow);
                         customersUpdated++;
                     } else {
                         // Crear nuevo cliente
-                        customer = createCustomerFromRow(enrichedRow, tenant, portfolio, subPortfolio);
+                        customer = createCustomerFromRow(mappedRow, tenant, portfolio, subPortfolio);
                         customersCreated++;
                     }
 
-                    System.out.println("💾 Guardando cliente - Edad: " + customer.getAge() + ", Documento: " + customer.getDocument());
-                    customerRepository.save(customer);
+                    customersToSave.add(customer);
+                    rowsToSync.add(mappedRow);
 
                 } catch (Exception e) {
                     errors.add("Error procesando registro: " + e.getMessage());
-                    System.err.println("❌ Error: " + e.getMessage());
                 }
             }
 
-            System.out.println("✅ Sincronización completada:");
-            System.out.println("   - Clientes creados: " + customersCreated);
-            System.out.println("   - Clientes actualizados: " + customersUpdated);
-            System.out.println("   - Errores: " + errors.size());
+            // ========== BATCH SAVE: Guardar todos los clientes de una vez ==========
+            if (!customersToSave.isEmpty()) {
+                customerRepository.saveAll(customersToSave);
+
+                // ========== SINCRONIZAR CONTACTOS DESPUÉS DEL BATCH SAVE ==========
+                int contactsCreated = 0;
+                for (int i = 0; i < customersToSave.size(); i++) {
+                    Customer customer = customersToSave.get(i);
+                    Map<String, Object> row = rowsToSync.get(i);
+                    try {
+                        contactsCreated += syncCustomerContacts(customer, row);
+                    } catch (Exception e) {
+                        errors.add("Error sincronizando contactos para " + customer.getIdentificationCode() + ": " + e.getMessage());
+                    }
+                }
+                System.out.println("📞 Contactos creados: " + contactsCreated);
+            }
 
             return new SyncResult(customersCreated, customersUpdated, errors);
 
@@ -221,8 +262,10 @@ public class CustomerSyncService {
     /**
      * Construye el nombre de la tabla dinámica de carga inicial
      */
-    private String buildDynamicTableName(String tenantCode, String portfolioCode, String subPortfolioCode) {
-        return String.format("ini_%s_%s_%s",
+    private String buildDynamicTableName(String tenantCode, String portfolioCode, String subPortfolioCode, LoadType loadType) {
+        String prefix = (loadType == LoadType.INICIAL) ? "ini_" : "";
+        return String.format("%s%s_%s_%s",
+                prefix,
                 tenantCode.toLowerCase(),
                 portfolioCode.toLowerCase(),
                 subPortfolioCode.toLowerCase()
@@ -589,109 +632,45 @@ public class CustomerSyncService {
     }
 
     /**
-     * Aplica reglas de transformación de campos desde la base de datos
+     * Sincroniza los contactos de un cliente desde una fila de datos
      */
-    private Map<String, Object> applyFieldTransformations(Map<String, Object> row, Long tenantId) {
-        Map<String, Object> enrichedData = new HashMap<>(row);
+    private int syncCustomerContacts(Customer customer, Map<String, Object> row) {
+        int contactsCreated = 0;
 
-        // Obtener todas las reglas activas para este tenant
-        List<FieldTransformationRule> rules = transformationRuleRepository
-                .findByTenantIdAndIsActiveTrueOrderByRuleOrderAsc(tenantId);
+        // Eliminar contactos existentes para este cliente
+        contactMethodRepository.deleteByCustomerId(customer.getId());
 
-        // Agrupar reglas por campo destino
-        Map<String, List<FieldTransformationRule>> rulesByTarget = new HashMap<>();
-        for (FieldTransformationRule rule : rules) {
-            rulesByTarget.computeIfAbsent(rule.getTargetField(), k -> new ArrayList<>()).add(rule);
-        }
+        // Crear contactos desde los datos
+        contactsCreated += createContactIfPresent(customer, "telefono_principal", "telefono", row);
+        contactsCreated += createContactIfPresent(customer, "telefono_secundario", "telefono", row);
+        contactsCreated += createContactIfPresent(customer, "telefono_trabajo", "telefono", row);
+        contactsCreated += createContactIfPresent(customer, "email", "email", row);
+        contactsCreated += createContactIfPresent(customer, "telefono_referencia_1", "telefono", row);
+        contactsCreated += createContactIfPresent(customer, "telefono_referencia_2", "telefono", row);
 
-        // Aplicar reglas para cada campo destino
-        for (Map.Entry<String, List<FieldTransformationRule>> entry : rulesByTarget.entrySet()) {
-            String targetField = entry.getKey();
-            List<FieldTransformationRule> targetRules = entry.getValue();
-
-            // Verificar si el campo ya existe en los datos
-            Object existingValue = enrichedData.get(targetField);
-            boolean fieldExists = existingValue != null &&
-                                 !existingValue.toString().trim().isEmpty();
-
-            if (!fieldExists && !targetRules.isEmpty()) {
-                // Obtener el campo fuente
-                String sourceField = targetRules.get(0).getSourceField();
-                Object sourceValueObj = enrichedData.get(sourceField);
-
-                if (sourceValueObj != null) {
-                    String sourceValue = sourceValueObj.toString();
-
-                    if (!sourceValue.isEmpty()) {
-                        // Aplicar reglas hasta que una funcione
-                        String derivedValue = applyTransformationRules(sourceValue, targetRules);
-
-                        if (derivedValue != null) {
-                            enrichedData.put(targetField, derivedValue);
-                            System.out.println("🔄 Campo derivado: " + targetField + " = " + derivedValue +
-                                             " (desde " + sourceField + " = " + sourceValue + ")");
-                        }
-                    }
-                }
-            }
-        }
-
-        return enrichedData;
+        return contactsCreated;
     }
 
     /**
-     * Aplica reglas de transformación a un valor
+     * Crea un método de contacto si el valor está presente en los datos
      */
-    private String applyTransformationRules(String value, List<FieldTransformationRule> rules) {
-        if (rules == null || rules.isEmpty()) {
-            return value;
+    private int createContactIfPresent(Customer customer, String subtype, String contactType, Map<String, Object> row) {
+        String contactValue = getStringValue(row, subtype);
+        if (contactValue != null && !contactValue.isEmpty()) {
+            ContactMethod contactMethod = ContactMethod.builder()
+                    .customer(customer)
+                    .contactType(contactType)
+                    .subtype(subtype)
+                    .value(contactValue)
+                    .label(subtype)
+                    .importDate(LocalDate.now())
+                    .status("ACTIVE")
+                    .build();
+
+            contactMethodRepository.save(contactMethod);
+            return 1;
         }
-
-        for (FieldTransformationRule rule : rules) {
-            // Si no hay condiciones de transformación, copiar el valor tal cual
-            if (rule.getStartsWithPrefix() == null &&
-                rule.getExtractLastNChars() == null &&
-                rule.getRegexPattern() == null) {
-                return value;
-            }
-
-            // Verificar si coincide con el prefijo
-            if (rule.getStartsWithPrefix() != null) {
-                if (value.startsWith(rule.getStartsWithPrefix())) {
-                    // Aplicar extracción de últimos N caracteres
-                    if (rule.getExtractLastNChars() != null && rule.getExtractLastNChars() > 0) {
-                        int length = value.length();
-                        int charsToExtract = rule.getExtractLastNChars();
-
-                        if (length >= charsToExtract) {
-                            return value.substring(length - charsToExtract);
-                        }
-                    } else {
-                        // Si solo tiene prefijo pero no extracción, retornar el valor completo
-                        return value;
-                    }
-                }
-            }
-
-            // Aplicar regex si está especificado
-            if (rule.getRegexPattern() != null) {
-                try {
-                    java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(rule.getRegexPattern());
-                    java.util.regex.Matcher matcher = pattern.matcher(value);
-
-                    if (matcher.find()) {
-                        int captureGroup = rule.getRegexCaptureGroup() != null ? rule.getRegexCaptureGroup() : 1;
-                        if (matcher.groupCount() >= captureGroup) {
-                            return matcher.group(captureGroup);
-                        }
-                    }
-                } catch (Exception e) {
-                    System.err.println("⚠️ Error aplicando regex: " + e.getMessage());
-                }
-            }
-        }
-
-        return null;  // No se aplicó ninguna regla
+        return 0;
     }
 
     /**

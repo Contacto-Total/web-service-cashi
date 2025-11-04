@@ -481,20 +481,47 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             throw new IllegalArgumentException("No hay cabeceras configuradas para esta subcartera y tipo de carga.");
         }
 
-        // Validar y preparar los datos
-        int insertedRows = 0;
-        int failedRows = 0;
+        // ========== OPTIMIZACIÓN: BATCH INSERT ==========
+        // Preparar todas las filas válidas para batch insert
+        List<PreparedRowData> validRows = new ArrayList<>();
         List<String> errors = new ArrayList<>();
+        int failedRows = 0;
 
+        logger.info("📦 Preparando {} filas para batch insert...", data.size());
+
+        // Fase 1: Validar y preparar todas las filas
         for (int i = 0; i < data.size(); i++) {
             Map<String, Object> row = data.get(i);
             try {
-                insertRowToTable(tableName, row, headers, subPortfolio);
-                insertedRows++;
+                PreparedRowData preparedRow = prepareRowData(row, headers, i + 1);
+                validRows.add(preparedRow);
             } catch (Exception e) {
                 failedRows++;
                 errors.add("Fila " + (i + 1) + ": " + e.getMessage());
-                logger.error("Error al insertar fila {}: {}", i + 1, e.getMessage());
+                // Solo loguear en DEBUG para evitar ralentización en producción
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Error al validar fila {}: {}", i + 1, e.getMessage());
+                }
+            }
+        }
+
+        logger.info("✅ Filas preparadas: {} válidas, {} con errores", validRows.size(), failedRows);
+
+        // Loguear un resumen de errores si hay muchos
+        if (failedRows > 0 && logger.isDebugEnabled()) {
+            logger.debug("Resumen de errores de validación: {} filas fallidas de {}", failedRows, data.size());
+        }
+
+        int insertedRows = 0;
+
+        // Fase 2: Insertar todas las filas válidas en un solo batch
+        if (!validRows.isEmpty()) {
+            try {
+                insertedRows = batchInsertRows(tableName, validRows, headers);
+                logger.info("✅ Batch insert completado: {} filas insertadas", insertedRows);
+            } catch (Exception e) {
+                logger.error("❌ Error en batch insert: {}", e.getMessage(), e);
+                throw new RuntimeException("Error al insertar datos en lote: " + e.getMessage(), e);
             }
         }
 
@@ -513,9 +540,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         // 🔄 Sincronizar clientes desde la tabla dinámica a la tabla clientes
         if (insertedRows > 0) {
-            logger.info("🔄 Iniciando sincronización de clientes para SubPortfolio ID: {}", subPortfolioId);
+            logger.info("🔄 Iniciando sincronización de clientes para SubPortfolio ID: {}, LoadType: {}", subPortfolioId, loadType);
             try {
-                CustomerSyncService.SyncResult syncResult = customerSyncService.syncCustomersFromSubPortfolio(subPortfolioId.longValue());
+                CustomerSyncService.SyncResult syncResult = customerSyncService.syncCustomersFromSubPortfolio(subPortfolioId.longValue(), loadType);
                 logger.info("✅ Sincronización completada: {} clientes creados, {} actualizados",
                         syncResult.getCustomersCreated(), syncResult.getCustomersUpdated());
 
@@ -535,8 +562,199 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
-     * Inserta una fila en la tabla dinámica y crea el cliente si es necesario
+     * Clase interna para almacenar datos de fila preparada
      */
+    private static class PreparedRowData {
+        private final int rowNumber;
+        private final List<Object> values;
+
+        public PreparedRowData(int rowNumber, List<Object> values) {
+            this.rowNumber = rowNumber;
+            this.values = values;
+        }
+
+        public List<Object> getValues() {
+            return values;
+        }
+    }
+
+    /**
+     * Prepara una fila validando y convirtiendo los valores según las configuraciones de cabeceras
+     * No inserta en BD, solo valida y prepara los datos
+     */
+    private PreparedRowData prepareRowData(Map<String, Object> rowData, List<HeaderConfiguration> headers, int rowNumber) {
+        List<Object> values = new ArrayList<>();
+
+        for (HeaderConfiguration header : headers) {
+            // Obtener el valor: puede venir directo o por transformación
+            Object value;
+            if (header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
+                // Este campo se deriva de otro mediante transformación (case-insensitive)
+                Object sourceValue = getValueFromRowData(rowData, header.getSourceField());
+                if (sourceValue != null) {
+                    String sourceStr = sourceValue.toString();
+
+                    // Aplicar regex si está configurado
+                    if (header.getRegexPattern() != null && !header.getRegexPattern().trim().isEmpty()) {
+                        value = applyRegexTransformation(sourceStr, header.getRegexPattern(), header.getHeaderName());
+                    } else {
+                        // Sin regex, copiar el valor tal cual
+                        value = sourceStr;
+                    }
+                } else {
+                    value = null;
+                }
+            } else {
+                // Campo normal: obtener directamente del CSV (case-insensitive)
+                value = getValueFromRowData(rowData, header.getHeaderName());
+            }
+
+            // ========== VALIDACIÓN DE CAMPOS OBLIGATORIOS ==========
+            boolean isEmpty = value == null ||
+                             (value instanceof String && ((String) value).trim().isEmpty());
+
+            // Validar que campos obligatorios tengan valor
+            if (header.getRequired() != null && header.getRequired() == 1) {
+                if (isEmpty) {
+                    throw new IllegalArgumentException(
+                        "El campo obligatorio '" + header.getHeaderName() + "' no puede estar vacío"
+                    );
+                }
+            }
+
+            // Si el campo NO es obligatorio y está vacío, convertir a NULL
+            if (isEmpty) {
+                value = null;
+            }
+
+            // Convertir el valor según el tipo de dato
+            if (value == null) {
+                values.add(null);
+            } else {
+                switch (header.getDataType().toUpperCase()) {
+                    case "NUMERICO":
+                        try {
+                            if (value instanceof Number) {
+                                values.add(value);
+                            } else {
+                                String numStr = value.toString().trim();
+                                if (numStr.startsWith(".")) {
+                                    numStr = "0" + numStr;
+                                }
+                                values.add(Double.parseDouble(numStr));
+                            }
+                        } catch (NumberFormatException e) {
+                            throw new IllegalArgumentException("Valor no numérico para campo " + header.getHeaderName() + ": " + value);
+                        }
+                        break;
+                    case "FECHA":
+                        try {
+                            if (value instanceof LocalDate) {
+                                values.add(value);
+                            } else if (value instanceof java.time.LocalDateTime) {
+                                values.add(((java.time.LocalDateTime) value).toLocalDate());
+                            } else {
+                                String dateStr = value.toString().trim();
+                                String format = header.getFormat();
+
+                                if (format != null && !format.isEmpty()) {
+                                    String flexibleFormat = format
+                                        .replace("dd", "d")
+                                        .replace("MM", "M");
+
+                                    java.time.format.DateTimeFormatter formatter =
+                                        java.time.format.DateTimeFormatter.ofPattern(flexibleFormat);
+
+                                    if (format.contains("HH") || format.contains("hh") || format.contains("mm") || format.contains("ss")) {
+                                        java.time.LocalDateTime dateTime = java.time.LocalDateTime.parse(dateStr, formatter);
+                                        values.add(dateTime.toLocalDate());
+                                    } else {
+                                        values.add(LocalDate.parse(dateStr, formatter));
+                                    }
+                                } else {
+                                    values.add(LocalDate.parse(dateStr));
+                                }
+                            }
+                        } catch (Exception e) {
+                            throw new IllegalArgumentException("Valor no es fecha válida para campo " + header.getHeaderName() + ": " + value +
+                                " (formato esperado: " + (header.getFormat() != null ? header.getFormat() : "yyyy-MM-dd") + ")");
+                        }
+                        break;
+                    case "TEXTO":
+                    default:
+                        values.add(value.toString());
+                        break;
+                }
+            }
+        }
+
+        return new PreparedRowData(rowNumber, values);
+    }
+
+    /**
+     * Inserta todas las filas preparadas usando batch update para máxima eficiencia
+     */
+    private int batchInsertRows(String tableName, List<PreparedRowData> rows, List<HeaderConfiguration> headers) {
+        if (rows.isEmpty()) {
+            return 0;
+        }
+
+        // Construir SQL una sola vez
+        StringBuilder columns = new StringBuilder();
+        StringBuilder placeholders = new StringBuilder();
+        boolean firstColumn = true;
+
+        for (HeaderConfiguration header : headers) {
+            String columnName = sanitizeColumnName(header.getHeaderName());
+
+            if (firstColumn) {
+                columns.append(columnName);
+                placeholders.append("?");
+                firstColumn = false;
+            } else {
+                columns.append(", ").append(columnName);
+                placeholders.append(", ?");
+            }
+        }
+
+        String sql = "INSERT INTO " + tableName + " (" + columns + ") VALUES (" + placeholders + ")";
+
+        logger.info("🚀 Ejecutando batch insert de {} filas en tabla {}", rows.size(), tableName);
+
+        // Usar batchUpdate con BatchPreparedStatementSetter para máximo rendimiento
+        int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
+            @Override
+            public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
+                PreparedRowData rowData = rows.get(i);
+                List<Object> values = rowData.getValues();
+
+                for (int j = 0; j < values.size(); j++) {
+                    ps.setObject(j + 1, values.get(j));
+                }
+            }
+
+            @Override
+            public int getBatchSize() {
+                return rows.size();
+            }
+        });
+
+        // Sumar todos los registros insertados
+        int totalInserted = 0;
+        for (int count : updateCounts) {
+            if (count > 0) {
+                totalInserted += count;
+            }
+        }
+
+        return totalInserted;
+    }
+
+    /**
+     * Inserta una fila en la tabla dinámica y crea el cliente si es necesario
+     * @deprecated Usar batchInsertRows para mejor rendimiento
+     */
+    @Deprecated
     private void insertRowToTable(String tableName, Map<String, Object> rowData, List<HeaderConfiguration> headers, SubPortfolio subPortfolio) {
         // Construir SQL dinámico
         StringBuilder columns = new StringBuilder();
@@ -545,6 +763,10 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         boolean firstColumn = true;
 
+        logger.debug("🔍 Insertando fila. Cabeceras configuradas: {}, Keys en CSV: {}",
+            headers.stream().map(HeaderConfiguration::getHeaderName).collect(java.util.stream.Collectors.toList()),
+            rowData.keySet());
+
         // Agregar columnas dinámicas
         for (HeaderConfiguration header : headers) {
             String columnName = sanitizeColumnName(header.getHeaderName());
@@ -552,8 +774,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             // Obtener el valor: puede venir directo o por transformación
             Object value;
             if (header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
-                // Este campo se deriva de otro mediante transformación
-                Object sourceValue = rowData.get(header.getSourceField());
+                // Este campo se deriva de otro mediante transformación (case-insensitive)
+                Object sourceValue = getValueFromRowData(rowData, header.getSourceField());
                 if (sourceValue != null) {
                     String sourceStr = sourceValue.toString();
 
@@ -570,8 +792,26 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     value = null;
                 }
             } else {
-                // Campo normal: obtener directamente del CSV
-                value = rowData.get(header.getHeaderName());
+                // Campo normal: obtener directamente del CSV (case-insensitive)
+                value = getValueFromRowData(rowData, header.getHeaderName());
+            }
+
+            // ========== VALIDACIÓN DE CAMPOS OBLIGATORIOS ==========
+            boolean isEmpty = value == null ||
+                             (value instanceof String && ((String) value).trim().isEmpty());
+
+            // Validar que campos obligatorios tengan valor
+            if (header.getRequired() != null && header.getRequired() == 1) {
+                if (isEmpty) {
+                    throw new IllegalArgumentException(
+                        "El campo obligatorio '" + header.getHeaderName() + "' no puede estar vacío"
+                    );
+                }
+            }
+
+            // Si el campo NO es obligatorio y está vacío, convertir a NULL
+            if (isEmpty) {
+                value = null;
             }
 
             if (firstColumn) {
@@ -594,7 +834,14 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                             if (value instanceof Number) {
                                 values.add(value);
                             } else {
-                                values.add(Double.parseDouble(value.toString()));
+                                String numStr = value.toString().trim();
+
+                                // Manejar casos como ".10" o ".20" agregando "0" al inicio
+                                if (numStr.startsWith(".")) {
+                                    numStr = "0" + numStr;
+                                }
+
+                                values.add(Double.parseDouble(numStr));
                             }
                         } catch (NumberFormatException e) {
                             throw new IllegalArgumentException("Valor no numérico para campo " + header.getHeaderName() + ": " + value);
@@ -860,6 +1107,65 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
+     * Obtiene un valor del rowData de forma case-insensitive y flexible con espacios/guiones
+     */
+    private Object getValueFromRowData(Map<String, Object> rowData, String headerName) {
+        if (headerName == null) return null;
+
+        // Primero intentar búsqueda exacta
+        if (rowData.containsKey(headerName)) {
+            return rowData.get(headerName);
+        }
+
+        // Normalizar el nombre buscado para comparación flexible
+        String normalizedSearch = normalizeHeaderName(headerName);
+
+        // Buscar en todas las keys del mapa
+        for (Map.Entry<String, Object> entry : rowData.entrySet()) {
+            String key = entry.getKey();
+            if (key != null && normalizeHeaderName(key).equals(normalizedSearch)) {
+                logger.debug("Mapeo flexible: '{}' encontrado como '{}' en CSV", headerName, key);
+                return entry.getValue();
+            }
+        }
+
+        // No encontrado
+        logger.warn("Cabecera '{}' no encontrada en el CSV. Keys disponibles: {}",
+                   headerName, rowData.keySet());
+        return null;
+    }
+
+    /**
+     * Normaliza un nombre de cabecera para comparación flexible:
+     * - A minúsculas
+     * - Espacios y guiones bajos se tratan igual
+     * - Sin acentos
+     * - Sin caracteres especiales excepto letras, números y _
+     */
+    private String normalizeHeaderName(String headerName) {
+        if (headerName == null) return "";
+
+        return headerName
+                .toLowerCase()
+                .trim()
+                // Normalizar acentos
+                .replaceAll("[áàäâ]", "a")
+                .replaceAll("[éèëê]", "e")
+                .replaceAll("[íìïî]", "i")
+                .replaceAll("[óòöô]", "o")
+                .replaceAll("[úùüû]", "u")
+                .replaceAll("[ñ]", "n")
+                // Reemplazar espacios por guión bajo para normalizar
+                .replaceAll("\\s+", "_")
+                // Eliminar caracteres especiales excepto letras, números y guión bajo
+                .replaceAll("[^a-z0-9_]", "")
+                // Eliminar guiones bajos duplicados
+                .replaceAll("_+", "_")
+                // Eliminar guiones bajos al inicio o final
+                .replaceAll("^_|_$", "");
+    }
+    
+    /**
      * Aplica una transformación regex a un valor
      */
     private String applyRegexTransformation(String sourceValue, String regexPattern, String fieldName) {
@@ -900,6 +1206,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 "telefono_referencia_2", "telefono",
                 "email", "email"
             );
+            
 
             LocalDate today = LocalDate.now();
             int contactMethodsCreated = 0;
