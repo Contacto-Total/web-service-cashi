@@ -1164,67 +1164,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 // Eliminar guiones bajos al inicio o final
                 .replaceAll("^_|_$", "");
     }
-
-    /**
-     * Parsea una fecha de forma flexible intentando múltiples formatos comunes
-     */
-    private LocalDate parseFlexibleDate(String dateStr, String preferredFormat) {
-        if (dateStr == null || dateStr.trim().isEmpty()) {
-            return null;
-        }
-
-        dateStr = dateStr.trim();
-
-        // Lista de formatos a intentar (el preferido primero, luego comunes)
-        List<String> formatsToTry = new ArrayList<>();
-
-        // Agregar formato preferido si existe
-        if (preferredFormat != null && !preferredFormat.trim().isEmpty()) {
-            formatsToTry.add(preferredFormat);
-        }
-
-        // Formatos comunes a intentar
-        formatsToTry.addAll(List.of(
-            "yyyy-MM-dd HH:mm:ss",
-            "yyyy-MM-dd HH:mm",
-            "yyyy-MM-dd",
-            "dd/MM/yyyy HH:mm:ss",
-            "dd/MM/yyyy HH:mm",
-            "dd/MM/yyyy",
-            "d/M/yyyy HH:mm:ss",
-            "d/M/yyyy HH:mm",
-            "d/M/yyyy"
-        ));
-
-        // Intentar cada formato
-        for (String format : formatsToTry) {
-            try {
-                // Hacer el formato flexible (aceptar 1 o 2 dígitos)
-                String flexibleFormat = format
-                    .replace("dd", "d")
-                    .replace("MM", "M");
-
-                java.time.format.DateTimeFormatter formatter =
-                    java.time.format.DateTimeFormatter.ofPattern(flexibleFormat);
-
-                // Si incluye hora, parsear como LocalDateTime y extraer fecha
-                if (format.contains("HH") || format.contains("hh") || format.contains("mm") || format.contains("ss")) {
-                    java.time.LocalDateTime dateTime = java.time.LocalDateTime.parse(dateStr, formatter);
-                    return dateTime.toLocalDate();
-                } else {
-                    return LocalDate.parse(dateStr, formatter);
-                }
-            } catch (Exception e) {
-                // Continuar con el siguiente formato
-                continue;
-            }
-        }
-
-        // Si ningún formato funcionó, lanzar excepción
-        throw new IllegalArgumentException("No se pudo parsear la fecha: " + dateStr +
-            ". Formatos intentados: " + formatsToTry);
-    }
-
+    
     /**
      * Aplica una transformación regex a un valor
      */
