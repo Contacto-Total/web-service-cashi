@@ -65,8 +65,7 @@ public class TenantCommandServiceImpl implements TenantCommandService {
         Tenant tenant = tenantRepository.findById(tenantId)
             .orElseThrow(() -> new IllegalArgumentException("Tenant no encontrado con ID: " + tenantId));
 
-        // Soft delete - marcar como inactivo
-        tenant.setIsActive(0);
-        tenantRepository.save(tenant);
+        // Hard delete - eliminar de la base de datos
+        tenantRepository.delete(tenant);
     }
 }
