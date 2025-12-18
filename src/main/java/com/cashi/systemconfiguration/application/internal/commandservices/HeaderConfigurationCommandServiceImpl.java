@@ -692,9 +692,175 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
-     * Inserta todas las filas preparadas usando batch update para máxima eficiencia
+     * Inserta o actualiza filas usando batch operations (UPSERT)
+     * Si un registro con el mismo identity_code ya existe, lo actualiza
+     * Si no existe, lo inserta
      */
     private int batchInsertRows(String tableName, List<PreparedRowData> rows, List<HeaderConfiguration> headers) {
+        if (rows.isEmpty()) {
+            return 0;
+        }
+
+        // 1. Encontrar el índice de la columna identity_code
+        int identityCodeIndex = -1;
+        String identityCodeColumn = null;
+        for (int i = 0; i < headers.size(); i++) {
+            HeaderConfiguration header = headers.get(i);
+            if (header.getFieldDefinition() != null &&
+                "codigo_identificacion".equals(header.getFieldDefinition().getFieldCode())) {
+                identityCodeIndex = i;
+                identityCodeColumn = sanitizeColumnName(header.getHeaderName());
+                logger.info("🔑 Columna identity_code encontrada: índice={}, columna={}", i, identityCodeColumn);
+                break;
+            }
+        }
+
+        // Si no encontramos identity_code, hacer INSERT normal (fallback al comportamiento anterior)
+        if (identityCodeIndex == -1) {
+            logger.warn("⚠️ No se encontró columna identity_code en headers, haciendo INSERT normal");
+            return batchInsertNewRows(tableName, rows, headers);
+        }
+
+        // 2. Extraer los identity_codes del batch
+        List<String> incomingCodes = new ArrayList<>();
+        for (PreparedRowData row : rows) {
+            Object value = row.getValues().get(identityCodeIndex);
+            if (value != null) {
+                incomingCodes.add(value.toString());
+            }
+        }
+
+        // 3. Consultar cuáles ya existen en la tabla
+        Set<String> existingCodes = queryExistingIdentityCodes(tableName, identityCodeColumn, incomingCodes);
+
+        logger.info("📊 Análisis de datos: {} totales, {} ya existen en BD, {} son nuevos",
+                   rows.size(), existingCodes.size(), rows.size() - existingCodes.size());
+
+        // 4. Separar en dos grupos: existentes (UPDATE) y nuevos (INSERT)
+        List<PreparedRowData> toInsert = new ArrayList<>();
+        List<PreparedRowData> toUpdate = new ArrayList<>();
+
+        for (PreparedRowData row : rows) {
+            Object value = row.getValues().get(identityCodeIndex);
+            String code = value != null ? value.toString() : null;
+
+            if (code != null && existingCodes.contains(code)) {
+                toUpdate.add(row);
+            } else {
+                toInsert.add(row);
+            }
+        }
+
+        int totalProcessed = 0;
+
+        // 5. UPDATE para registros existentes
+        if (!toUpdate.isEmpty()) {
+            logger.info("🔄 Actualizando {} registros existentes...", toUpdate.size());
+            int updated = batchUpdateRows(tableName, toUpdate, headers, identityCodeIndex, identityCodeColumn);
+            logger.info("✅ {} registros actualizados", updated);
+            totalProcessed += updated;
+        }
+
+        // 6. INSERT para registros nuevos
+        if (!toInsert.isEmpty()) {
+            logger.info("➕ Insertando {} registros nuevos...", toInsert.size());
+            int inserted = batchInsertNewRows(tableName, toInsert, headers);
+            logger.info("✅ {} registros insertados", inserted);
+            totalProcessed += inserted;
+        }
+
+        return totalProcessed;
+    }
+
+    /**
+     * Consulta qué identity_codes ya existen en la tabla
+     */
+    private Set<String> queryExistingIdentityCodes(String tableName, String identityCodeColumn, List<String> codes) {
+        if (codes.isEmpty()) {
+            return new HashSet<>();
+        }
+
+        // Construir placeholders para IN clause
+        String placeholders = codes.stream().map(c -> "?").collect(java.util.stream.Collectors.joining(", "));
+        String sql = "SELECT " + identityCodeColumn + " FROM " + tableName +
+                     " WHERE " + identityCodeColumn + " IN (" + placeholders + ")";
+
+        try {
+            List<String> existingCodes = jdbcTemplate.queryForList(sql, String.class, codes.toArray());
+            return new HashSet<>(existingCodes);
+        } catch (Exception e) {
+            logger.error("❌ Error al consultar identity_codes existentes: {}", e.getMessage());
+            return new HashSet<>();
+        }
+    }
+
+    /**
+     * Batch UPDATE para registros existentes
+     */
+    private int batchUpdateRows(String tableName, List<PreparedRowData> rows,
+                                List<HeaderConfiguration> headers, int identityCodeIndex,
+                                String identityCodeColumn) {
+        if (rows.isEmpty()) {
+            return 0;
+        }
+
+        // Construir SQL: UPDATE tabla SET col1=?, col2=? WHERE identity_code=?
+        StringBuilder setClause = new StringBuilder();
+        boolean first = true;
+
+        for (int i = 0; i < headers.size(); i++) {
+            if (i == identityCodeIndex) continue; // No actualizar la columna identity_code
+
+            String columnName = sanitizeColumnName(headers.get(i).getHeaderName());
+            if (first) {
+                setClause.append(columnName).append(" = ?");
+                first = false;
+            } else {
+                setClause.append(", ").append(columnName).append(" = ?");
+            }
+        }
+
+        String sql = "UPDATE " + tableName + " SET " + setClause +
+                     " WHERE " + identityCodeColumn + " = ?";
+
+        final int idxCodeIndex = identityCodeIndex;
+
+        int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
+            @Override
+            public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
+                PreparedRowData rowData = rows.get(i);
+                List<Object> values = rowData.getValues();
+
+                int paramIndex = 1;
+                // Setear valores de columnas (excepto identity_code)
+                for (int j = 0; j < values.size(); j++) {
+                    if (j == idxCodeIndex) continue;
+                    ps.setObject(paramIndex++, values.get(j));
+                }
+                // Setear identity_code para el WHERE
+                ps.setObject(paramIndex, values.get(idxCodeIndex));
+            }
+
+            @Override
+            public int getBatchSize() {
+                return rows.size();
+            }
+        });
+
+        int totalUpdated = 0;
+        for (int count : updateCounts) {
+            if (count > 0) {
+                totalUpdated += count;
+            }
+        }
+
+        return totalUpdated;
+    }
+
+    /**
+     * Batch INSERT para registros nuevos
+     */
+    private int batchInsertNewRows(String tableName, List<PreparedRowData> rows, List<HeaderConfiguration> headers) {
         if (rows.isEmpty()) {
             return 0;
         }
