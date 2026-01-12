@@ -57,15 +57,25 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     public HeaderConfiguration createHeaderConfiguration(Integer subPortfolioId, Integer fieldDefinitionId,
                                                          String headerName, String displayLabel,
                                                          String format, Boolean required, LoadType loadType) {
+        // Validaciones de parámetros obligatorios
+        if (subPortfolioId == null) {
+            throw new IllegalArgumentException("El ID de subcartera es obligatorio");
+        }
+        if (headerName == null || headerName.trim().isEmpty()) {
+            throw new IllegalArgumentException("El nombre de cabecera es obligatorio");
+        }
+        if (loadType == null) {
+            throw new IllegalArgumentException("El tipo de carga es obligatorio");
+        }
+        if (fieldDefinitionId == null) {
+            throw new IllegalArgumentException("El ID de definición de campo es obligatorio. Para campos personalizados use el endpoint /bulk");
+        }
+
         // Validar que la subcartera existe
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada con ID: " + subPortfolioId));
 
-        // Verificar si la tabla dinámica tiene datos
         String tableName = buildTableName(subPortfolio, loadType);
-        if (dynamicTableExists(tableName) && hasDataInTable(tableName)) {
-            throw new IllegalArgumentException("No se pueden agregar cabeceras adicionales porque la tabla ya contiene datos. Debe eliminar los datos primero.");
-        }
 
         // Validar que la definición de campo existe
         FieldDefinition fieldDefinition = fieldDefinitionRepository.findById(fieldDefinitionId)
@@ -84,9 +94,13 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         HeaderConfiguration saved = headerConfigurationRepository.save(headerConfig);
 
-        // Si la tabla existe, agregar la columna
+        // Si la tabla existe, agregar la columna (incluso si tiene datos, la columna se agrega con valores NULL)
         if (dynamicTableExists(tableName)) {
             addColumnToTable(tableName, saved);
+            logger.info("Columna '{}' agregada a tabla '{}' (registros existentes tendrán valor NULL)",
+                       sanitizeColumnName(headerName), tableName);
+        } else {
+            logger.warn("La tabla '{}' no existe. La columna se creará cuando se cree la tabla.", tableName);
         }
 
         return saved;
@@ -129,9 +143,12 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         LoadType loadType = headerConfig.getLoadType();
         String tableName = buildTableName(subPortfolio, loadType);
 
-        // Verificar si la tabla tiene datos
+        // Verificar si la tabla tiene datos (operación destructiva, se perderían datos de la columna)
         if (dynamicTableExists(tableName) && hasDataInTable(tableName)) {
-            throw new IllegalArgumentException("No se pueden eliminar cabeceras porque la tabla ya contiene datos. Debe eliminar los datos primero.");
+            throw new IllegalArgumentException(
+                "No se puede eliminar la cabecera '" + headerConfig.getHeaderName() +
+                "' porque la tabla ya contiene datos. Debe eliminar los datos primero."
+            );
         }
 
         // Eliminar la columna de la tabla si existe
@@ -346,9 +363,12 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         String tableName = buildTableName(subPortfolio, loadType);
 
-        // Verificar si la tabla tiene datos
+        // Verificar si la tabla tiene datos (operación destructiva, se perderían todos los datos)
         if (dynamicTableExists(tableName) && hasDataInTable(tableName)) {
-            throw new IllegalArgumentException("No se pueden eliminar las configuraciones porque la tabla ya contiene datos. Debe eliminar los datos primero.");
+            throw new IllegalArgumentException(
+                "No se pueden eliminar las configuraciones porque la tabla '" + tableName +
+                "' ya contiene datos. Debe eliminar los datos primero."
+            );
         }
 
         // Eliminar la tabla dinámica completa si existe

@@ -82,9 +82,14 @@ public class HeaderConfigurationController {
 
     @Operation(summary = "Crear nueva configuración de cabecera")
     @PostMapping
-    public ResponseEntity<HeaderConfigurationResource> create(
+    public ResponseEntity<?> create(
             @RequestBody CreateHeaderConfigurationResource resource) {
         try {
+            System.out.println("📥 Creando cabecera: subPortfolioId=" + resource.subPortfolioId()
+                    + ", fieldDefinitionId=" + resource.fieldDefinitionId()
+                    + ", headerName=" + resource.headerName()
+                    + ", loadType=" + resource.loadType());
+
             var config = commandService.createHeaderConfiguration(
                     resource.subPortfolioId(),
                     resource.fieldDefinitionId(),
@@ -95,9 +100,16 @@ public class HeaderConfigurationController {
                     resource.loadType()
             );
             var responseResource = HeaderConfigurationResourceFromEntityAssembler.toResourceFromEntity(config);
+            System.out.println("✅ Cabecera creada exitosamente: " + config.getHeaderName());
             return ResponseEntity.status(HttpStatus.CREATED).body(responseResource);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().build();
+            System.err.println("❌ Error de validación al crear cabecera: " + e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            System.err.println("❌ Error inesperado al crear cabecera: " + e.getMessage());
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Error interno: " + e.getMessage()));
         }
     }
 
