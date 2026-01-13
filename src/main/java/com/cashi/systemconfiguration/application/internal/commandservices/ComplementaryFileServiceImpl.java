@@ -317,7 +317,10 @@ public class ComplementaryFileServiceImpl implements ComplementaryFileService {
         for (ComplementaryFileType type : types) {
             try {
                 Pattern pattern = Pattern.compile(type.getFileNamePattern(), Pattern.CASE_INSENSITIVE);
-                if (pattern.matcher(fileName).matches()) {
+                // Usar find() en lugar de matches() para permitir coincidencias parciales
+                // Esto permite patrones como "Facilidades_Pago_CONTACTO_TOTAL_\d{6}"
+                // que coincidan con archivos como "Facilidades_Pago_CONTACTO_TOTAL_202501.xlsx"
+                if (pattern.matcher(fileName).find()) {
                     logger.debug("Archivo '{}' coincide con tipo '{}'", fileName, type.getTypeName());
                     return type;
                 }
