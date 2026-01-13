@@ -408,8 +408,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         String tableName = buildTableName(subPortfolio, loadType);
 
-        // Verificar si la tabla tiene datos (operación destructiva, se perderían todos los datos)
-        if (dynamicTableExists(tableName) && hasDataInTable(tableName)) {
+        // Verificar si la tabla tiene datos reales (no solo NULLs)
+        // Solo bloquear si hay datos reales en la tabla
+        if (dynamicTableExists(tableName) && tableHasAnyNonNullData(tableName)) {
             throw new IllegalArgumentException(
                 "No se pueden eliminar las configuraciones porque la tabla '" + tableName +
                 "' ya contiene datos. Debe eliminar los datos primero."
@@ -419,9 +420,12 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         // Eliminar la tabla dinámica completa si existe
         if (dynamicTableExists(tableName)) {
             dropDynamicTable(tableName);
+            logger.info("Tabla dinámica '{}' eliminada", tableName);
         }
 
         headerConfigurationRepository.deleteBySubPortfolioAndLoadType(subPortfolio, loadType);
+        logger.info("Configuraciones de cabeceras eliminadas para subPortfolioId={}, loadType={}",
+                   subPortfolioId, loadType);
     }
 
     /**
@@ -505,6 +509,44 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         } catch (Exception e) {
             logger.error("Error al verificar datos en columna '{}' de tabla '{}': {}",
                         columnName, tableName, e.getMessage());
+            // En caso de error, asumir que tiene datos para evitar pérdida accidental
+            return true;
+        }
+    }
+
+    /**
+     * Verifica si una tabla tiene datos no-NULL en alguna de sus columnas (excluyendo el ID)
+     * Retorna true si hay al menos un valor no-NULL en alguna columna de datos
+     */
+    private boolean tableHasAnyNonNullData(String tableName) {
+        try {
+            // Primero verificar si hay filas en la tabla
+            if (!hasDataInTable(tableName)) {
+                return false;
+            }
+
+            // Obtener todas las columnas de la tabla excepto 'id'
+            String getColumnsSql = "SELECT column_name FROM information_schema.columns " +
+                                  "WHERE table_schema = DATABASE() AND table_name = ? AND column_name != 'id'";
+            List<String> columns = jdbcTemplate.queryForList(getColumnsSql, String.class, tableName);
+
+            if (columns.isEmpty()) {
+                return false;
+            }
+
+            // Verificar si alguna columna tiene datos no-NULL
+            for (String column : columns) {
+                if (columnHasNonNullData(tableName, column)) {
+                    logger.debug("Columna '{}' tiene datos no-NULL en tabla '{}'", column, tableName);
+                    return true;
+                }
+            }
+
+            logger.debug("Tabla '{}' tiene {} filas pero todas las columnas tienen solo NULLs", tableName, columns.size());
+            return false;
+
+        } catch (Exception e) {
+            logger.error("Error al verificar datos no-NULL en tabla '{}': {}", tableName, e.getMessage());
             // En caso de error, asumir que tiene datos para evitar pérdida accidental
             return true;
         }
