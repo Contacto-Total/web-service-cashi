@@ -10,6 +10,8 @@ import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * HeaderConfiguration Entity - Configuración de cabeceras personalizadas por subcartera
@@ -108,6 +110,52 @@ public class HeaderConfiguration {
     @LastModifiedDate
     @Column(name = "fecha_actualizacion")
     private LocalDate updatedAt;
+
+    // ========== CAMPOS PARA SISTEMA DE ALIAS Y AUTO-DETECCIÓN ==========
+
+    /**
+     * Lista de alias (nombres alternativos) para esta cabecera
+     * Permite que la cabecera sea reconocida por múltiples nombres en los archivos Excel
+     */
+    @OneToMany(mappedBy = "headerConfiguration", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private List<HeaderAlias> aliases = new ArrayList<>();
+
+    /**
+     * Indica si se deben agregar automáticamente columnas nuevas detectadas
+     * 1 = agregar automáticamente como tipo TEXTO
+     * 0 = preguntar al usuario (default)
+     */
+    @Column(name = "auto_agregar_nuevas")
+    private Integer autoAddNewColumns = 0;
+
+    /**
+     * Lista de nombres de columnas a ignorar en la importación (JSON array)
+     * Estas columnas no generarán error si aparecen en el Excel
+     */
+    @Column(name = "columnas_ignoradas", columnDefinition = "JSON")
+    private String ignoredColumns;
+
+    /**
+     * Agrega un alias a esta cabecera
+     */
+    public void addAlias(String aliasName, boolean isPrincipal) {
+        HeaderAlias alias = new HeaderAlias(this, aliasName, isPrincipal);
+        this.aliases.add(alias);
+    }
+
+    /**
+     * Obtiene todos los nombres válidos (nombre principal + alias)
+     */
+    public List<String> getAllValidNames() {
+        List<String> names = new ArrayList<>();
+        names.add(this.headerName); // Nombre principal
+        for (HeaderAlias alias : aliases) {
+            if (!alias.getAlias().equalsIgnoreCase(this.headerName)) {
+                names.add(alias.getAlias());
+            }
+        }
+        return names;
+    }
 
     /**
      * Constructor para crear configuración vinculada al catálogo

@@ -625,8 +625,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     value = null;
                 }
             } else {
-                // Campo normal: obtener directamente del CSV (case-insensitive)
-                value = getValueFromRowData(rowData, header.getHeaderName());
+                // Campo normal: obtener directamente del CSV usando alias si es necesario
+                value = getValueFromRowDataWithAliases(rowData, header);
             }
 
             // ========== VALIDACIÓN DE CAMPOS OBLIGATORIOS ==========
@@ -1318,6 +1318,37 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         // No encontrado
         logger.warn("Cabecera '{}' no encontrada en el CSV. Keys disponibles: {}",
                    headerName, rowData.keySet());
+        return null;
+    }
+
+    /**
+     * Obtiene un valor del rowData usando el nombre principal y todos los alias de la cabecera
+     * Esto permite que el archivo Excel use cualquiera de los nombres configurados como alias
+     */
+    private Object getValueFromRowDataWithAliases(Map<String, Object> rowData, HeaderConfiguration header) {
+        if (header == null) return null;
+
+        // 1. Primero buscar por nombre principal
+        Object value = getValueFromRowData(rowData, header.getHeaderName());
+        if (value != null) {
+            return value;
+        }
+
+        // 2. Si no encontró, buscar por cada alias
+        if (header.getAliases() != null && !header.getAliases().isEmpty()) {
+            for (var alias : header.getAliases()) {
+                if (alias.getAlias() != null && !alias.getAlias().equalsIgnoreCase(header.getHeaderName())) {
+                    value = getValueFromRowData(rowData, alias.getAlias());
+                    if (value != null) {
+                        logger.debug("Valor encontrado por alias: '{}' -> '{}' para cabecera '{}'",
+                                    alias.getAlias(), value, header.getHeaderName());
+                        return value;
+                    }
+                }
+            }
+        }
+
+        // 3. No encontrado por ningún nombre
         return null;
     }
 

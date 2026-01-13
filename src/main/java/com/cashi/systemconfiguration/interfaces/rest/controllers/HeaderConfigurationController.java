@@ -1,9 +1,12 @@
 package com.cashi.systemconfiguration.interfaces.rest.controllers;
 
+import com.cashi.shared.domain.model.entities.HeaderAlias;
+import com.cashi.shared.domain.model.entities.HeaderChangeHistory;
 import com.cashi.shared.domain.model.valueobjects.LoadType;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.FieldDefinitionRepository;
 import com.cashi.systemconfiguration.domain.services.HeaderConfigurationCommandService;
 import com.cashi.systemconfiguration.domain.services.HeaderConfigurationQueryService;
+import com.cashi.systemconfiguration.domain.services.HeaderResolutionService;
 import com.cashi.systemconfiguration.interfaces.rest.resources.*;
 import com.cashi.systemconfiguration.interfaces.rest.transform.HeaderConfigurationResourceFromEntityAssembler;
 import io.swagger.v3.oas.annotations.Operation;
@@ -29,14 +32,17 @@ public class HeaderConfigurationController {
 
     private final HeaderConfigurationCommandService commandService;
     private final HeaderConfigurationQueryService queryService;
+    private final HeaderResolutionService resolutionService;
     private final FieldDefinitionRepository fieldDefinitionRepository;
 
     public HeaderConfigurationController(
             HeaderConfigurationCommandService commandService,
             HeaderConfigurationQueryService queryService,
+            HeaderResolutionService resolutionService,
             FieldDefinitionRepository fieldDefinitionRepository) {
         this.commandService = commandService;
         this.queryService = queryService;
+        this.resolutionService = resolutionService;
         this.fieldDefinitionRepository = fieldDefinitionRepository;
     }
 
@@ -398,6 +404,207 @@ public class HeaderConfigurationController {
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("message", "Error al importar datos: " + e.getMessage()));
+        }
+    }
+
+    // ========== ENDPOINTS DE RESOLUCIÓN DE CABECERAS Y ALIAS ==========
+
+    @Operation(summary = "Resolver cabeceras del Excel contra la configuración")
+    @PostMapping("/resolve-headers")
+    public ResponseEntity<?> resolveHeaders(@RequestBody ResolveHeadersResource resource) {
+        try {
+            var result = resolutionService.resolveHeaders(
+                    resource.subPortfolioId(),
+                    resource.loadType(),
+                    resource.excelHeaders()
+            );
+
+            // Convertir a recurso de respuesta
+            var configuredHeaders = result.configuredHeaders().stream()
+                    .map(h -> new HeaderResolutionResultResource.HeaderWithAliasesResource(
+                            h.id(), h.headerName(), h.dataType(),
+                            h.displayLabel(), h.required(), h.aliases()
+                    ))
+                    .toList();
+
+            var response = new HeaderResolutionResultResource(
+                    result.resolvedMapping(),
+                    result.unrecognizedColumns(),
+                    result.ignoredColumns(),
+                    configuredHeaders,
+                    result.missingRequiredHeaders(),
+                    !result.unrecognizedColumns().isEmpty()
+            );
+
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Error al resolver cabeceras: " + e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Obtener alias de una cabecera")
+    @GetMapping("/{headerConfigId}/aliases")
+    public ResponseEntity<?> getAliases(@PathVariable Integer headerConfigId) {
+        try {
+            var aliases = resolutionService.getAliasesByHeaderConfig(headerConfigId);
+            var resources = aliases.stream()
+                    .map(a -> new HeaderAliasResource(
+                            a.getId(),
+                            a.getHeaderConfiguration().getId(),
+                            a.getAlias(),
+                            a.isPrincipal(),
+                            a.getCreatedAt()
+                    ))
+                    .toList();
+            return ResponseEntity.ok(resources);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Agregar alias a una cabecera")
+    @PostMapping("/{headerConfigId}/aliases")
+    public ResponseEntity<?> addAlias(
+            @PathVariable Integer headerConfigId,
+            @RequestBody AddAliasResource resource) {
+        try {
+            var alias = resolutionService.addAlias(headerConfigId, resource.alias(), resource.username());
+            var response = new HeaderAliasResource(
+                    alias.getId(),
+                    alias.getHeaderConfiguration().getId(),
+                    alias.getAlias(),
+                    alias.isPrincipal(),
+                    alias.getCreatedAt()
+            );
+            return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Eliminar un alias")
+    @DeleteMapping("/aliases/{aliasId}")
+    public ResponseEntity<?> removeAlias(
+            @PathVariable Integer aliasId,
+            @RequestParam(required = false, defaultValue = "system") String username) {
+        try {
+            resolutionService.removeAlias(aliasId, username);
+            return ResponseEntity.noContent().build();
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Crear nueva cabecera desde columna no reconocida")
+    @PostMapping("/create-from-column")
+    public ResponseEntity<?> createNewHeader(@RequestBody CreateNewHeaderResource resource) {
+        try {
+            var data = new HeaderResolutionService.NewHeaderData(
+                    resource.headerName(),
+                    resource.dataType(),
+                    resource.displayLabel(),
+                    resource.format(),
+                    resource.required()
+            );
+
+            var config = resolutionService.createNewHeader(
+                    resource.subPortfolioId(),
+                    resource.loadType(),
+                    data,
+                    resource.username()
+            );
+
+            var response = HeaderConfigurationResourceFromEntityAssembler.toResourceFromEntity(config);
+            return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Marcar columna como ignorada")
+    @PostMapping("/ignore-column")
+    public ResponseEntity<?> ignoreColumn(@RequestBody IgnoreColumnResource resource) {
+        try {
+            resolutionService.ignoreColumn(
+                    resource.subPortfolioId(),
+                    resource.loadType(),
+                    resource.columnName(),
+                    resource.username()
+            );
+            return ResponseEntity.ok(Map.of("success", true, "message", "Columna ignorada exitosamente"));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Obtener columnas ignoradas")
+    @GetMapping("/subportfolio/{subPortfolioId}/load-type/{loadType}/ignored-columns")
+    public ResponseEntity<?> getIgnoredColumns(
+            @PathVariable Integer subPortfolioId,
+            @PathVariable LoadType loadType) {
+        try {
+            var ignored = resolutionService.getIgnoredColumns(subPortfolioId, loadType);
+            return ResponseEntity.ok(ignored);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Quitar columna de la lista de ignoradas")
+    @DeleteMapping("/subportfolio/{subPortfolioId}/load-type/{loadType}/ignored-columns/{columnName}")
+    public ResponseEntity<?> unignoreColumn(
+            @PathVariable Integer subPortfolioId,
+            @PathVariable LoadType loadType,
+            @PathVariable String columnName,
+            @RequestParam(required = false, defaultValue = "system") String username) {
+        try {
+            resolutionService.unignoreColumn(subPortfolioId, loadType, columnName, username);
+            return ResponseEntity.ok(Map.of("success", true));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Obtener historial de cambios de cabeceras")
+    @GetMapping("/subportfolio/{subPortfolioId}/change-history")
+    public ResponseEntity<?> getChangeHistory(
+            @PathVariable Integer subPortfolioId,
+            @RequestParam(required = false, defaultValue = "50") int limit) {
+        try {
+            var history = resolutionService.getChangeHistory(subPortfolioId, limit);
+            var resources = history.stream()
+                    .map(h -> new HeaderChangeHistoryResource(
+                            h.getId(),
+                            h.getSubPortfolioId(),
+                            h.getLoadType(),
+                            h.getChangeType().name(),
+                            h.getExcelColumnName(),
+                            h.getInternalHeaderName(),
+                            h.getHeaderConfigurationId(),
+                            h.getUsername(),
+                            h.getChangedAt()
+                    ))
+                    .toList();
+            return ResponseEntity.ok(resources);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
         }
     }
 }
