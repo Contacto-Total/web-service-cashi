@@ -14,6 +14,9 @@ public record CreateHeaderConfigurationResource(
     @Schema(description = "Nombre de la cabecera tal como viene del proveedor", example = "DNI", required = true)
     String headerName,
 
+    @Schema(description = "Tipo de dato", example = "TEXTO")
+    String dataType,
+
     @Schema(description = "Etiqueta visual para mostrar en UI", example = "Número de Documento", required = true)
     String displayLabel,
 
@@ -24,5 +27,11 @@ public record CreateHeaderConfigurationResource(
     Boolean required,
 
     @Schema(description = "Tipo de carga", example = "ACTUALIZACION", required = true)
-    LoadType loadType
+    LoadType loadType,
+
+    @Schema(description = "Campo origen para transformación")
+    String sourceField,
+
+    @Schema(description = "Patrón regex para extraer valor")
+    String regexPattern
 ) {}

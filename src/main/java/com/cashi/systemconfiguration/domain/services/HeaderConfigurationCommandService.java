@@ -9,10 +9,21 @@ public interface HeaderConfigurationCommandService {
 
     /**
      * Crea una nueva configuración de cabecera
+     * @param subPortfolioId ID de la subcartera
+     * @param fieldDefinitionId ID del campo del catálogo (null para campos personalizados)
+     * @param headerName Nombre de la cabecera
+     * @param dataType Tipo de dato (requerido si fieldDefinitionId es null)
+     * @param displayLabel Etiqueta visual
+     * @param format Formato específico
+     * @param required Si es obligatorio
+     * @param loadType Tipo de carga
+     * @param sourceField Campo origen para transformación (opcional)
+     * @param regexPattern Patrón regex para transformación (opcional)
      */
     HeaderConfiguration createHeaderConfiguration(Integer subPortfolioId, Integer fieldDefinitionId,
-                                                  String headerName, String displayLabel,
-                                                  String format, Boolean required, LoadType loadType);
+                                                  String headerName, String dataType, String displayLabel,
+                                                  String format, Boolean required, LoadType loadType,
+                                                  String sourceField, String regexPattern);
 
     /**
      * Actualiza una configuración de cabecera existente

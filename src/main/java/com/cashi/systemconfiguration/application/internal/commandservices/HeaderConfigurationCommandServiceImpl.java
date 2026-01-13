@@ -55,8 +55,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     @Override
     @Transactional
     public HeaderConfiguration createHeaderConfiguration(Integer subPortfolioId, Integer fieldDefinitionId,
-                                                         String headerName, String displayLabel,
-                                                         String format, Boolean required, LoadType loadType) {
+                                                         String headerName, String dataType, String displayLabel,
+                                                         String format, Boolean required, LoadType loadType,
+                                                         String sourceField, String regexPattern) {
         // Validaciones de parámetros obligatorios
         if (subPortfolioId == null) {
             throw new IllegalArgumentException("El ID de subcartera es obligatorio");
@@ -67,9 +68,6 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         if (loadType == null) {
             throw new IllegalArgumentException("El tipo de carga es obligatorio");
         }
-        if (fieldDefinitionId == null) {
-            throw new IllegalArgumentException("El ID de definición de campo es obligatorio. Para campos personalizados use el endpoint /bulk");
-        }
 
         // Validar que la subcartera existe
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
@@ -77,20 +75,50 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         String tableName = buildTableName(subPortfolio, loadType);
 
-        // Validar que la definición de campo existe
-        FieldDefinition fieldDefinition = fieldDefinitionRepository.findById(fieldDefinitionId)
-                .orElseThrow(() -> new IllegalArgumentException("Definición de campo no encontrada con ID: " + fieldDefinitionId));
-
         // Validar que el nombre de cabecera no exista para esta subcartera y tipo de carga
         if (headerConfigurationRepository.existsBySubPortfolioAndHeaderNameAndLoadType(subPortfolio, headerName, loadType)) {
             throw new IllegalArgumentException("Ya existe una cabecera con el nombre: " + headerName + " para esta subcartera y tipo de carga");
         }
 
-        // Crear la configuración
-        HeaderConfiguration headerConfig = new HeaderConfiguration(
-                subPortfolio, fieldDefinition, headerName, displayLabel, format,
-                required != null ? (required ? 1 : 0) : 0, loadType
-        );
+        HeaderConfiguration headerConfig;
+
+        // Si fieldDefinitionId es null o 0, es un campo personalizado
+        if (fieldDefinitionId == null || fieldDefinitionId == 0) {
+            // Campo personalizado - requiere dataType
+            if (dataType == null || dataType.isBlank()) {
+                throw new IllegalArgumentException("El tipo de dato (dataType) es obligatorio para campos personalizados");
+            }
+
+            // Validar que dataType sea válido
+            if (!List.of("TEXTO", "NUMERICO", "FECHA").contains(dataType.toUpperCase())) {
+                throw new IllegalArgumentException("DataType inválido: " + dataType + ". Valores válidos: TEXTO, NUMERICO, FECHA");
+            }
+
+            // Crear configuración de campo personalizado
+            headerConfig = new HeaderConfiguration(
+                    subPortfolio, headerName, dataType.toUpperCase(),
+                    displayLabel, format,
+                    required != null ? (required ? 1 : 0) : 0, loadType
+            );
+        } else {
+            // Campo vinculado al catálogo
+            FieldDefinition fieldDefinition = fieldDefinitionRepository.findById(fieldDefinitionId)
+                    .orElseThrow(() -> new IllegalArgumentException("Definición de campo no encontrada con ID: " + fieldDefinitionId));
+
+            // Crear configuración vinculada al catálogo
+            headerConfig = new HeaderConfiguration(
+                    subPortfolio, fieldDefinition, headerName, displayLabel, format,
+                    required != null ? (required ? 1 : 0) : 0, loadType
+            );
+        }
+
+        // Setear campos de transformación si existen
+        if (sourceField != null && !sourceField.isBlank()) {
+            headerConfig.setSourceField(sourceField);
+        }
+        if (regexPattern != null && !regexPattern.isBlank()) {
+            headerConfig.setRegexPattern(regexPattern);
+        }
 
         HeaderConfiguration saved = headerConfigurationRepository.save(headerConfig);
 

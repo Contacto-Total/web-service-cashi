@@ -94,16 +94,20 @@ public class HeaderConfigurationController {
             System.out.println("📥 Creando cabecera: subPortfolioId=" + resource.subPortfolioId()
                     + ", fieldDefinitionId=" + resource.fieldDefinitionId()
                     + ", headerName=" + resource.headerName()
+                    + ", dataType=" + resource.dataType()
                     + ", loadType=" + resource.loadType());
 
             var config = commandService.createHeaderConfiguration(
                     resource.subPortfolioId(),
                     resource.fieldDefinitionId(),
                     resource.headerName(),
+                    resource.dataType(),
                     resource.displayLabel(),
                     resource.format(),
                     resource.required(),
-                    resource.loadType()
+                    resource.loadType(),
+                    resource.sourceField(),
+                    resource.regexPattern()
             );
             var responseResource = HeaderConfigurationResourceFromEntityAssembler.toResourceFromEntity(config);
             System.out.println("✅ Cabecera creada exitosamente: " + config.getHeaderName());
