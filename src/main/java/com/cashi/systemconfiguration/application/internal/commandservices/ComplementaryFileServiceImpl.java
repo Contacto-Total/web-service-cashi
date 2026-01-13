@@ -334,8 +334,12 @@ public class ComplementaryFileServiceImpl implements ComplementaryFileService {
 
     @Override
     public List<String> validateColumnsExist(Integer subPortfolioId, List<String> columns) {
+        SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Subcartera no encontrada con ID: " + subPortfolioId));
+
         List<HeaderConfiguration> headers = headerConfigurationRepository
-                .findBySubPortfolioIdAndLoadType(subPortfolioId, LoadType.INICIAL);
+                .findBySubPortfolioAndLoadType(subPortfolio, LoadType.INICIAL);
 
         Set<String> existingColumns = headers.stream()
                 .map(h -> h.getHeaderName().toLowerCase())
