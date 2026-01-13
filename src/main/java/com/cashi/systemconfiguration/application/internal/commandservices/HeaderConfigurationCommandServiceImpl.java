@@ -196,6 +196,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada con ID: " + subPortfolioId));
 
+        String tableName = buildTableName(subPortfolio, loadType);
+        boolean tableExists = dynamicTableExists(tableName);
+
         List<HeaderConfiguration> createdConfigs = new ArrayList<>();
 
         for (HeaderConfigurationData data : headers) {
@@ -245,11 +248,21 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 headerConfig.setRegexPattern(data.regexPattern());
             }
 
-            createdConfigs.add(headerConfigurationRepository.save(headerConfig));
+            HeaderConfiguration saved = headerConfigurationRepository.save(headerConfig);
+            createdConfigs.add(saved);
+
+            // Si la tabla ya existe, agregar la columna individualmente
+            if (tableExists) {
+                addColumnToTable(tableName, saved);
+                logger.info("Columna '{}' agregada a tabla existente '{}'",
+                           sanitizeColumnName(data.headerName()), tableName);
+            }
         }
 
-        // Crear tabla dinámica después de guardar todas las configuraciones
-        createDynamicTableForSubPortfolio(subPortfolio, loadType, createdConfigs);
+        // Si la tabla NO existía, crearla con todas las columnas
+        if (!tableExists) {
+            createDynamicTableForSubPortfolio(subPortfolio, loadType, createdConfigs);
+        }
 
         return createdConfigs;
     }
