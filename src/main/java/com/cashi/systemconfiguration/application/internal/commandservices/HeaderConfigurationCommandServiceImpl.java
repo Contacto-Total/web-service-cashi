@@ -170,21 +170,25 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         SubPortfolio subPortfolio = headerConfig.getSubPortfolio();
         LoadType loadType = headerConfig.getLoadType();
         String tableName = buildTableName(subPortfolio, loadType);
+        String columnName = sanitizeColumnName(headerConfig.getHeaderName());
 
-        // Verificar si la tabla tiene datos (operación destructiva, se perderían datos de la columna)
-        if (dynamicTableExists(tableName) && hasDataInTable(tableName)) {
+        // Verificar si la COLUMNA ESPECÍFICA tiene datos no-NULL
+        // Solo bloquear eliminación si la columna tiene valores reales, no si solo tiene NULLs
+        if (dynamicTableExists(tableName) && columnHasNonNullData(tableName, columnName)) {
             throw new IllegalArgumentException(
                 "No se puede eliminar la cabecera '" + headerConfig.getHeaderName() +
-                "' porque la tabla ya contiene datos. Debe eliminar los datos primero."
+                "' porque la columna contiene datos. Debe eliminar los datos primero."
             );
         }
 
         // Eliminar la columna de la tabla si existe
         if (dynamicTableExists(tableName)) {
             dropColumnFromTable(tableName, headerConfig);
+            logger.info("Columna '{}' eliminada de tabla '{}'", columnName, tableName);
         }
 
         headerConfigurationRepository.delete(headerConfig);
+        logger.info("Configuración de cabecera eliminada: ID={}, nombre='{}'", id, headerConfig.getHeaderName());
     }
 
     @Override
@@ -470,6 +474,39 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         } catch (Exception e) {
             logger.error("Error al verificar datos en tabla {}: {}", tableName, e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Verifica si una columna específica tiene datos no-NULL
+     * Retorna true si hay al menos un valor no-NULL en la columna
+     */
+    private boolean columnHasNonNullData(String tableName, String columnName) {
+        try {
+            // Verificar primero si la columna existe en la tabla
+            String checkColumnSql = "SELECT COUNT(*) FROM information_schema.columns " +
+                                   "WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?";
+            Integer columnExists = jdbcTemplate.queryForObject(checkColumnSql, Integer.class, tableName, columnName);
+
+            if (columnExists == null || columnExists == 0) {
+                logger.warn("La columna '{}' no existe en la tabla '{}'", columnName, tableName);
+                return false; // Si la columna no existe, no tiene datos
+            }
+
+            // Contar registros donde la columna tiene valor no-NULL
+            String sql = "SELECT COUNT(*) FROM " + tableName + " WHERE " + columnName + " IS NOT NULL";
+            Integer count = jdbcTemplate.queryForObject(sql, Integer.class);
+            boolean hasData = count != null && count > 0;
+
+            logger.debug("Columna '{}' en tabla '{}': {} registros con datos no-NULL",
+                        columnName, tableName, count);
+
+            return hasData;
+        } catch (Exception e) {
+            logger.error("Error al verificar datos en columna '{}' de tabla '{}': {}",
+                        columnName, tableName, e.getMessage());
+            // En caso de error, asumir que tiene datos para evitar pérdida accidental
+            return true;
         }
     }
 
