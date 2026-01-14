@@ -1621,8 +1621,32 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             throw new IllegalArgumentException("No hay cabeceras configuradas para esta subcartera y tipo de carga.");
         }
 
-        // Sanitizar el nombre del campo de enlace
-        String linkColumnName = sanitizeColumnName(linkField);
+        // Buscar la columna de enlace en las cabeceras configuradas
+        // El linkField del archivo puede tener un nombre diferente al de la tabla
+        String linkColumnName = null;
+        String normalizedLinkField = normalizeHeaderName(linkField);
+
+        for (HeaderConfiguration header : headers) {
+            // Comparar con el nombre de la cabecera
+            if (normalizeHeaderName(header.getHeaderName()).equals(normalizedLinkField)) {
+                linkColumnName = sanitizeColumnName(header.getHeaderName());
+                logger.info("✅ Campo de enlace '{}' mapeado a columna '{}'", linkField, linkColumnName);
+                break;
+            }
+            // También buscar en sourceField (campos transformados)
+            if (header.getSourceField() != null && normalizeHeaderName(header.getSourceField()).equals(normalizedLinkField)) {
+                linkColumnName = sanitizeColumnName(header.getHeaderName());
+                logger.info("✅ Campo de enlace '{}' (sourceField) mapeado a columna '{}'", linkField, linkColumnName);
+                break;
+            }
+        }
+
+        // Si no se encontró en cabeceras, usar el nombre sanitizado directamente
+        if (linkColumnName == null) {
+            linkColumnName = sanitizeColumnName(linkField);
+            logger.warn("⚠️ Campo de enlace '{}' no encontrado en cabeceras configuradas, usando nombre directo: '{}'",
+                       linkField, linkColumnName);
+        }
 
         int updatedRows = 0;
         int notFoundRows = 0;
