@@ -12,12 +12,16 @@ import com.cashi.shared.domain.model.valueobjects.LoadType;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.FieldDefinitionRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.HeaderConfigurationRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.SubPortfolioRepository;
+import com.cashi.shared.util.DataTypeValidator;
+import com.cashi.shared.util.DateParserUtil;
+import com.cashi.shared.util.SqlSanitizer;
 import com.cashi.systemconfiguration.domain.services.HeaderConfigurationCommandService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
 import java.util.*;
@@ -34,6 +38,10 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     private final CustomerRepository customerRepository;
     private final ContactMethodRepository contactMethodRepository;
     private final CustomerSyncService customerSyncService;
+    private final TransactionTemplate transactionTemplate;
+
+    // Tamaño del batch para operaciones de carga de identificadores (previene problemas de memoria)
+    private static final int BATCH_SIZE_FOR_IDENTIFIER_LOAD = 10000;
 
     public HeaderConfigurationCommandServiceImpl(
             HeaderConfigurationRepository headerConfigurationRepository,
@@ -42,7 +50,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             JdbcTemplate jdbcTemplate,
             CustomerRepository customerRepository,
             ContactMethodRepository contactMethodRepository,
-            CustomerSyncService customerSyncService) {
+            CustomerSyncService customerSyncService,
+            TransactionTemplate transactionTemplate) {
         this.headerConfigurationRepository = headerConfigurationRepository;
         this.subPortfolioRepository = subPortfolioRepository;
         this.fieldDefinitionRepository = fieldDefinitionRepository;
@@ -50,6 +59,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         this.customerRepository = customerRepository;
         this.contactMethodRepository = contactMethodRepository;
         this.customerSyncService = customerSyncService;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @Override
@@ -308,19 +318,18 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
     /**
      * Sanitiza el nombre de la columna eliminando caracteres especiales
+     * Usa SqlSanitizer para prevenir SQL injection
      */
     private String sanitizeColumnName(String headerName) {
-        return headerName
-                .toLowerCase()
-                .replaceAll("[áàäâ]", "a")
-                .replaceAll("[éèëê]", "e")
-                .replaceAll("[íìïî]", "i")
-                .replaceAll("[óòöô]", "o")
-                .replaceAll("[úùüû]", "u")
-                .replaceAll("[ñ]", "n")
-                .replaceAll("[^a-z0-9_]", "_")
-                .replaceAll("_+", "_")
-                .replaceAll("^_|_$", "");
+        return SqlSanitizer.headerToColumnName(headerName);
+    }
+
+    /**
+     * Valida y sanitiza un nombre de tabla
+     * @throws IllegalArgumentException si el nombre es inválido
+     */
+    private String validateAndSanitizeTableName(String tableName) {
+        return SqlSanitizer.sanitizeTableName(tableName);
     }
 
     /**
@@ -472,11 +481,12 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
      */
     private boolean hasDataInTable(String tableName) {
         try {
-            String sql = "SELECT COUNT(*) FROM " + tableName;
+            String safeTableName = validateAndSanitizeTableName(tableName);
+            String sql = "SELECT COUNT(*) FROM " + safeTableName;
             Integer count = jdbcTemplate.queryForObject(sql, Integer.class);
             return count != null && count > 0;
         } catch (Exception e) {
-            logger.error("Error al verificar datos en tabla {}: {}", tableName, e.getMessage());
+            logger.error("Error al verificar datos en tabla {}: {}", tableName, e.getMessage(), e);
             return false;
         }
     }
@@ -487,28 +497,31 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
      */
     private boolean columnHasNonNullData(String tableName, String columnName) {
         try {
-            // Verificar primero si la columna existe en la tabla
+            String safeTableName = validateAndSanitizeTableName(tableName);
+            String safeColumnName = sanitizeColumnName(columnName);
+
+            // Verificar primero si la columna existe en la tabla (usando parámetros preparados)
             String checkColumnSql = "SELECT COUNT(*) FROM information_schema.columns " +
                                    "WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?";
-            Integer columnExists = jdbcTemplate.queryForObject(checkColumnSql, Integer.class, tableName, columnName);
+            Integer columnExists = jdbcTemplate.queryForObject(checkColumnSql, Integer.class, safeTableName, safeColumnName);
 
             if (columnExists == null || columnExists == 0) {
-                logger.warn("La columna '{}' no existe en la tabla '{}'", columnName, tableName);
+                logger.warn("La columna '{}' no existe en la tabla '{}'", safeColumnName, safeTableName);
                 return false; // Si la columna no existe, no tiene datos
             }
 
             // Contar registros donde la columna tiene valor no-NULL
-            String sql = "SELECT COUNT(*) FROM " + tableName + " WHERE " + columnName + " IS NOT NULL";
+            String sql = "SELECT COUNT(*) FROM " + safeTableName + " WHERE " + safeColumnName + " IS NOT NULL";
             Integer count = jdbcTemplate.queryForObject(sql, Integer.class);
             boolean hasData = count != null && count > 0;
 
             logger.debug("Columna '{}' en tabla '{}': {} registros con datos no-NULL",
-                        columnName, tableName, count);
+                        safeColumnName, safeTableName, count);
 
             return hasData;
         } catch (Exception e) {
             logger.error("Error al verificar datos en columna '{}' de tabla '{}': {}",
-                        columnName, tableName, e.getMessage());
+                        columnName, tableName, e.getMessage(), e);
             // En caso de error, asumir que tiene datos para evitar pérdida accidental
             return true;
         }
@@ -784,21 +797,55 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
-     * Carga todos los identificadores existentes de la tabla en un mapa
+     * Carga identificadores existentes de la tabla en un mapa, usando paginación
+     * para evitar problemas de memoria con tablas grandes
      */
     private Map<String, Integer> loadExistingIdentifiers(String tableName, String columnName) {
         Map<String, Integer> identifiers = new HashMap<>();
+
+        // Validar nombres de tabla y columna
+        String safeTableName = validateAndSanitizeTableName(tableName);
+        String safeColumnName = sanitizeColumnName(columnName);
+
         try {
-            String sql = "SELECT id, " + columnName + " FROM " + tableName +
-                        " WHERE " + columnName + " IS NOT NULL AND " + columnName + " != ''";
-            jdbcTemplate.query(sql, rs -> {
-                String value = rs.getString(columnName);
-                if (value != null && !value.trim().isEmpty()) {
-                    identifiers.put(value.toLowerCase().trim(), rs.getInt("id"));
+            // Primero contar el total de registros
+            String countSql = "SELECT COUNT(*) FROM " + safeTableName +
+                             " WHERE " + safeColumnName + " IS NOT NULL AND " + safeColumnName + " != ''";
+            Integer totalCount = jdbcTemplate.queryForObject(countSql, Integer.class);
+
+            if (totalCount == null || totalCount == 0) {
+                logger.debug("No hay identificadores existentes en {}.{}", safeTableName, safeColumnName);
+                return identifiers;
+            }
+
+            logger.info("Cargando {} identificadores de {}.{} en batches de {}",
+                       totalCount, safeTableName, safeColumnName, BATCH_SIZE_FOR_IDENTIFIER_LOAD);
+
+            // Cargar en batches para evitar problemas de memoria
+            int offset = 0;
+            while (offset < totalCount) {
+                String sql = "SELECT id, " + safeColumnName + " FROM " + safeTableName +
+                            " WHERE " + safeColumnName + " IS NOT NULL AND " + safeColumnName + " != ''" +
+                            " LIMIT " + BATCH_SIZE_FOR_IDENTIFIER_LOAD + " OFFSET " + offset;
+
+                jdbcTemplate.query(sql, rs -> {
+                    String value = rs.getString(safeColumnName);
+                    if (value != null && !value.trim().isEmpty()) {
+                        identifiers.put(value.toLowerCase().trim(), rs.getInt("id"));
+                    }
+                });
+
+                offset += BATCH_SIZE_FOR_IDENTIFIER_LOAD;
+
+                if (offset < totalCount) {
+                    logger.debug("Progreso: {}/{} identificadores cargados", Math.min(offset, totalCount), totalCount);
                 }
-            });
+            }
+
+            logger.info("Total de {} identificadores cargados de {}.{}", identifiers.size(), safeTableName, safeColumnName);
+
         } catch (Exception e) {
-            logger.error("Error cargando identificadores de {}.{}: {}", tableName, columnName, e.getMessage());
+            logger.error("Error cargando identificadores de {}.{}: {}", safeTableName, safeColumnName, e.getMessage(), e);
         }
         return identifiers;
     }
@@ -963,48 +1010,20 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 value = null;
             }
 
-            // Convertir el valor según el tipo de dato
-            if (value == null) {
-                values.add(null);
-            } else {
-                switch (header.getDataType().toUpperCase()) {
-                    case "NUMERICO":
-                        try {
-                            if (value instanceof Number) {
-                                values.add(value);
-                            } else {
-                                String numStr = value.toString().trim();
-                                if (numStr.startsWith(".")) {
-                                    numStr = "0" + numStr;
-                                }
-                                values.add(Double.parseDouble(numStr));
-                            }
-                        } catch (NumberFormatException e) {
-                            throw new IllegalArgumentException("Valor no numérico para campo " + header.getHeaderName() + ": " + value);
-                        }
-                        break;
-                    case "FECHA":
-                        try {
-                            if (value instanceof LocalDate) {
-                                values.add(value);
-                            } else if (value instanceof java.time.LocalDateTime) {
-                                values.add(((java.time.LocalDateTime) value).toLocalDate());
-                            } else {
-                                String dateStr = value.toString().trim();
-                                LocalDate parsedDate = parseFlexibleDate(dateStr, header.getFormat());
-                                values.add(parsedDate);
-                            }
-                        } catch (Exception e) {
-                            throw new IllegalArgumentException("Valor no es fecha válida para campo " + header.getHeaderName() + ": " + value +
-                                " (formato esperado: " + (header.getFormat() != null ? header.getFormat() : "auto-detectado") + ")");
-                        }
-                        break;
-                    case "TEXTO":
-                    default:
-                        values.add(value.toString());
-                        break;
-                }
+            // Usar DataTypeValidator para validar y convertir el valor
+            DataTypeValidator.ValidationResult validationResult = DataTypeValidator.validate(
+                value,
+                header.getDataType(),
+                header.getFormat(),
+                header.getHeaderName(),
+                header.getRequired() != null && header.getRequired() == 1
+            );
+
+            if (!validationResult.isValid()) {
+                throw new IllegalArgumentException(validationResult.getErrorMessage());
             }
+
+            values.add(validationResult.getConvertedValue());
         }
 
         return new PreparedRowData(rowNumber, values);
@@ -1629,7 +1648,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
     /**
      * Parsea una fecha de forma flexible, intentando múltiples formatos comunes.
-     * Soporta días y meses de 1 o 2 dígitos (ej: 5/01/2026, 15/1/2026)
+     * Delegado a DateParserUtil para centralizar la lógica de parseo de fechas.
      *
      * @param dateStr String con la fecha a parsear
      * @param configuredFormat Formato configurado en la cabecera (puede ser null)
@@ -1637,64 +1656,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
      * @throws IllegalArgumentException si no se puede parsear con ningún formato
      */
     private LocalDate parseFlexibleDate(String dateStr, String configuredFormat) {
-        if (dateStr == null || dateStr.trim().isEmpty()) {
-            return null;
-        }
-
-        dateStr = dateStr.trim();
-
-        // Lista de formatos a intentar (en orden de prioridad)
-        List<String> formatsToTry = new ArrayList<>();
-
-        // Si hay formato configurado, intentarlo primero (con versión flexible)
-        if (configuredFormat != null && !configuredFormat.isEmpty()) {
-            // Hacer el formato flexible (d en lugar de dd, M en lugar de MM)
-            String flexibleFormat = configuredFormat
-                    .replace("dd", "d")
-                    .replace("MM", "M");
-            formatsToTry.add(flexibleFormat);
-        }
-
-        // Agregar formatos comunes como fallback
-        formatsToTry.addAll(List.of(
-                // Formatos día/mes/año (más comunes en Latinoamérica)
-                "d/M/yyyy",
-                "d-M-yyyy",
-                "d.M.yyyy",
-                // Formatos año/mes/día (ISO)
-                "yyyy-M-d",
-                "yyyy/M/d",
-                // Formatos con hora
-                "d/M/yyyy H:m:s",
-                "d-M-yyyy H:m:s",
-                "yyyy-M-d H:m:s",
-                "yyyy-M-d'T'H:m:s"
-        ));
-
-        // Intentar cada formato
-        for (String format : formatsToTry) {
-            try {
-                java.time.format.DateTimeFormatter formatter =
-                        java.time.format.DateTimeFormatter.ofPattern(format);
-
-                // Si el formato incluye hora, parsear como LocalDateTime y extraer fecha
-                if (format.contains("H") || format.contains("h") || format.contains("m") || format.contains("s")) {
-                    java.time.LocalDateTime dateTime = java.time.LocalDateTime.parse(dateStr, formatter);
-                    return dateTime.toLocalDate();
-                } else {
-                    return LocalDate.parse(dateStr, formatter);
-                }
-            } catch (Exception e) {
-                // Continuar con el siguiente formato
-            }
-        }
-
-        // Último intento: formato ISO estándar
-        try {
-            return LocalDate.parse(dateStr);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("No se pudo parsear la fecha: " + dateStr);
-        }
+        return DateParserUtil.parseFlexibleDate(dateStr, configuredFormat);
     }
 
     /**
@@ -1981,18 +1943,22 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
      */
     private boolean columnExists(String tableName, String columnName) {
         try {
+            String safeTableName = validateAndSanitizeTableName(tableName);
+            String safeColumnName = sanitizeColumnName(columnName);
+
             String sql = "SELECT COUNT(*) FROM information_schema.columns " +
                         "WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?";
-            Integer count = jdbcTemplate.queryForObject(sql, Integer.class, tableName, columnName);
+            Integer count = jdbcTemplate.queryForObject(sql, Integer.class, safeTableName, safeColumnName);
             return count != null && count > 0;
         } catch (Exception e) {
-            logger.error("Error al verificar existencia de columna {}.{}: {}", tableName, columnName, e.getMessage());
+            logger.error("Error al verificar existencia de columna {}.{}: {}", tableName, columnName, e.getMessage(), e);
             return false;
         }
     }
 
     /**
      * Convierte un valor según la configuración de cabecera (para UPDATE)
+     * Usa DataTypeValidator para validación consistente
      */
     private Object convertValueForUpdate(Object value, HeaderConfiguration header) {
         if (value == null) return null;
@@ -2007,40 +1973,49 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             return value.toString();
         }
 
-        switch (dataType.toUpperCase()) {
-            case "NUMERICO":
-                try {
-                    if (value instanceof Number) {
-                        return value;
-                    }
-                    String numStr = value.toString().trim();
-                    if (numStr.isEmpty()) return null;
-                    if (numStr.startsWith(".")) {
-                        numStr = "0" + numStr;
-                    }
-                    return Double.parseDouble(numStr);
-                } catch (NumberFormatException e) {
-                    logger.warn("Valor no numérico: {}", value);
-                    return null;
-                }
-            case "FECHA":
-                try {
-                    if (value instanceof LocalDate) {
-                        return value;
-                    }
-                    if (value instanceof java.time.LocalDateTime) {
-                        return ((java.time.LocalDateTime) value).toLocalDate();
-                    }
-                    String dateStr = value.toString().trim();
-                    if (dateStr.isEmpty()) return null;
-                    return parseFlexibleDate(dateStr, header != null ? header.getFormat() : null);
-                } catch (Exception e) {
-                    logger.warn("Valor no es fecha válida: {}", value);
-                    return null;
-                }
-            case "TEXTO":
-            default:
-                return value.toString();
+        // Usar DataTypeValidator para validar y convertir (required=false para updates)
+        DataTypeValidator.ValidationResult result = DataTypeValidator.validate(
+            value,
+            dataType,
+            header.getFormat(),
+            header.getHeaderName(),
+            false  // No requerir para updates parciales
+        );
+
+        if (!result.isValid()) {
+            logger.warn("Error validando valor para campo '{}': {}", header.getHeaderName(), result.getErrorMessage());
+            return null;
         }
+
+        return result.getConvertedValue();
+    }
+
+    /**
+     * Detecta automáticamente el linkField basándose en las cabeceras configuradas
+     * Busca campos como identity_code, cod_cli, codigo_identificacion
+     */
+    private String detectLinkField(List<HeaderConfiguration> headers) {
+        // Lista de nombres de campo comunes para identificación de clientes
+        List<String> identityFieldNames = List.of(
+            "identity_code", "codigo_identificacion", "cod_cli", "customer_id",
+            "id_cliente", "documento", "dni", "ruc", "num_documento"
+        );
+
+        for (String fieldName : identityFieldNames) {
+            String columnName = findIdentityColumn(headers, fieldName);
+            if (columnName != null) {
+                logger.info("LinkField detectado automáticamente: {}", columnName);
+                return columnName;
+            }
+        }
+
+        // Si no se encuentra, usar el primer campo como fallback
+        if (!headers.isEmpty()) {
+            String fallback = sanitizeColumnName(headers.get(0).getHeaderName());
+            logger.warn("No se detectó campo de identificación, usando fallback: {}", fallback);
+            return fallback;
+        }
+
+        return null;
     }
 }
