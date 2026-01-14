@@ -411,6 +411,39 @@ public class HeaderConfigurationController {
         }
     }
 
+    @Operation(summary = "Actualizar datos complementarios en la tabla dinámica",
+               description = "Actualiza columnas específicas de registros existentes basándose en un campo de enlace. " +
+                           "Usado para archivos complementarios como PKM y Facilidades de Pago.")
+    @PostMapping("/subportfolio/{subPortfolioId}/update-complementary")
+    public ResponseEntity<?> updateComplementaryData(
+            @PathVariable Integer subPortfolioId,
+            @RequestBody UpdateComplementaryDataResource resource) {
+        try {
+            System.out.println("📥 Actualizando datos complementarios: subPortfolioId=" + subPortfolioId
+                    + ", loadType=" + resource.loadType()
+                    + ", linkField=" + resource.linkField()
+                    + ", rows=" + resource.data().size());
+
+            var result = commandService.updateComplementaryDataInTable(
+                    subPortfolioId,
+                    resource.loadType(),
+                    resource.data(),
+                    resource.linkField()
+            );
+
+            System.out.println("✅ Actualización complementaria completada: " + result);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            System.err.println("❌ Error de validación: " + e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        } catch (Exception e) {
+            System.err.println("❌ Error al actualizar datos complementarios: " + e.getMessage());
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Error al actualizar datos complementarios: " + e.getMessage()));
+        }
+    }
+
     // ========== ENDPOINTS DE RESOLUCIÓN DE CABECERAS Y ALIAS ==========
 
     @Operation(summary = "Resolver cabeceras del Excel contra la configuración")

@@ -1594,4 +1594,211 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                         customer.getId(), e.getMessage());
         }
     }
+
+    // ==================== ACTUALIZACIÓN DE DATOS COMPLEMENTARIOS ====================
+
+    @Override
+    @Transactional
+    public Map<String, Object> updateComplementaryDataInTable(Integer subPortfolioId, LoadType loadType,
+                                                               List<Map<String, Object>> data, String linkField) {
+        logger.info("📦 Actualizando datos complementarios: subPortfolioId={}, loadType={}, linkField={}, rows={}",
+                   subPortfolioId, loadType, linkField, data.size());
+
+        // Validar que la subcartera existe
+        SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
+                .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada con ID: " + subPortfolioId));
+
+        String tableName = buildTableName(subPortfolio, loadType);
+
+        // Verificar que la tabla existe
+        if (!dynamicTableExists(tableName)) {
+            throw new IllegalArgumentException("La tabla dinámica no existe. Debe cargar primero el archivo principal con los datos iniciales.");
+        }
+
+        // Obtener las configuraciones de cabeceras
+        List<HeaderConfiguration> headers = headerConfigurationRepository.findBySubPortfolioAndLoadType(subPortfolio, loadType);
+        if (headers.isEmpty()) {
+            throw new IllegalArgumentException("No hay cabeceras configuradas para esta subcartera y tipo de carga.");
+        }
+
+        // Sanitizar el nombre del campo de enlace
+        String linkColumnName = sanitizeColumnName(linkField);
+
+        int updatedRows = 0;
+        int notFoundRows = 0;
+        int failedRows = 0;
+        List<String> errors = new ArrayList<>();
+
+        // Procesar cada fila de datos
+        for (int i = 0; i < data.size(); i++) {
+            Map<String, Object> row = data.get(i);
+            try {
+                // Obtener el valor del campo de enlace (case-insensitive)
+                Object linkValue = getValueFromRowData(row, linkField);
+                if (linkValue == null || linkValue.toString().trim().isEmpty()) {
+                    failedRows++;
+                    errors.add("Fila " + (i + 1) + ": Campo de enlace '" + linkField + "' vacío o nulo");
+                    continue;
+                }
+
+                String linkValueStr = linkValue.toString().trim();
+
+                // Construir la cláusula SET con las columnas a actualizar
+                StringBuilder setClause = new StringBuilder();
+                List<Object> values = new ArrayList<>();
+                boolean firstColumn = true;
+
+                for (Map.Entry<String, Object> entry : row.entrySet()) {
+                    String columnKey = entry.getKey();
+                    Object columnValue = entry.getValue();
+
+                    // Saltar el campo de enlace (no lo actualizamos)
+                    if (normalizeHeaderName(columnKey).equals(normalizeHeaderName(linkField))) {
+                        continue;
+                    }
+
+                    // Buscar la configuración de cabecera correspondiente
+                    HeaderConfiguration matchingHeader = null;
+                    for (HeaderConfiguration header : headers) {
+                        if (normalizeHeaderName(header.getHeaderName()).equals(normalizeHeaderName(columnKey))) {
+                            matchingHeader = header;
+                            break;
+                        }
+                    }
+
+                    String sanitizedColumn = sanitizeColumnName(columnKey);
+
+                    // Solo actualizar si la columna existe en la tabla
+                    if (columnExists(tableName, sanitizedColumn)) {
+                        if (!firstColumn) {
+                            setClause.append(", ");
+                        }
+                        setClause.append(sanitizedColumn).append(" = ?");
+                        values.add(convertValueForUpdate(columnValue, matchingHeader));
+                        firstColumn = false;
+                    } else {
+                        logger.debug("Columna '{}' no existe en tabla, ignorando", sanitizedColumn);
+                    }
+                }
+
+                if (values.isEmpty()) {
+                    logger.warn("Fila {} no tiene columnas válidas para actualizar", i + 1);
+                    continue;
+                }
+
+                // Ejecutar UPDATE
+                String sql = "UPDATE " + tableName + " SET " + setClause +
+                            " WHERE " + linkColumnName + " = ?";
+                values.add(linkValueStr);
+
+                int rowsAffected = jdbcTemplate.update(sql, values.toArray());
+
+                if (rowsAffected > 0) {
+                    updatedRows += rowsAffected;
+                    logger.debug("✅ Actualizado registro con {}={}: {} filas", linkField, linkValueStr, rowsAffected);
+                } else {
+                    notFoundRows++;
+                    logger.debug("⚠️ No se encontró registro con {}={}", linkField, linkValueStr);
+                }
+
+            } catch (Exception e) {
+                failedRows++;
+                errors.add("Fila " + (i + 1) + ": " + e.getMessage());
+                logger.error("Error actualizando fila {}: {}", i + 1, e.getMessage());
+            }
+        }
+
+        logger.info("✅ Actualización complementaria completada: {} actualizados, {} no encontrados, {} fallidos",
+                   updatedRows, notFoundRows, failedRows);
+
+        // Preparar respuesta
+        Map<String, Object> result = new HashMap<>();
+        result.put("totalRows", data.size());
+        result.put("updatedRows", updatedRows);
+        result.put("notFoundRows", notFoundRows);
+        result.put("failedRows", failedRows);
+        result.put("tableName", tableName);
+
+        if (!errors.isEmpty()) {
+            result.put("errors", errors.size() > 10 ? errors.subList(0, 10) : errors);
+            result.put("totalErrors", errors.size());
+        }
+
+        return result;
+    }
+
+    /**
+     * Verifica si una columna existe en la tabla
+     */
+    private boolean columnExists(String tableName, String columnName) {
+        try {
+            String sql = "SELECT COUNT(*) FROM information_schema.columns " +
+                        "WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?";
+            Integer count = jdbcTemplate.queryForObject(sql, Integer.class, tableName, columnName);
+            return count != null && count > 0;
+        } catch (Exception e) {
+            logger.error("Error al verificar existencia de columna {}.{}: {}", tableName, columnName, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Convierte un valor según la configuración de cabecera (para UPDATE)
+     */
+    private Object convertValueForUpdate(Object value, HeaderConfiguration header) {
+        if (value == null) return null;
+
+        // Si no hay header, devolver el valor como string
+        if (header == null) {
+            return value.toString();
+        }
+
+        String dataType = header.getDataType();
+        if (dataType == null) {
+            return value.toString();
+        }
+
+        switch (dataType.toUpperCase()) {
+            case "NUMERICO":
+                try {
+                    if (value instanceof Number) {
+                        return value;
+                    }
+                    String numStr = value.toString().trim();
+                    if (numStr.isEmpty()) return null;
+                    if (numStr.startsWith(".")) {
+                        numStr = "0" + numStr;
+                    }
+                    return Double.parseDouble(numStr);
+                } catch (NumberFormatException e) {
+                    logger.warn("Valor no numérico: {}", value);
+                    return null;
+                }
+            case "FECHA":
+                try {
+                    if (value instanceof LocalDate) {
+                        return value;
+                    }
+                    if (value instanceof java.time.LocalDateTime) {
+                        return ((java.time.LocalDateTime) value).toLocalDate();
+                    }
+                    String dateStr = value.toString().trim();
+                    if (dateStr.isEmpty()) return null;
+                    String format = header.getFormat();
+                    if (format != null && !format.isEmpty()) {
+                        String flexibleFormat = format.replace("dd", "d").replace("MM", "M");
+                        java.time.format.DateTimeFormatter formatter =
+                                java.time.format.DateTimeFormatter.ofPattern(flexibleFormat);
+                        return LocalDate.parse(dateStr, formatter);
+                    }
+                    return LocalDate.parse(dateStr);
+                } catch (Exception e) {
+                    logger.warn("Valor no es fecha válida: {}", value);
+                    return null;
+                }
+            case "TEXTO":
+            default:
+                return value.toString();
+        }
+    }
 }

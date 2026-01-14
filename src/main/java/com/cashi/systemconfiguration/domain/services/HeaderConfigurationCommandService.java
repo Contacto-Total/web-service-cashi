@@ -53,6 +53,20 @@ public interface HeaderConfigurationCommandService {
      */
     java.util.Map<String, Object> importDataToTable(Integer subPortfolioId, LoadType loadType, List<java.util.Map<String, Object>> data);
 
+    /**
+     * Actualiza datos complementarios en la tabla dinámica existente.
+     * Busca registros por el campo de enlace (linkField) y actualiza las columnas proporcionadas.
+     * Usado para archivos como PKM y Facilidades que actualizan columnas específicas.
+     *
+     * @param subPortfolioId ID de la subcartera
+     * @param loadType Tipo de carga (INICIAL para archivos complementarios)
+     * @param data Lista de registros con columnas a actualizar
+     * @param linkField Campo usado para identificar el registro (ej: COD_CLI)
+     * @return Mapa con estadísticas de la operación
+     */
+    java.util.Map<String, Object> updateComplementaryDataInTable(Integer subPortfolioId, LoadType loadType,
+                                                                  List<java.util.Map<String, Object>> data, String linkField);
+
     record HeaderConfigurationData(
         Integer fieldDefinitionId,
         String headerName,
