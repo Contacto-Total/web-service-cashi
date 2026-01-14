@@ -991,29 +991,12 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                                 values.add(((java.time.LocalDateTime) value).toLocalDate());
                             } else {
                                 String dateStr = value.toString().trim();
-                                String format = header.getFormat();
-
-                                if (format != null && !format.isEmpty()) {
-                                    String flexibleFormat = format
-                                        .replace("dd", "d")
-                                        .replace("MM", "M");
-
-                                    java.time.format.DateTimeFormatter formatter =
-                                        java.time.format.DateTimeFormatter.ofPattern(flexibleFormat);
-
-                                    if (format.contains("HH") || format.contains("hh") || format.contains("mm") || format.contains("ss")) {
-                                        java.time.LocalDateTime dateTime = java.time.LocalDateTime.parse(dateStr, formatter);
-                                        values.add(dateTime.toLocalDate());
-                                    } else {
-                                        values.add(LocalDate.parse(dateStr, formatter));
-                                    }
-                                } else {
-                                    values.add(LocalDate.parse(dateStr));
-                                }
+                                LocalDate parsedDate = parseFlexibleDate(dateStr, header.getFormat());
+                                values.add(parsedDate);
                             }
                         } catch (Exception e) {
                             throw new IllegalArgumentException("Valor no es fecha válida para campo " + header.getHeaderName() + ": " + value +
-                                " (formato esperado: " + (header.getFormat() != null ? header.getFormat() : "yyyy-MM-dd") + ")");
+                                " (formato esperado: " + (header.getFormat() != null ? header.getFormat() : "auto-detectado") + ")");
                         }
                         break;
                     case "TEXTO":
@@ -1350,45 +1333,21 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                         }
                         break;
                     case "FECHA":
-                        // Convertir a fecha usando el formato configurado
+                        // Convertir a fecha usando parseo flexible
                         // IMPORTANTE: Siempre se guarda como LocalDate en BD (sin hora)
                         try {
                             if (value instanceof LocalDate) {
                                 values.add(value);
                             } else if (value instanceof java.time.LocalDateTime) {
-                                // Si viene como LocalDateTime, extraer solo la fecha
                                 values.add(((java.time.LocalDateTime) value).toLocalDate());
                             } else {
-                                // Parsear string usando el formato configurado en el header
                                 String dateStr = value.toString().trim();
-                                String format = header.getFormat();
-
-                                if (format != null && !format.isEmpty()) {
-                                    // Crear un formatter flexible que acepte días/meses de 1 o 2 dígitos
-                                    // Reemplazar 'dd' por 'd' y 'MM' por 'M' para hacerlo flexible
-                                    String flexibleFormat = format
-                                        .replace("dd", "d")
-                                        .replace("MM", "M");
-
-                                    java.time.format.DateTimeFormatter formatter =
-                                        java.time.format.DateTimeFormatter.ofPattern(flexibleFormat);
-
-                                    // Si el formato incluye hora, parsear como LocalDateTime y extraer fecha
-                                    if (format.contains("HH") || format.contains("hh") || format.contains("mm") || format.contains("ss")) {
-                                        java.time.LocalDateTime dateTime = java.time.LocalDateTime.parse(dateStr, formatter);
-                                        values.add(dateTime.toLocalDate()); // Convertir a LocalDate (solo fecha)
-                                    } else {
-                                        // Si solo es fecha, parsear directamente como LocalDate
-                                        values.add(LocalDate.parse(dateStr, formatter));
-                                    }
-                                } else {
-                                    // Si no hay formato configurado, intentar parsear como ISO (yyyy-MM-dd)
-                                    values.add(LocalDate.parse(dateStr));
-                                }
+                                LocalDate parsedDate = parseFlexibleDate(dateStr, header.getFormat());
+                                values.add(parsedDate);
                             }
                         } catch (Exception e) {
                             throw new IllegalArgumentException("Valor no es fecha válida para campo " + header.getHeaderName() + ": " + value +
-                                " (formato esperado: " + (header.getFormat() != null ? header.getFormat() : "yyyy-MM-dd") + ")" +
+                                " (formato esperado: " + (header.getFormat() != null ? header.getFormat() : "auto-detectado") + ")" +
                                 " - Error: " + e.getMessage());
                         }
                         break;
@@ -1666,6 +1625,76 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         // 3. No encontrado por ningún nombre
         return null;
+    }
+
+    /**
+     * Parsea una fecha de forma flexible, intentando múltiples formatos comunes.
+     * Soporta días y meses de 1 o 2 dígitos (ej: 5/01/2026, 15/1/2026)
+     *
+     * @param dateStr String con la fecha a parsear
+     * @param configuredFormat Formato configurado en la cabecera (puede ser null)
+     * @return LocalDate parseado
+     * @throws IllegalArgumentException si no se puede parsear con ningún formato
+     */
+    private LocalDate parseFlexibleDate(String dateStr, String configuredFormat) {
+        if (dateStr == null || dateStr.trim().isEmpty()) {
+            return null;
+        }
+
+        dateStr = dateStr.trim();
+
+        // Lista de formatos a intentar (en orden de prioridad)
+        List<String> formatsToTry = new ArrayList<>();
+
+        // Si hay formato configurado, intentarlo primero (con versión flexible)
+        if (configuredFormat != null && !configuredFormat.isEmpty()) {
+            // Hacer el formato flexible (d en lugar de dd, M en lugar de MM)
+            String flexibleFormat = configuredFormat
+                    .replace("dd", "d")
+                    .replace("MM", "M");
+            formatsToTry.add(flexibleFormat);
+        }
+
+        // Agregar formatos comunes como fallback
+        formatsToTry.addAll(List.of(
+                // Formatos día/mes/año (más comunes en Latinoamérica)
+                "d/M/yyyy",
+                "d-M-yyyy",
+                "d.M.yyyy",
+                // Formatos año/mes/día (ISO)
+                "yyyy-M-d",
+                "yyyy/M/d",
+                // Formatos con hora
+                "d/M/yyyy H:m:s",
+                "d-M-yyyy H:m:s",
+                "yyyy-M-d H:m:s",
+                "yyyy-M-d'T'H:m:s"
+        ));
+
+        // Intentar cada formato
+        for (String format : formatsToTry) {
+            try {
+                java.time.format.DateTimeFormatter formatter =
+                        java.time.format.DateTimeFormatter.ofPattern(format);
+
+                // Si el formato incluye hora, parsear como LocalDateTime y extraer fecha
+                if (format.contains("H") || format.contains("h") || format.contains("m") || format.contains("s")) {
+                    java.time.LocalDateTime dateTime = java.time.LocalDateTime.parse(dateStr, formatter);
+                    return dateTime.toLocalDate();
+                } else {
+                    return LocalDate.parse(dateStr, formatter);
+                }
+            } catch (Exception e) {
+                // Continuar con el siguiente formato
+            }
+        }
+
+        // Último intento: formato ISO estándar
+        try {
+            return LocalDate.parse(dateStr);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("No se pudo parsear la fecha: " + dateStr);
+        }
     }
 
     /**
@@ -2004,14 +2033,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     }
                     String dateStr = value.toString().trim();
                     if (dateStr.isEmpty()) return null;
-                    String format = header.getFormat();
-                    if (format != null && !format.isEmpty()) {
-                        String flexibleFormat = format.replace("dd", "d").replace("MM", "M");
-                        java.time.format.DateTimeFormatter formatter =
-                                java.time.format.DateTimeFormatter.ofPattern(flexibleFormat);
-                        return LocalDate.parse(dateStr, formatter);
-                    }
-                    return LocalDate.parse(dateStr);
+                    return parseFlexibleDate(dateStr, header != null ? header.getFormat() : null);
                 } catch (Exception e) {
                     logger.warn("Valor no es fecha válida: {}", value);
                     return null;
