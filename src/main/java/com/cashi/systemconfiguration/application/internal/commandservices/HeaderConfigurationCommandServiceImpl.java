@@ -621,47 +621,105 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             throw new IllegalArgumentException("No hay cabeceras configuradas para esta subcartera y tipo de carga.");
         }
 
-        // ========== OPTIMIZACIÓN: BATCH INSERT ==========
-        // Preparar todas las filas válidas para batch insert
-        List<PreparedRowData> validRows = new ArrayList<>();
+        // ========== BUSCAR CAMPO DE IDENTIFICACIÓN PARA UPSERT ==========
+        // Buscar columnas de identificación: identity_code o nombre_cliente
+        String identityColumnName = findIdentityColumn(headers, "identity_code", "codigo_identificacion", "cod_cli");
+        String nameColumnName = findIdentityColumn(headers, "nombre_cliente", "nombre_completo", "full_name");
+
+        logger.info("📋 Columnas para UPSERT - Identity: {}, Name: {}", identityColumnName, nameColumnName);
+
+        // ========== CARGAR IDs EXISTENTES EN MEMORIA ==========
+        Map<String, Integer> existingIdentityCodes = new HashMap<>();
+        Map<String, Integer> existingNames = new HashMap<>();
+
+        if (identityColumnName != null && columnExists(tableName, identityColumnName)) {
+            existingIdentityCodes = loadExistingIdentifiers(tableName, identityColumnName);
+            logger.info("📊 {} registros existentes cargados por identity_code", existingIdentityCodes.size());
+        }
+
+        if (nameColumnName != null && columnExists(tableName, nameColumnName)) {
+            existingNames = loadExistingIdentifiers(tableName, nameColumnName);
+            logger.info("📊 {} registros existentes cargados por nombre", existingNames.size());
+        }
+
+        // ========== PREPARAR Y CLASIFICAR FILAS ==========
+        List<PreparedRowDataWithId> rowsToInsert = new ArrayList<>();
+        List<PreparedRowDataWithId> rowsToUpdate = new ArrayList<>();
         List<String> errors = new ArrayList<>();
         int failedRows = 0;
 
-        logger.info("📦 Preparando {} filas para batch insert...", data.size());
+        logger.info("📦 Preparando {} filas para UPSERT...", data.size());
 
-        // Fase 1: Validar y preparar todas las filas
         for (int i = 0; i < data.size(); i++) {
             Map<String, Object> row = data.get(i);
             try {
                 PreparedRowData preparedRow = prepareRowData(row, headers, i + 1);
-                validRows.add(preparedRow);
+
+                // Extraer valores de identificación del row original
+                String identityValue = extractIdentityValue(row, headers, identityColumnName);
+                String nameValue = extractIdentityValue(row, headers, nameColumnName);
+
+                // Buscar si existe el registro
+                Integer existingId = null;
+
+                // Primero buscar por identity_code (más preciso)
+                if (identityValue != null && !identityValue.trim().isEmpty()) {
+                    existingId = existingIdentityCodes.get(identityValue.toLowerCase().trim());
+                }
+
+                // Si no se encuentra, buscar por nombre
+                if (existingId == null && nameValue != null && !nameValue.trim().isEmpty()) {
+                    existingId = existingNames.get(nameValue.toLowerCase().trim());
+                }
+
+                PreparedRowDataWithId rowWithId = new PreparedRowDataWithId(
+                    preparedRow.rowNumber, preparedRow.values, existingId, identityValue, nameValue
+                );
+
+                if (existingId != null) {
+                    rowsToUpdate.add(rowWithId);
+                } else {
+                    rowsToInsert.add(rowWithId);
+                }
+
             } catch (Exception e) {
                 failedRows++;
                 errors.add("Fila " + (i + 1) + ": " + e.getMessage());
-                // Solo loguear en DEBUG para evitar ralentización en producción
                 if (logger.isDebugEnabled()) {
                     logger.debug("Error al validar fila {}: {}", i + 1, e.getMessage());
                 }
             }
         }
 
-        logger.info("✅ Filas preparadas: {} válidas, {} con errores", validRows.size(), failedRows);
-
-        // Loguear un resumen de errores si hay muchos
-        if (failedRows > 0 && logger.isDebugEnabled()) {
-            logger.debug("Resumen de errores de validación: {} filas fallidas de {}", failedRows, data.size());
-        }
+        logger.info("✅ Clasificación: {} para INSERT, {} para UPDATE, {} con errores",
+                   rowsToInsert.size(), rowsToUpdate.size(), failedRows);
 
         int insertedRows = 0;
+        int updatedRows = 0;
 
-        // Fase 2: Insertar todas las filas válidas en un solo batch
-        if (!validRows.isEmpty()) {
+        // ========== FASE 1: BATCH INSERT para registros nuevos ==========
+        if (!rowsToInsert.isEmpty()) {
             try {
-                insertedRows = batchInsertRows(tableName, validRows, headers);
-                logger.info("✅ Batch insert completado: {} filas insertadas", insertedRows);
+                List<PreparedRowData> simpleRows = rowsToInsert.stream()
+                    .map(r -> new PreparedRowData(r.rowNumber, r.values))
+                    .collect(java.util.stream.Collectors.toList());
+                insertedRows = batchInsertRows(tableName, simpleRows, headers);
+                logger.info("✅ Batch INSERT completado: {} filas insertadas", insertedRows);
             } catch (Exception e) {
-                logger.error("❌ Error en batch insert: {}", e.getMessage(), e);
-                throw new RuntimeException("Error al insertar datos en lote: " + e.getMessage(), e);
+                logger.error("❌ Error en batch INSERT: {}", e.getMessage(), e);
+                throw new RuntimeException("Error al insertar datos: " + e.getMessage(), e);
+            }
+        }
+
+        // ========== FASE 2: BATCH UPDATE para registros existentes ==========
+        if (!rowsToUpdate.isEmpty()) {
+            try {
+                updatedRows = batchUpdateRows(tableName, rowsToUpdate, headers);
+                logger.info("✅ Batch UPDATE completado: {} filas actualizadas", updatedRows);
+            } catch (Exception e) {
+                logger.error("❌ Error en batch UPDATE: {}", e.getMessage(), e);
+                // No lanzar excepción para no perder los inserts exitosos
+                errors.add("Error en actualización masiva: " + e.getMessage());
             }
         }
 
@@ -669,24 +727,28 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         Map<String, Object> result = new HashMap<>();
         result.put("totalRows", data.size());
         result.put("insertedRows", insertedRows);
+        result.put("updatedRows", updatedRows);
         result.put("failedRows", failedRows);
         result.put("tableName", tableName);
 
         if (!errors.isEmpty()) {
-            result.put("errors", errors);
+            result.put("errors", errors.size() > 20 ? errors.subList(0, 20) : errors);
+            if (errors.size() > 20) {
+                result.put("totalErrors", errors.size());
+            }
         }
 
-        logger.info("Importación completada: {} filas insertadas, {} fallidas", insertedRows, failedRows);
+        logger.info("📊 Importación completada: {} insertadas, {} actualizadas, {} fallidas",
+                   insertedRows, updatedRows, failedRows);
 
         // 🔄 Sincronizar clientes desde la tabla dinámica a la tabla clientes
-        if (insertedRows > 0) {
+        if (insertedRows > 0 || updatedRows > 0) {
             logger.info("🔄 Iniciando sincronización de clientes para SubPortfolio ID: {}, LoadType: {}", subPortfolioId, loadType);
             try {
                 CustomerSyncService.SyncResult syncResult = customerSyncService.syncCustomersFromSubPortfolio(subPortfolioId.longValue(), loadType);
                 logger.info("✅ Sincronización completada: {} clientes creados, {} actualizados",
                         syncResult.getCustomersCreated(), syncResult.getCustomersUpdated());
 
-                // Agregar información de sincronización al resultado
                 result.put("syncCustomersCreated", syncResult.getCustomersCreated());
                 result.put("syncCustomersUpdated", syncResult.getCustomersUpdated());
                 if (syncResult.hasErrors()) {
@@ -702,15 +764,149 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
+     * Busca una columna de identificación en las cabeceras configuradas
+     */
+    private String findIdentityColumn(List<HeaderConfiguration> headers, String... possibleNames) {
+        for (String name : possibleNames) {
+            String normalizedName = normalizeHeaderName(name);
+            for (HeaderConfiguration header : headers) {
+                if (normalizeHeaderName(header.getHeaderName()).equals(normalizedName)) {
+                    return sanitizeColumnName(header.getHeaderName());
+                }
+                // También buscar en sourceField
+                if (header.getSourceField() != null &&
+                    normalizeHeaderName(header.getSourceField()).equals(normalizedName)) {
+                    return sanitizeColumnName(header.getHeaderName());
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Carga todos los identificadores existentes de la tabla en un mapa
+     */
+    private Map<String, Integer> loadExistingIdentifiers(String tableName, String columnName) {
+        Map<String, Integer> identifiers = new HashMap<>();
+        try {
+            String sql = "SELECT id, " + columnName + " FROM " + tableName +
+                        " WHERE " + columnName + " IS NOT NULL AND " + columnName + " != ''";
+            jdbcTemplate.query(sql, rs -> {
+                String value = rs.getString(columnName);
+                if (value != null && !value.trim().isEmpty()) {
+                    identifiers.put(value.toLowerCase().trim(), rs.getInt("id"));
+                }
+            });
+        } catch (Exception e) {
+            logger.error("Error cargando identificadores de {}.{}: {}", tableName, columnName, e.getMessage());
+        }
+        return identifiers;
+    }
+
+    /**
+     * Extrae el valor de identificación de una fila
+     */
+    private String extractIdentityValue(Map<String, Object> row, List<HeaderConfiguration> headers, String columnName) {
+        if (columnName == null) return null;
+
+        // Buscar la cabecera correspondiente
+        for (HeaderConfiguration header : headers) {
+            if (sanitizeColumnName(header.getHeaderName()).equals(columnName)) {
+                Object value;
+                if (header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
+                    value = getValueFromRowData(row, header.getSourceField());
+                } else {
+                    value = getValueFromRowDataWithAliases(row, header);
+                }
+                return value != null ? value.toString() : null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Clase para almacenar datos preparados con ID para UPSERT
+     */
+    private static class PreparedRowDataWithId extends PreparedRowData {
+        private final Integer existingId;
+        private final String identityValue;
+        private final String nameValue;
+
+        public PreparedRowDataWithId(int rowNumber, List<Object> values, Integer existingId,
+                                     String identityValue, String nameValue) {
+            super(rowNumber, values);
+            this.existingId = existingId;
+            this.identityValue = identityValue;
+            this.nameValue = nameValue;
+        }
+
+        public Integer getExistingId() { return existingId; }
+        public String getIdentityValue() { return identityValue; }
+        public String getNameValue() { return nameValue; }
+    }
+
+    /**
+     * Ejecuta batch UPDATE para filas existentes
+     */
+    private int batchUpdateRows(String tableName, List<PreparedRowDataWithId> rows, List<HeaderConfiguration> headers) {
+        if (rows.isEmpty()) return 0;
+
+        // Construir SQL de UPDATE
+        StringBuilder setClause = new StringBuilder();
+        boolean first = true;
+        for (HeaderConfiguration header : headers) {
+            String columnName = sanitizeColumnName(header.getHeaderName());
+            if (!first) setClause.append(", ");
+            setClause.append(columnName).append(" = ?");
+            first = false;
+        }
+
+        String sql = "UPDATE " + tableName + " SET " + setClause + " WHERE id = ?";
+
+        logger.info("🔄 Ejecutando batch UPDATE de {} filas en tabla {}", rows.size(), tableName);
+
+        int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
+            @Override
+            public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
+                PreparedRowDataWithId rowData = rows.get(i);
+                List<Object> values = rowData.getValues();
+
+                // Setear valores de las columnas
+                for (int j = 0; j < values.size(); j++) {
+                    ps.setObject(j + 1, values.get(j));
+                }
+                // Setear el ID en el WHERE
+                ps.setInt(values.size() + 1, rowData.getExistingId());
+            }
+
+            @Override
+            public int getBatchSize() {
+                return rows.size();
+            }
+        });
+
+        int totalUpdated = 0;
+        for (int count : updateCounts) {
+            if (count > 0) totalUpdated += count;
+        }
+
+        return totalUpdated;
+    }
+
+    /**
      * Clase interna para almacenar datos de fila preparada
      */
     private static class PreparedRowData {
-        private final int rowNumber;
-        private final List<Object> values;
+        protected final int rowNumber;
+        protected final List<Object> values;
 
         public PreparedRowData(int rowNumber, List<Object> values) {
             this.rowNumber = rowNumber;
             this.values = values;
+        }
+
+        public int getRowNumber() {
+            return rowNumber;
         }
 
         public List<Object> getValues() {
