@@ -52,7 +52,7 @@ public class ComplementaryFileController {
                     resource.data());
         } else {
             return ResponseEntity.badRequest().body(Map.of(
-                    "error", "Debe proporcionar complementaryTypeId o typeName"));
+                    "message", "Debe proporcionar complementaryTypeId o typeName"));
         }
 
         return ResponseEntity.ok(result);

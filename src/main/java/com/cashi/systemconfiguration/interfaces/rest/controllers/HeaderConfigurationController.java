@@ -114,12 +114,12 @@ public class HeaderConfigurationController {
             return ResponseEntity.status(HttpStatus.CREATED).body(responseResource);
         } catch (IllegalArgumentException e) {
             System.err.println("❌ Error de validación al crear cabecera: " + e.getMessage());
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
             System.err.println("❌ Error inesperado al crear cabecera: " + e.getMessage());
             e.printStackTrace();
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Error interno: " + e.getMessage()));
+                    .body(Map.of("message", "Error interno: " + e.getMessage()));
         }
     }
 
@@ -160,18 +160,18 @@ public class HeaderConfigurationController {
         } catch (IllegalArgumentException e) {
             System.err.println("❌ Error en bulk create: " + e.getMessage());
             e.printStackTrace();
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
             System.err.println("❌ Error inesperado en bulk create: " + e.getMessage());
             e.printStackTrace();
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Error interno: " + e.getMessage()));
+                    .body(Map.of("message", "Error al crear cabeceras: " + e.getMessage()));
         }
     }
 
     @Operation(summary = "Actualizar configuración de cabecera")
     @PutMapping("/{id}")
-    public ResponseEntity<HeaderConfigurationResource> update(
+    public ResponseEntity<?> update(
             @PathVariable Integer id,
             @RequestBody UpdateHeaderConfigurationResource resource) {
         try {
@@ -185,31 +185,52 @@ public class HeaderConfigurationController {
             var responseResource = HeaderConfigurationResourceFromEntityAssembler.toResourceFromEntity(config);
             return ResponseEntity.ok(responseResource);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+            String message = e.getMessage();
+            if (message != null && message.contains("no encontrada")) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", message));
+            }
+            return ResponseEntity.badRequest().body(Map.of("message", message != null ? message : "Error al actualizar"));
         }
     }
 
     @Operation(summary = "Eliminar configuración de cabecera")
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable Integer id) {
+    public ResponseEntity<?> delete(@PathVariable Integer id) {
         try {
             commandService.deleteHeaderConfiguration(id);
             return ResponseEntity.noContent().build();
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+            String message = e.getMessage();
+            // Distinguir entre "no encontrada" y "tiene datos"
+            if (message != null && message.contains("no encontrada")) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", message));
+            }
+            // Si la cabecera tiene datos, retornar 409 Conflict con el mensaje
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("message", message != null ? message : "No se puede eliminar la cabecera"));
         }
     }
 
     @Operation(summary = "Eliminar todas las configuraciones de una subcartera y tipo de carga")
     @DeleteMapping("/subportfolio/{subPortfolioId}/load-type/{loadType}")
-    public ResponseEntity<Void> deleteAllBySubPortfolioAndLoadType(
+    public ResponseEntity<?> deleteAllBySubPortfolioAndLoadType(
             @PathVariable Integer subPortfolioId,
             @PathVariable LoadType loadType) {
         try {
             commandService.deleteAllBySubPortfolioAndLoadType(subPortfolioId, loadType);
             return ResponseEntity.noContent().build();
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+            String message = e.getMessage();
+            // Distinguir entre "no encontrada" y "tiene datos"
+            if (message != null && message.contains("no encontrada")) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", message));
+            }
+            // Si hay datos en la tabla, retornar 409 Conflict con el mensaje
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("message", message != null ? message : "No se pueden eliminar las configuraciones"));
         }
     }
 
@@ -238,7 +259,7 @@ public class HeaderConfigurationController {
 
         if (file.isEmpty()) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("error", "El archivo está vacío"));
+                    .body(Map.of("message", "El archivo está vacío"));
         }
 
         try {
@@ -345,7 +366,7 @@ public class HeaderConfigurationController {
 
             if (headers.isEmpty()) {
                 return ResponseEntity.badRequest()
-                        .body(Map.of("error", "No se encontraron cabeceras válidas en el archivo CSV"));
+                        .body(Map.of("message", "No se encontraron cabeceras válidas en el archivo CSV"));
             }
 
             System.out.println("\n📋 Total de cabeceras parseadas: " + headers.size());
@@ -386,12 +407,12 @@ public class HeaderConfigurationController {
         } catch (IllegalArgumentException e) {
             System.err.println("❌ Error de validación: " + e.getMessage());
             e.printStackTrace();
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
             System.err.println("❌ Error al procesar CSV: " + e.getMessage());
             e.printStackTrace();
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Error al procesar CSV: " + e.getMessage()));
+                    .body(Map.of("message", "Error al procesar CSV: " + e.getMessage()));
         }
     }
 
@@ -475,10 +496,10 @@ public class HeaderConfigurationController {
 
             return ResponseEntity.ok(response);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Error al resolver cabeceras: " + e.getMessage()));
+                    .body(Map.of("message", "Error al resolver cabeceras: " + e.getMessage()));
         }
     }
 
@@ -499,7 +520,7 @@ public class HeaderConfigurationController {
             return ResponseEntity.ok(resources);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", e.getMessage()));
+                    .body(Map.of("message", e.getMessage()));
         }
     }
 
@@ -519,10 +540,10 @@ public class HeaderConfigurationController {
             );
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", e.getMessage()));
+                    .body(Map.of("message", e.getMessage()));
         }
     }
 
@@ -535,10 +556,10 @@ public class HeaderConfigurationController {
             resolutionService.removeAlias(aliasId, username);
             return ResponseEntity.noContent().build();
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", e.getMessage()));
+                    .body(Map.of("message", e.getMessage()));
         }
     }
 
@@ -564,10 +585,10 @@ public class HeaderConfigurationController {
             var response = HeaderConfigurationResourceFromEntityAssembler.toResourceFromEntity(config);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", e.getMessage()));
+                    .body(Map.of("message", e.getMessage()));
         }
     }
 
@@ -584,7 +605,7 @@ public class HeaderConfigurationController {
             return ResponseEntity.ok(Map.of("success", true, "message", "Columna ignorada exitosamente"));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", e.getMessage()));
+                    .body(Map.of("message", e.getMessage()));
         }
     }
 
@@ -598,7 +619,7 @@ public class HeaderConfigurationController {
             return ResponseEntity.ok(ignored);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", e.getMessage()));
+                    .body(Map.of("message", e.getMessage()));
         }
     }
 
@@ -614,7 +635,7 @@ public class HeaderConfigurationController {
             return ResponseEntity.ok(Map.of("success", true));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", e.getMessage()));
+                    .body(Map.of("message", e.getMessage()));
         }
     }
 
@@ -641,7 +662,7 @@ public class HeaderConfigurationController {
             return ResponseEntity.ok(resources);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", e.getMessage()));
+                    .body(Map.of("message", e.getMessage()));
         }
     }
 }
