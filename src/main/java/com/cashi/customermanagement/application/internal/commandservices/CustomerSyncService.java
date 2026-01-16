@@ -733,7 +733,7 @@ public class CustomerSyncService {
             "direccion, distrito, provincia, departamento, " +
             "referencia_personal, numero_cuenta_linea_prestamo, " +
             "dias_mora, monto_mora, monto_capital, " +
-            "created_at, updated_at" +
+            "fecha_creacion, fecha_actualizacion" +
             ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())";
 
         List<Object[]> batchArgs = new ArrayList<>();
