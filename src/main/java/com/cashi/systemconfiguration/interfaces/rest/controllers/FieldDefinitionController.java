@@ -79,4 +79,24 @@ public class FieldDefinitionController {
         long count = queryService.countActiveFields();
         return ResponseEntity.ok(count);
     }
+
+    @Operation(summary = "Obtener definiciones de campos por tabla asociada")
+    @GetMapping("/table/{tableName}")
+    public ResponseEntity<List<FieldDefinitionResource>> getByAssociatedTable(@PathVariable String tableName) {
+        var definitions = queryService.getByAssociatedTable(tableName);
+        var resources = definitions.stream()
+                .map(FieldDefinitionResourceFromEntityAssembler::toResourceFromEntity)
+                .toList();
+        return ResponseEntity.ok(resources);
+    }
+
+    @Operation(summary = "Obtener campos para sincronización de clientes (clientes + metodos_contacto)")
+    @GetMapping("/customer-sync")
+    public ResponseEntity<List<FieldDefinitionResource>> getFieldsForCustomerSync() {
+        var definitions = queryService.getFieldsForCustomerSync();
+        var resources = definitions.stream()
+                .map(FieldDefinitionResourceFromEntityAssembler::toResourceFromEntity)
+                .toList();
+        return ResponseEntity.ok(resources);
+    }
 }

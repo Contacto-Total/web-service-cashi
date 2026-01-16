@@ -35,4 +35,27 @@ public interface FieldDefinitionRepository extends JpaRepository<FieldDefinition
      * Verificar si existe un campo con el código especificado
      */
     boolean existsByFieldCode(String fieldCode);
+
+    /**
+     * Buscar campos por tabla asociada
+     */
+    List<FieldDefinition> findByAssociatedTable(String associatedTable);
+
+    /**
+     * Buscar campos por múltiples tablas asociadas (ej: clientes y metodos_contacto)
+     */
+    @Query("SELECT f FROM FieldDefinition f WHERE f.associatedTable IN :tables ORDER BY f.associatedTable, f.fieldName")
+    List<FieldDefinition> findByAssociatedTableIn(@Param("tables") List<String> tables);
+
+    /**
+     * Buscar campos que tienen tabla asociada definida (excluye campos sin asignar)
+     */
+    @Query("SELECT f FROM FieldDefinition f WHERE f.associatedTable IS NOT NULL ORDER BY f.associatedTable, f.fieldName")
+    List<FieldDefinition> findAllWithAssociatedTable();
+
+    /**
+     * Buscar campos para sincronización de clientes (tabla clientes y métodos de contacto)
+     */
+    @Query("SELECT f FROM FieldDefinition f WHERE f.associatedTable IN ('clientes', 'metodos_contacto') ORDER BY f.associatedTable, f.fieldName")
+    List<FieldDefinition> findFieldsForCustomerSync();
 }

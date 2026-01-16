@@ -13,6 +13,7 @@ public class FieldDefinitionResourceFromEntityAssembler {
             entity.getDescription(),
             entity.getDataType(),
             entity.getFormat(),
+            entity.getAssociatedTable(),
             entity.getCreatedAt(),
             entity.getUpdatedAt()
         );

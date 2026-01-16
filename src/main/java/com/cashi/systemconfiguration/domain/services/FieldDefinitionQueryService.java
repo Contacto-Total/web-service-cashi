@@ -39,4 +39,19 @@ public interface FieldDefinitionQueryService {
      * Cuenta el total de campos activos
      */
     long countActiveFields();
+
+    /**
+     * Obtiene campos filtrados por tabla asociada
+     */
+    List<FieldDefinition> getByAssociatedTable(String tableName);
+
+    /**
+     * Obtiene campos filtrados por múltiples tablas asociadas
+     */
+    List<FieldDefinition> getByAssociatedTables(List<String> tableNames);
+
+    /**
+     * Obtiene campos para sincronización de clientes (clientes + metodos_contacto)
+     */
+    List<FieldDefinition> getFieldsForCustomerSync();
 }

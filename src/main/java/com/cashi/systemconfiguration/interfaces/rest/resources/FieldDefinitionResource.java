@@ -24,6 +24,9 @@ public record FieldDefinitionResource(
     @Schema(description = "Formato del campo", example = "dd/MM/yyyy")
     String format,
 
+    @Schema(description = "Tabla asociada", example = "clientes")
+    String associatedTable,
+
     @Schema(description = "Fecha de creación")
     LocalDate createdAt,
 

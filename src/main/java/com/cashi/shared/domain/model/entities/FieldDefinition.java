@@ -59,6 +59,13 @@ public class FieldDefinition {
     @Column(name = "formato", length = 100)
     private String format;
 
+    /**
+     * Tabla asociada al campo (ej: "clientes", "metodos_contacto")
+     * Indica a qué tabla de la base de datos pertenece este campo
+     */
+    @Column(name = "tabla_asociada", length = 100)
+    private String associatedTable;
+
     @CreatedDate
     @Column(name = "fecha_creacion", nullable = false, updatable = false)
     private LocalDate createdAt;
@@ -68,7 +75,7 @@ public class FieldDefinition {
     private LocalDate updatedAt;
 
     /**
-     * Constructor para seeding
+     * Constructor para seeding (sin tabla asociada - retrocompatibilidad)
      */
     public FieldDefinition(String fieldCode, String fieldName, String description,
                           String dataType, String format) {
@@ -77,5 +84,18 @@ public class FieldDefinition {
         this.description = description;
         this.dataType = dataType;
         this.format = format;
+    }
+
+    /**
+     * Constructor completo con tabla asociada
+     */
+    public FieldDefinition(String fieldCode, String fieldName, String description,
+                          String dataType, String format, String associatedTable) {
+        this.fieldCode = fieldCode;
+        this.fieldName = fieldName;
+        this.description = description;
+        this.dataType = dataType;
+        this.format = format;
+        this.associatedTable = associatedTable;
     }
 }

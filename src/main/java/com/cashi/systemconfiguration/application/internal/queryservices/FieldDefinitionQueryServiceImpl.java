@@ -51,4 +51,19 @@ public class FieldDefinitionQueryServiceImpl implements FieldDefinitionQueryServ
     public long countActiveFields() {
         return fieldDefinitionRepository.count();
     }
+
+    @Override
+    public List<FieldDefinition> getByAssociatedTable(String tableName) {
+        return fieldDefinitionRepository.findByAssociatedTable(tableName);
+    }
+
+    @Override
+    public List<FieldDefinition> getByAssociatedTables(List<String> tableNames) {
+        return fieldDefinitionRepository.findByAssociatedTableIn(tableNames);
+    }
+
+    @Override
+    public List<FieldDefinition> getFieldsForCustomerSync() {
+        return fieldDefinitionRepository.findFieldsForCustomerSync();
+    }
 }
