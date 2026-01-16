@@ -285,19 +285,40 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
 
         logger.info("📦 Archivando tabla {} -> {}.{}", tableName, HISTORIC_DATABASE, archivedTableName);
 
+        // Asegurar que la base de datos histórica existe
+        String createDbSql = String.format("CREATE DATABASE IF NOT EXISTS %s", HISTORIC_DATABASE);
+        jdbcTemplate.execute(createDbSql);
+
+        // Contar registros antes de archivar
+        long recordsBefore = getTableRecordCount(tableName);
+        logger.info("📊 Registros a archivar de {}: {}", tableName, recordsBefore);
+
         // Crear tabla en BD histórica si no existe
         String createSql = String.format(
                 "CREATE TABLE IF NOT EXISTS %s.%s LIKE %s.%s",
                 HISTORIC_DATABASE, archivedTableName, MAIN_DATABASE, tableName);
         jdbcTemplate.execute(createSql);
+        logger.info("✓ Tabla histórica creada: {}.{}", HISTORIC_DATABASE, archivedTableName);
 
-        // Copiar datos (INSERT IGNORE para evitar duplicados si ya existe)
+        // Copiar datos
         String insertSql = String.format(
-                "INSERT IGNORE INTO %s.%s SELECT * FROM %s.%s",
+                "INSERT INTO %s.%s SELECT * FROM %s.%s",
                 HISTORIC_DATABASE, archivedTableName, MAIN_DATABASE, tableName);
         jdbcTemplate.execute(insertSql);
+        logger.info("✓ Datos copiados a tabla histórica");
 
-        logger.info("✅ Tabla {} archivada exitosamente", tableName);
+        // Verificar que los datos se copiaron correctamente
+        String countSql = String.format("SELECT COUNT(*) FROM %s.%s", HISTORIC_DATABASE, archivedTableName);
+        Long recordsArchived = jdbcTemplate.queryForObject(countSql, Long.class);
+        logger.info("📊 Registros en tabla histórica: {}", recordsArchived);
+
+        // Limpiar la tabla original después de verificar
+        String truncateSql = String.format("TRUNCATE TABLE %s.%s", MAIN_DATABASE, tableName);
+        jdbcTemplate.execute(truncateSql);
+        logger.info("✓ Tabla original {} limpiada (TRUNCATE)", tableName);
+
+        logger.info("✅ Tabla {} archivada exitosamente. {} registros movidos a {}.{}",
+                tableName, recordsArchived, HISTORIC_DATABASE, archivedTableName);
     }
 
     private int countArchivedTables(String archivePeriod) {
