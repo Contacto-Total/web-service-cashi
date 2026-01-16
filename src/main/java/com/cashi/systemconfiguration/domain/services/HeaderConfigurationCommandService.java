@@ -71,14 +71,15 @@ public interface HeaderConfigurationCommandService {
      * Importa datos de carga diaria.
      * Esta operación:
      * 1. Inserta/Actualiza datos en la tabla ACTUALIZACION (histórico diario)
-     * 2. Actualiza los registros correspondientes en la tabla INICIAL (tabla maestra)
+     * 2. Actualiza los registros correspondientes en la tabla INICIAL (tabla maestra) usando el linkField
      * 3. Sincroniza los clientes SOLO desde la tabla INICIAL
      *
      * @param subPortfolioId ID de la subcartera
      * @param data Lista de registros a importar
+     * @param linkField Campo de enlace para vincular registros con la tabla inicial
      * @return Mapa con estadísticas de la operación
      */
-    java.util.Map<String, Object> importDailyData(Integer subPortfolioId, List<java.util.Map<String, Object>> data);
+    java.util.Map<String, Object> importDailyData(Integer subPortfolioId, List<java.util.Map<String, Object>> data, String linkField);
 
     record HeaderConfigurationData(
         Integer fieldDefinitionId,

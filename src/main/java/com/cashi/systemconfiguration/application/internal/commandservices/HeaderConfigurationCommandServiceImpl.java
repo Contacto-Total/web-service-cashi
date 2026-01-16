@@ -2029,17 +2029,23 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
      * Importa datos de carga diaria.
      * Esta operación:
      * 1. Inserta/Actualiza datos en la tabla ACTUALIZACION (histórico diario)
-     * 2. Actualiza los registros correspondientes en la tabla INICIAL (tabla maestra)
+     * 2. Actualiza los registros correspondientes en la tabla INICIAL (tabla maestra) usando el linkField
      * 3. Sincroniza los clientes SOLO desde la tabla INICIAL
      *
      * @param subPortfolioId ID de la subcartera
      * @param data Lista de registros a importar
+     * @param linkField Campo de enlace para vincular registros con la tabla inicial
      * @return Mapa con estadísticas de la operación
      */
     @Override
     @Transactional
-    public Map<String, Object> importDailyData(Integer subPortfolioId, List<Map<String, Object>> data) {
-        logger.info("📅 Iniciando carga diaria para SubPortfolio ID: {}, registros: {}", subPortfolioId, data.size());
+    public Map<String, Object> importDailyData(Integer subPortfolioId, List<Map<String, Object>> data, String linkField) {
+        logger.info("📅 Iniciando carga diaria para SubPortfolio ID: {}, registros: {}, linkField: {}", subPortfolioId, data.size(), linkField);
+
+        // Validar linkField
+        if (linkField == null || linkField.trim().isEmpty()) {
+            throw new IllegalArgumentException("El campo de enlace (linkField) es requerido para la carga diaria.");
+        }
 
         // Validar que la subcartera existe
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
@@ -2083,13 +2089,10 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             throw new IllegalArgumentException("No hay cabeceras configuradas para carga inicial.");
         }
 
-        // Detectar el campo de enlace (identity_code, cod_cli, etc.)
-        String linkField = detectLinkField(headersInicial);
-        if (linkField == null) {
-            throw new IllegalArgumentException("No se pudo detectar un campo de identificación para vincular los datos.");
-        }
-
-        logger.info("🔗 Campo de enlace detectado: {}", linkField);
+        // Usar el campo de enlace proporcionado por el usuario
+        // Sanitizar el nombre del campo para que coincida con el formato de las columnas en la tabla
+        String sanitizedLinkField = sanitizeColumnName(linkField);
+        logger.info("🔗 Campo de enlace proporcionado: {} (sanitizado: {})", linkField, sanitizedLinkField);
 
         // Actualizar registros en tabla INICIAL usando el campo de enlace
         int updatedInInicial = 0;
@@ -2139,7 +2142,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     if (inicialHeader != null) {
                         String columnName = sanitizeColumnName(inicialHeader.getHeaderName());
                         // No actualizar el campo de enlace
-                        if (!columnName.equalsIgnoreCase(linkField)) {
+                        if (!columnName.equalsIgnoreCase(sanitizedLinkField)) {
                             if (columnsToUpdate > 0) setClause.append(", ");
                             setClause.append(columnName).append(" = ?");
                             values.add(convertValueForUpdate(value, inicialHeader));
@@ -2154,9 +2157,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     continue;
                 }
 
-                // Ejecutar UPDATE en tabla INICIAL
+                // Ejecutar UPDATE en tabla INICIAL usando el campo de enlace sanitizado
                 String sql = "UPDATE " + tableInicial + " SET " + setClause +
-                            " WHERE " + linkField + " = ?";
+                            " WHERE " + sanitizedLinkField + " = ?";
                 values.add(linkValue);
 
                 int rowsAffected = jdbcTemplate.update(sql, values.toArray());
@@ -2165,7 +2168,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     updatedInInicial += rowsAffected;
                 } else {
                     notFoundInInicial++;
-                    logger.debug("⚠️ No se encontró registro en INICIAL con {}={}", linkField, linkValue);
+                    logger.debug("⚠️ No se encontró registro en INICIAL con {}={}", sanitizedLinkField, linkValue);
                 }
 
             } catch (Exception e) {

@@ -435,17 +435,18 @@ public class HeaderConfigurationController {
     @Operation(summary = "Importar datos de carga diaria",
                description = "Importa datos de carga diaria realizando: " +
                            "1) INSERT/UPDATE en tabla de actualización (histórico), " +
-                           "2) UPDATE en tabla inicial (maestra), " +
+                           "2) UPDATE en tabla inicial (maestra) usando el campo de enlace, " +
                            "3) Sincronización a tabla clientes SOLO desde la tabla inicial.")
     @PostMapping("/subportfolio/{subPortfolioId}/import-daily")
     public ResponseEntity<?> importDailyData(
             @PathVariable Integer subPortfolioId,
-            @RequestBody ImportDataResource resource) {
+            @RequestBody ImportDailyDataResource resource) {
         try {
             System.out.println("📅 Importando carga diaria: subPortfolioId=" + subPortfolioId
-                    + ", rows=" + resource.data().size());
+                    + ", rows=" + resource.data().size()
+                    + ", linkField=" + resource.linkField());
 
-            var result = commandService.importDailyData(subPortfolioId, resource.data());
+            var result = commandService.importDailyData(subPortfolioId, resource.data(), resource.linkField());
 
             System.out.println("✅ Carga diaria completada: " + result);
             return ResponseEntity.ok(result);
