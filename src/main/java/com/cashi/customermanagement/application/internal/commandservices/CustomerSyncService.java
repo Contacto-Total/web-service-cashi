@@ -14,6 +14,8 @@ import com.cashi.shared.infrastructure.persistence.jpa.repositories.SubPortfolio
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,9 +28,10 @@ import java.util.*;
 /**
  * Servicio para sincronizar clientes desde tablas dinámicas a tabla clientes
  * Lee datos de tablas ini_<prov>_<car>_<subcartera> y los consolida en la tabla clientes
+ *
+ * MODO PRUEBA: Configurar app.customer-sync.test-mode=true para escribir en cliente_prueba
  */
 @Service
-@RequiredArgsConstructor
 public class CustomerSyncService {
 
     @PersistenceContext
@@ -38,6 +41,34 @@ public class CustomerSyncService {
     private final ContactMethodRepository contactMethodRepository;
     private final SubPortfolioRepository subPortfolioRepository;
     private final HeaderConfigurationRepository headerConfigurationRepository;
+    private final JdbcTemplate jdbcTemplate;
+
+    /**
+     * Modo de prueba: cuando es true, escribe en cliente_prueba en lugar de clientes
+     */
+    @Value("${app.customer-sync.test-mode:false}")
+    private boolean testMode;
+
+    /**
+     * Nombre de la tabla de prueba
+     */
+    @Value("${app.customer-sync.test-table:cliente_prueba}")
+    private String testTableName;
+
+    public CustomerSyncService(
+            EntityManager entityManager,
+            CustomerRepository customerRepository,
+            ContactMethodRepository contactMethodRepository,
+            SubPortfolioRepository subPortfolioRepository,
+            HeaderConfigurationRepository headerConfigurationRepository,
+            JdbcTemplate jdbcTemplate) {
+        this.entityManager = entityManager;
+        this.customerRepository = customerRepository;
+        this.contactMethodRepository = contactMethodRepository;
+        this.subPortfolioRepository = subPortfolioRepository;
+        this.headerConfigurationRepository = headerConfigurationRepository;
+        this.jdbcTemplate = jdbcTemplate;
+    }
 
     /**
      * Sincroniza clientes desde una tabla específica (método directo)
@@ -233,22 +264,30 @@ public class CustomerSyncService {
                 }
             }
 
-            // ========== BATCH SAVE: Guardar todos los clientes de una vez ==========
+            // ========== BATCH SAVE: Guardar todos los clientes ==========
             if (!customersToSave.isEmpty()) {
-                customerRepository.saveAll(customersToSave);
+                if (testMode) {
+                    // MODO PRUEBA: Escribir en tabla de prueba usando JDBC
+                    System.out.println("🧪 MODO PRUEBA ACTIVO: Escribiendo en tabla '" + testTableName + "'");
+                    int savedToTest = saveCustomersToTestTable(customersToSave, rowsToSync);
+                    System.out.println("✅ " + savedToTest + " clientes guardados en tabla de prueba");
+                } else {
+                    // MODO PRODUCCIÓN: Usar JPA repository
+                    customerRepository.saveAll(customersToSave);
 
-                // ========== SINCRONIZAR CONTACTOS DESPUÉS DEL BATCH SAVE ==========
-                int contactsCreated = 0;
-                for (int i = 0; i < customersToSave.size(); i++) {
-                    Customer customer = customersToSave.get(i);
-                    Map<String, Object> row = rowsToSync.get(i);
-                    try {
-                        contactsCreated += syncCustomerContacts(customer, row);
-                    } catch (Exception e) {
-                        errors.add("Error sincronizando contactos para " + customer.getIdentificationCode() + ": " + e.getMessage());
+                    // ========== SINCRONIZAR CONTACTOS DESPUÉS DEL BATCH SAVE ==========
+                    int contactsCreated = 0;
+                    for (int i = 0; i < customersToSave.size(); i++) {
+                        Customer customer = customersToSave.get(i);
+                        Map<String, Object> row = rowsToSync.get(i);
+                        try {
+                            contactsCreated += syncCustomerContacts(customer, row);
+                        } catch (Exception e) {
+                            errors.add("Error sincronizando contactos para " + customer.getIdentificationCode() + ": " + e.getMessage());
+                        }
                     }
+                    System.out.println("📞 Contactos creados: " + contactsCreated);
                 }
-                System.out.println("📞 Contactos creados: " + contactsCreated);
             }
 
             return new SyncResult(customersCreated, customersUpdated, errors);
@@ -671,6 +710,77 @@ public class CustomerSyncService {
             return 1;
         }
         return 0;
+    }
+
+    /**
+     * Guarda clientes en la tabla de prueba usando JDBC batch insert.
+     * Esta tabla debe tener la misma estructura que la tabla clientes.
+     */
+    private int saveCustomersToTestTable(List<Customer> customers, List<Map<String, Object>> rows) {
+        if (customers.isEmpty()) return 0;
+
+        // Primero, limpiar la tabla de prueba (opcional, para pruebas repetidas)
+        jdbcTemplate.execute("TRUNCATE TABLE " + testTableName);
+        System.out.println("🗑️ Tabla " + testTableName + " limpiada");
+
+        // Usar los mismos nombres de columna que la tabla clientes (nombres en español)
+        String insertSql = "INSERT INTO " + testTableName + " (" +
+            "id_inquilino, nombre_inquilino, id_cartera, nombre_cartera, id_subcartera, nombre_subcartera, " +
+            "id_cliente, codigo_identificacion, documento, " +
+            "nombre_completo, primer_nombre, segundo_nombre, primer_apellido, segundo_apellido, " +
+            "fecha_nacimiento, edad, estado_civil, " +
+            "ocupacion, tipo_cliente, " +
+            "direccion, distrito, provincia, departamento, " +
+            "referencia_personal, numero_cuenta_linea_prestamo, " +
+            "dias_mora, monto_mora, monto_capital, " +
+            "created_at, updated_at" +
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())";
+
+        List<Object[]> batchArgs = new ArrayList<>();
+
+        for (Customer customer : customers) {
+            Object[] args = new Object[] {
+                customer.getTenantId(),
+                customer.getTenantName(),
+                customer.getPortfolioId(),
+                customer.getPortfolioName(),
+                customer.getSubPortfolioId(),
+                customer.getSubPortfolioName(),
+                customer.getCustomerId(),
+                customer.getIdentificationCode(),
+                customer.getDocument(),
+                customer.getFullName(),
+                customer.getFirstName(),
+                customer.getSecondName(),
+                customer.getFirstLastName(),
+                customer.getSecondLastName(),
+                customer.getBirthDate(),
+                customer.getAge(),
+                customer.getMaritalStatus(),
+                customer.getOccupation(),
+                customer.getCustomerType(),
+                customer.getAddress(),
+                customer.getDistrict(),
+                customer.getProvince(),
+                customer.getDepartment(),
+                customer.getPersonalReference(),
+                customer.getAccountNumber(),
+                customer.getOverdueDays(),
+                customer.getOverdueAmount(),
+                customer.getPrincipalAmount()
+            };
+            batchArgs.add(args);
+        }
+
+        // Ejecutar batch insert
+        int[] results = jdbcTemplate.batchUpdate(insertSql, batchArgs);
+        int totalInserted = 0;
+        for (int r : results) {
+            if (r > 0) totalInserted += r;
+            else if (r == -2) totalInserted++; // SUCCESS_NO_INFO
+        }
+
+        return totalInserted;
     }
 
     /**

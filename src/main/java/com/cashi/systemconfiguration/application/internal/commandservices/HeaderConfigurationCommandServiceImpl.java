@@ -43,6 +43,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     // Tamaño del batch para operaciones de carga de identificadores (previene problemas de memoria)
     private static final int BATCH_SIZE_FOR_IDENTIFIER_LOAD = 10000;
 
+    // Tamaño del batch para operaciones de UPDATE en carga diaria (optimización de rendimiento)
+    private static final int BATCH_SIZE_FOR_DAILY_UPDATE = 500;
+
     public HeaderConfigurationCommandServiceImpl(
             HeaderConfigurationRepository headerConfigurationRepository,
             SubPortfolioRepository subPortfolioRepository,
@@ -2112,70 +2115,120 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             }
         }
 
-        for (int i = 0; i < data.size(); i++) {
-            Map<String, Object> row = data.get(i);
-            try {
-                // Extraer el valor del campo de enlace del row
-                String linkValue = extractLinkValue(row, linkField, headersActualizacion);
-                if (linkValue == null || linkValue.trim().isEmpty()) {
-                    failedInInicial++;
-                    errors.add("Fila " + (i + 1) + ": Campo de enlace vacío");
-                    continue;
+        // ========== BATCH UPDATE OPTIMIZADO ==========
+        // Paso 1: Determinar todas las columnas que se pueden actualizar en INICIAL
+        Set<String> columnsToUpdateSet = new LinkedHashSet<>();
+        for (Map<String, Object> row : data) {
+            for (String key : row.keySet()) {
+                String columnKey = key.toLowerCase().trim();
+                HeaderConfiguration inicialHeader = inicialHeaderMap.get(columnKey);
+                if (inicialHeader == null) {
+                    inicialHeader = inicialHeaderMap.get(sanitizeColumnName(columnKey).toLowerCase());
                 }
+                if (inicialHeader != null) {
+                    String columnName = sanitizeColumnName(inicialHeader.getHeaderName());
+                    if (!columnName.equalsIgnoreCase(sanitizedLinkField)) {
+                        columnsToUpdateSet.add(columnName);
+                    }
+                }
+            }
+        }
 
-                // Construir UPDATE para tabla INICIAL
-                StringBuilder setClause = new StringBuilder();
-                List<Object> values = new ArrayList<>();
-                int columnsToUpdate = 0;
+        if (columnsToUpdateSet.isEmpty()) {
+            logger.warn("⚠️ No hay columnas comunes entre los datos y la tabla INICIAL");
+            result.put("inicial", Map.of("updatedRows", 0, "notFoundRows", data.size(), "failedRows", 0));
+        } else {
+            // Paso 2: Construir SQL template para batch update
+            List<String> columnsList = new ArrayList<>(columnsToUpdateSet);
+            StringBuilder setClause = new StringBuilder();
+            for (int i = 0; i < columnsList.size(); i++) {
+                if (i > 0) setClause.append(", ");
+                // Usar COALESCE para mantener valor existente si el nuevo es null
+                setClause.append(columnsList.get(i)).append(" = COALESCE(?, ").append(columnsList.get(i)).append(")");
+            }
 
-                for (Map.Entry<String, Object> entry : row.entrySet()) {
-                    String columnKey = entry.getKey().toLowerCase().trim();
-                    Object value = entry.getValue();
+            String updateSql = "UPDATE " + tableInicial + " SET " + setClause +
+                              " WHERE " + sanitizedLinkField + " = ?";
 
-                    // Buscar si esta columna existe en tabla INICIAL
-                    HeaderConfiguration inicialHeader = inicialHeaderMap.get(columnKey);
-                    if (inicialHeader == null) {
-                        // Intentar buscar por nombre sanitizado
-                        inicialHeader = inicialHeaderMap.get(sanitizeColumnName(columnKey).toLowerCase());
+            logger.info("📝 SQL de actualización batch: {} columnas, procesando en batches de {}",
+                       columnsList.size(), BATCH_SIZE_FOR_DAILY_UPDATE);
+
+            // Paso 3: Preparar datos para batch update
+            List<Object[]> batchArgs = new ArrayList<>();
+            List<Integer> rowIndices = new ArrayList<>(); // Para tracking de errores
+
+            for (int i = 0; i < data.size(); i++) {
+                Map<String, Object> row = data.get(i);
+                try {
+                    String linkValue = extractLinkValue(row, linkField, headersActualizacion);
+                    if (linkValue == null || linkValue.trim().isEmpty()) {
+                        failedInInicial++;
+                        errors.add("Fila " + (i + 1) + ": Campo de enlace vacío");
+                        continue;
                     }
 
-                    if (inicialHeader != null) {
-                        String columnName = sanitizeColumnName(inicialHeader.getHeaderName());
-                        // No actualizar el campo de enlace
-                        if (!columnName.equalsIgnoreCase(sanitizedLinkField)) {
-                            if (columnsToUpdate > 0) setClause.append(", ");
-                            setClause.append(columnName).append(" = ?");
-                            values.add(convertValueForUpdate(value, inicialHeader));
-                            columnsToUpdate++;
+                    // Preparar valores para cada columna
+                    Object[] args = new Object[columnsList.size() + 1];
+                    for (int j = 0; j < columnsList.size(); j++) {
+                        String colName = columnsList.get(j);
+                        Object value = findValueForColumn(row, colName, inicialHeaderMap);
+                        // Buscar el header correspondiente para conversión de tipo
+                        HeaderConfiguration header = findHeaderByColumnName(inicialHeaderMap, colName);
+                        args[j] = (value != null && header != null) ? convertValueForUpdate(value, header) : null;
+                    }
+                    args[columnsList.size()] = linkValue; // WHERE clause
+
+                    batchArgs.add(args);
+                    rowIndices.add(i);
+
+                } catch (Exception e) {
+                    failedInInicial++;
+                    errors.add("Fila " + (i + 1) + " (preparación): " + e.getMessage());
+                }
+            }
+
+            // Paso 4: Ejecutar batch updates
+            logger.info("🚀 Ejecutando {} actualizaciones en batches de {}...",
+                       batchArgs.size(), BATCH_SIZE_FOR_DAILY_UPDATE);
+
+            int totalBatches = (int) Math.ceil((double) batchArgs.size() / BATCH_SIZE_FOR_DAILY_UPDATE);
+            int processedBatches = 0;
+
+            for (int batchStart = 0; batchStart < batchArgs.size(); batchStart += BATCH_SIZE_FOR_DAILY_UPDATE) {
+                int batchEnd = Math.min(batchStart + BATCH_SIZE_FOR_DAILY_UPDATE, batchArgs.size());
+                List<Object[]> currentBatch = batchArgs.subList(batchStart, batchEnd);
+
+                try {
+                    int[] results = jdbcTemplate.batchUpdate(updateSql, currentBatch);
+
+                    // Contar resultados
+                    for (int k = 0; k < results.length; k++) {
+                        if (results[k] > 0) {
+                            updatedInInicial += results[k];
+                        } else if (results[k] == 0) {
+                            notFoundInInicial++;
                         }
                     }
+
+                    processedBatches++;
+                    if (processedBatches % 10 == 0 || processedBatches == totalBatches) {
+                        logger.info("📊 Progreso: {}/{} batches procesados ({} registros)",
+                                   processedBatches, totalBatches, batchEnd);
+                    }
+
+                } catch (Exception e) {
+                    logger.error("❌ Error en batch {}-{}: {}", batchStart, batchEnd, e.getMessage());
+                    // En caso de error de batch, marcar todas las filas como fallidas
+                    failedInInicial += currentBatch.size();
+                    errors.add("Error en batch " + (processedBatches + 1) + ": " + e.getMessage());
                 }
-
-                if (columnsToUpdate == 0) {
-                    logger.debug("Fila {}: No hay columnas para actualizar en INICIAL", i + 1);
-                    notFoundInInicial++;
-                    continue;
-                }
-
-                // Ejecutar UPDATE en tabla INICIAL usando el campo de enlace sanitizado
-                String sql = "UPDATE " + tableInicial + " SET " + setClause +
-                            " WHERE " + sanitizedLinkField + " = ?";
-                values.add(linkValue);
-
-                int rowsAffected = jdbcTemplate.update(sql, values.toArray());
-
-                if (rowsAffected > 0) {
-                    updatedInInicial += rowsAffected;
-                } else {
-                    notFoundInInicial++;
-                    logger.debug("⚠️ No se encontró registro en INICIAL con {}={}", sanitizedLinkField, linkValue);
-                }
-
-            } catch (Exception e) {
-                failedInInicial++;
-                errors.add("Fila " + (i + 1) + " (INICIAL): " + e.getMessage());
-                logger.error("Error actualizando fila {} en INICIAL: {}", i + 1, e.getMessage());
             }
+
+            result.put("inicial", Map.of(
+                    "updatedRows", updatedInInicial,
+                    "notFoundRows", notFoundInInicial,
+                    "failedRows", failedInInicial
+            ));
         }
 
         logger.info("✅ Fase 2 completada: {} actualizados, {} no encontrados, {} fallidos en tabla INICIAL",
@@ -2258,6 +2311,55 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             }
         }
 
+        return null;
+    }
+
+    /**
+     * Busca el valor de una columna en una fila de datos.
+     * Intenta múltiples variaciones del nombre de columna (original, sanitizado, case-insensitive).
+     */
+    private Object findValueForColumn(Map<String, Object> row, String columnName,
+                                       Map<String, HeaderConfiguration> headerMap) {
+        // Buscar directamente
+        for (Map.Entry<String, Object> entry : row.entrySet()) {
+            String key = entry.getKey();
+            String sanitizedKey = sanitizeColumnName(key);
+
+            if (sanitizedKey.equalsIgnoreCase(columnName)) {
+                return entry.getValue();
+            }
+        }
+
+        // Buscar por sourceField en las cabeceras
+        for (Map.Entry<String, HeaderConfiguration> headerEntry : headerMap.entrySet()) {
+            HeaderConfiguration header = headerEntry.getValue();
+            if (sanitizeColumnName(header.getHeaderName()).equalsIgnoreCase(columnName)) {
+                String sourceField = header.getSourceField();
+                if (sourceField != null && !sourceField.trim().isEmpty()) {
+                    // Buscar el valor usando sourceField
+                    for (Map.Entry<String, Object> entry : row.entrySet()) {
+                        if (entry.getKey().equalsIgnoreCase(sourceField) ||
+                            entry.getKey().equalsIgnoreCase(header.getHeaderName())) {
+                            return entry.getValue();
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Busca la configuración de cabecera por nombre de columna sanitizado.
+     */
+    private HeaderConfiguration findHeaderByColumnName(Map<String, HeaderConfiguration> headerMap, String columnName) {
+        for (Map.Entry<String, HeaderConfiguration> entry : headerMap.entrySet()) {
+            HeaderConfiguration header = entry.getValue();
+            if (sanitizeColumnName(header.getHeaderName()).equalsIgnoreCase(columnName)) {
+                return header;
+            }
+        }
         return null;
     }
 }
