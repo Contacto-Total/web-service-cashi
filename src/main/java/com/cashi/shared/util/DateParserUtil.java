@@ -32,7 +32,13 @@ public final class DateParserUtil {
         "yyyy-M-d",          // 2026-1-5, 2026-12-15
         "yyyy/M/d",          // 2026/1/5, 2026/12/15
 
-        // Formatos con hora
+        // Formatos con hora (sin segundos) - comunes en Excel
+        "d/M/yyyy H:m",      // 5/1/2026 14:30, 15/01/2026 00:00
+        "d-M-yyyy H:m",      // 5-1-2026 14:30
+        "yyyy-M-d H:m",      // 2026-1-5 14:30
+        "yyyy-M-d'T'H:m",    // 2026-1-5T14:30
+
+        // Formatos con hora (con segundos)
         "d/M/yyyy H:m:s",    // 5/1/2026 14:30:00
         "d-M-yyyy H:m:s",    // 5-1-2026 14:30:00
         "yyyy-M-d H:m:s",    // 2026-1-5 14:30:00
@@ -42,7 +48,9 @@ public final class DateParserUtil {
         "dd/MM/yyyy",
         "dd-MM-yyyy",
         "yyyy-MM-dd",
+        "dd/MM/yyyy HH:mm",      // 15/01/2026 00:00
         "dd/MM/yyyy HH:mm:ss",
+        "yyyy-MM-dd HH:mm",
         "yyyy-MM-dd HH:mm:ss",
         "yyyy-MM-dd'T'HH:mm:ss"
     );
