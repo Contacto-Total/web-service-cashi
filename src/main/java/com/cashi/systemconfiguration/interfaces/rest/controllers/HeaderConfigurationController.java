@@ -432,6 +432,34 @@ public class HeaderConfigurationController {
         }
     }
 
+    @Operation(summary = "Importar datos de carga diaria",
+               description = "Importa datos de carga diaria realizando: " +
+                           "1) INSERT/UPDATE en tabla de actualización (histórico), " +
+                           "2) UPDATE en tabla inicial (maestra), " +
+                           "3) Sincronización a tabla clientes SOLO desde la tabla inicial.")
+    @PostMapping("/subportfolio/{subPortfolioId}/import-daily")
+    public ResponseEntity<?> importDailyData(
+            @PathVariable Integer subPortfolioId,
+            @RequestBody ImportDataResource resource) {
+        try {
+            System.out.println("📅 Importando carga diaria: subPortfolioId=" + subPortfolioId
+                    + ", rows=" + resource.data().size());
+
+            var result = commandService.importDailyData(subPortfolioId, resource.data());
+
+            System.out.println("✅ Carga diaria completada: " + result);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            System.err.println("❌ Error de validación: " + e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        } catch (Exception e) {
+            System.err.println("❌ Error al importar carga diaria: " + e.getMessage());
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Error al importar carga diaria: " + e.getMessage()));
+        }
+    }
+
     @Operation(summary = "Actualizar datos complementarios en la tabla dinámica",
                description = "Actualiza columnas específicas de registros existentes basándose en un campo de enlace. " +
                            "Usado para archivos complementarios como PKM y Facilidades de Pago.")

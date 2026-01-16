@@ -67,6 +67,19 @@ public interface HeaderConfigurationCommandService {
     java.util.Map<String, Object> updateComplementaryDataInTable(Integer subPortfolioId, LoadType loadType,
                                                                   List<java.util.Map<String, Object>> data, String linkField);
 
+    /**
+     * Importa datos de carga diaria.
+     * Esta operación:
+     * 1. Inserta/Actualiza datos en la tabla ACTUALIZACION (histórico diario)
+     * 2. Actualiza los registros correspondientes en la tabla INICIAL (tabla maestra)
+     * 3. Sincroniza los clientes SOLO desde la tabla INICIAL
+     *
+     * @param subPortfolioId ID de la subcartera
+     * @param data Lista de registros a importar
+     * @return Mapa con estadísticas de la operación
+     */
+    java.util.Map<String, Object> importDailyData(Integer subPortfolioId, List<java.util.Map<String, Object>> data);
+
     record HeaderConfigurationData(
         Integer fieldDefinitionId,
         String headerName,

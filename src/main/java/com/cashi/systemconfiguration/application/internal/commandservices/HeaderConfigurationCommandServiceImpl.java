@@ -755,7 +755,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                    insertedRows, updatedRows, failedRows);
 
         // 🔄 Sincronizar clientes desde la tabla dinámica a la tabla clientes
-        if (insertedRows > 0 || updatedRows > 0) {
+        // SOLO sincronizar si el tipo de carga es INICIAL (la tabla maestra)
+        // Para ACTUALIZACION, la sincronización se maneja en importDailyData() desde INICIAL
+        if ((insertedRows > 0 || updatedRows > 0) && loadType == LoadType.INICIAL) {
             logger.info("🔄 Iniciando sincronización de clientes para SubPortfolio ID: {}, LoadType: {}", subPortfolioId, loadType);
             try {
                 CustomerSyncService.SyncResult syncResult = customerSyncService.syncCustomersFromSubPortfolio(subPortfolioId.longValue(), loadType);
@@ -771,6 +773,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 logger.error("❌ Error en sincronización de clientes: {}", e.getMessage(), e);
                 result.put("syncError", "Error al sincronizar clientes: " + e.getMessage());
             }
+        } else if (loadType == LoadType.ACTUALIZACION) {
+            logger.info("⏭️ Omitiendo sincronización de clientes para ACTUALIZACION (se sincroniza desde INICIAL)");
         }
 
         return result;
@@ -2014,6 +2018,241 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             String fallback = sanitizeColumnName(headers.get(0).getHeaderName());
             logger.warn("No se detectó campo de identificación, usando fallback: {}", fallback);
             return fallback;
+        }
+
+        return null;
+    }
+
+    // ==================== CARGA DIARIA ====================
+
+    /**
+     * Importa datos de carga diaria.
+     * Esta operación:
+     * 1. Inserta/Actualiza datos en la tabla ACTUALIZACION (histórico diario)
+     * 2. Actualiza los registros correspondientes en la tabla INICIAL (tabla maestra)
+     * 3. Sincroniza los clientes SOLO desde la tabla INICIAL
+     *
+     * @param subPortfolioId ID de la subcartera
+     * @param data Lista de registros a importar
+     * @return Mapa con estadísticas de la operación
+     */
+    @Override
+    @Transactional
+    public Map<String, Object> importDailyData(Integer subPortfolioId, List<Map<String, Object>> data) {
+        logger.info("📅 Iniciando carga diaria para SubPortfolio ID: {}, registros: {}", subPortfolioId, data.size());
+
+        // Validar que la subcartera existe
+        SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
+                .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada con ID: " + subPortfolioId));
+
+        String tableActualizacion = buildTableName(subPortfolio, LoadType.ACTUALIZACION);
+        String tableInicial = buildTableName(subPortfolio, LoadType.INICIAL);
+
+        // Verificar que ambas tablas existen
+        if (!dynamicTableExists(tableActualizacion)) {
+            throw new IllegalArgumentException("La tabla de actualización no existe: " + tableActualizacion + ". Debe configurar las cabeceras de actualización primero.");
+        }
+        if (!dynamicTableExists(tableInicial)) {
+            throw new IllegalArgumentException("La tabla inicial no existe: " + tableInicial + ". Debe realizar primero una carga inicial de mes.");
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        List<String> errors = new ArrayList<>();
+
+        // ========== FASE 1: Importar a tabla ACTUALIZACION ==========
+        logger.info("📊 Fase 1: Importando a tabla ACTUALIZACION ({})", tableActualizacion);
+        Map<String, Object> actualizacionResult;
+        try {
+            actualizacionResult = importDataToTable(subPortfolioId, LoadType.ACTUALIZACION, data);
+            result.put("actualizacion", actualizacionResult);
+            logger.info("✅ Fase 1 completada: {} insertados, {} actualizados en tabla ACTUALIZACION",
+                    actualizacionResult.get("insertedRows"), actualizacionResult.get("updatedRows"));
+        } catch (Exception e) {
+            logger.error("❌ Error en Fase 1 (ACTUALIZACION): {}", e.getMessage(), e);
+            errors.add("Error importando a tabla de actualización: " + e.getMessage());
+            result.put("actualizacionError", e.getMessage());
+            actualizacionResult = Map.of("insertedRows", 0, "updatedRows", 0);
+        }
+
+        // ========== FASE 2: Actualizar tabla INICIAL ==========
+        logger.info("📊 Fase 2: Actualizando tabla INICIAL ({})", tableInicial);
+
+        // Obtener cabeceras de INICIAL para el mapeo
+        List<HeaderConfiguration> headersInicial = headerConfigurationRepository.findBySubPortfolioAndLoadType(subPortfolio, LoadType.INICIAL);
+        if (headersInicial.isEmpty()) {
+            throw new IllegalArgumentException("No hay cabeceras configuradas para carga inicial.");
+        }
+
+        // Detectar el campo de enlace (identity_code, cod_cli, etc.)
+        String linkField = detectLinkField(headersInicial);
+        if (linkField == null) {
+            throw new IllegalArgumentException("No se pudo detectar un campo de identificación para vincular los datos.");
+        }
+
+        logger.info("🔗 Campo de enlace detectado: {}", linkField);
+
+        // Actualizar registros en tabla INICIAL usando el campo de enlace
+        int updatedInInicial = 0;
+        int notFoundInInicial = 0;
+        int failedInInicial = 0;
+
+        // Obtener cabeceras de ACTUALIZACION para mapear los datos de entrada
+        List<HeaderConfiguration> headersActualizacion = headerConfigurationRepository.findBySubPortfolioAndLoadType(subPortfolio, LoadType.ACTUALIZACION);
+
+        // Crear mapa de nombre de columna sanitizado a HeaderConfiguration para INICIAL
+        Map<String, HeaderConfiguration> inicialHeaderMap = new HashMap<>();
+        for (HeaderConfiguration h : headersInicial) {
+            inicialHeaderMap.put(sanitizeColumnName(h.getHeaderName()).toLowerCase(), h);
+            // También mapear por sourceField si existe
+            if (h.getSourceField() != null && !h.getSourceField().trim().isEmpty()) {
+                inicialHeaderMap.put(h.getSourceField().toLowerCase().trim(), h);
+            }
+        }
+
+        for (int i = 0; i < data.size(); i++) {
+            Map<String, Object> row = data.get(i);
+            try {
+                // Extraer el valor del campo de enlace del row
+                String linkValue = extractLinkValue(row, linkField, headersActualizacion);
+                if (linkValue == null || linkValue.trim().isEmpty()) {
+                    failedInInicial++;
+                    errors.add("Fila " + (i + 1) + ": Campo de enlace vacío");
+                    continue;
+                }
+
+                // Construir UPDATE para tabla INICIAL
+                StringBuilder setClause = new StringBuilder();
+                List<Object> values = new ArrayList<>();
+                int columnsToUpdate = 0;
+
+                for (Map.Entry<String, Object> entry : row.entrySet()) {
+                    String columnKey = entry.getKey().toLowerCase().trim();
+                    Object value = entry.getValue();
+
+                    // Buscar si esta columna existe en tabla INICIAL
+                    HeaderConfiguration inicialHeader = inicialHeaderMap.get(columnKey);
+                    if (inicialHeader == null) {
+                        // Intentar buscar por nombre sanitizado
+                        inicialHeader = inicialHeaderMap.get(sanitizeColumnName(columnKey).toLowerCase());
+                    }
+
+                    if (inicialHeader != null) {
+                        String columnName = sanitizeColumnName(inicialHeader.getHeaderName());
+                        // No actualizar el campo de enlace
+                        if (!columnName.equalsIgnoreCase(linkField)) {
+                            if (columnsToUpdate > 0) setClause.append(", ");
+                            setClause.append(columnName).append(" = ?");
+                            values.add(convertValueForUpdate(value, inicialHeader));
+                            columnsToUpdate++;
+                        }
+                    }
+                }
+
+                if (columnsToUpdate == 0) {
+                    logger.debug("Fila {}: No hay columnas para actualizar en INICIAL", i + 1);
+                    notFoundInInicial++;
+                    continue;
+                }
+
+                // Ejecutar UPDATE en tabla INICIAL
+                String sql = "UPDATE " + tableInicial + " SET " + setClause +
+                            " WHERE " + linkField + " = ?";
+                values.add(linkValue);
+
+                int rowsAffected = jdbcTemplate.update(sql, values.toArray());
+
+                if (rowsAffected > 0) {
+                    updatedInInicial += rowsAffected;
+                } else {
+                    notFoundInInicial++;
+                    logger.debug("⚠️ No se encontró registro en INICIAL con {}={}", linkField, linkValue);
+                }
+
+            } catch (Exception e) {
+                failedInInicial++;
+                errors.add("Fila " + (i + 1) + " (INICIAL): " + e.getMessage());
+                logger.error("Error actualizando fila {} en INICIAL: {}", i + 1, e.getMessage());
+            }
+        }
+
+        logger.info("✅ Fase 2 completada: {} actualizados, {} no encontrados, {} fallidos en tabla INICIAL",
+                   updatedInInicial, notFoundInInicial, failedInInicial);
+
+        result.put("inicial", Map.of(
+                "updatedRows", updatedInInicial,
+                "notFoundRows", notFoundInInicial,
+                "failedRows", failedInInicial
+        ));
+
+        // ========== FASE 3: Sincronizar clientes SOLO desde INICIAL ==========
+        logger.info("📊 Fase 3: Sincronizando clientes desde tabla INICIAL");
+        if (updatedInInicial > 0 || ((int) actualizacionResult.getOrDefault("insertedRows", 0)) > 0) {
+            try {
+                // Sincronizar SOLO desde tabla INICIAL
+                CustomerSyncService.SyncResult syncResult = customerSyncService.syncCustomersFromSubPortfolio(
+                        subPortfolioId.longValue(),
+                        LoadType.INICIAL  // Siempre sincronizar desde INICIAL
+                );
+                logger.info("✅ Sincronización completada: {} clientes creados, {} actualizados",
+                        syncResult.getCustomersCreated(), syncResult.getCustomersUpdated());
+
+                result.put("syncCustomersCreated", syncResult.getCustomersCreated());
+                result.put("syncCustomersUpdated", syncResult.getCustomersUpdated());
+                if (syncResult.hasErrors()) {
+                    result.put("syncErrors", syncResult.getErrors());
+                }
+            } catch (Exception e) {
+                logger.error("❌ Error en sincronización de clientes: {}", e.getMessage(), e);
+                result.put("syncError", "Error al sincronizar clientes: " + e.getMessage());
+            }
+        }
+
+        // Preparar resumen
+        result.put("totalRows", data.size());
+        result.put("tableActualizacion", tableActualizacion);
+        result.put("tableInicial", tableInicial);
+
+        if (!errors.isEmpty()) {
+            result.put("errors", errors.size() > 20 ? errors.subList(0, 20) : errors);
+            result.put("totalErrors", errors.size());
+        }
+
+        logger.info("📅 Carga diaria completada para SubPortfolio ID: {}", subPortfolioId);
+        return result;
+    }
+
+    /**
+     * Extrae el valor del campo de enlace de una fila
+     */
+    private String extractLinkValue(Map<String, Object> row, String linkField, List<HeaderConfiguration> headers) {
+        // Buscar directamente en el row
+        for (Map.Entry<String, Object> entry : row.entrySet()) {
+            String key = entry.getKey();
+            if (key.equalsIgnoreCase(linkField) ||
+                sanitizeColumnName(key).equalsIgnoreCase(linkField)) {
+                Object value = entry.getValue();
+                return value != null ? value.toString().trim() : null;
+            }
+        }
+
+        // Buscar por sourceField en las cabeceras
+        for (HeaderConfiguration header : headers) {
+            if (sanitizeColumnName(header.getHeaderName()).equalsIgnoreCase(linkField)) {
+                String sourceField = header.getSourceField();
+                if (sourceField != null && !sourceField.trim().isEmpty()) {
+                    Object value = row.get(sourceField);
+                    if (value == null) {
+                        // Buscar case-insensitive
+                        for (Map.Entry<String, Object> entry : row.entrySet()) {
+                            if (entry.getKey().equalsIgnoreCase(sourceField)) {
+                                value = entry.getValue();
+                                break;
+                            }
+                        }
+                    }
+                    return value != null ? value.toString().trim() : null;
+                }
+            }
         }
 
         return null;
