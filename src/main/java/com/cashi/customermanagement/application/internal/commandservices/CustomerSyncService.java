@@ -148,22 +148,63 @@ public class CustomerSyncService {
                 }
             }
 
-            // ========== BATCH SAVE: Guardar todos los clientes de una vez ==========
+            // ========== BATCH SAVE: Guardar todos los clientes ==========
             if (!customersToSave.isEmpty()) {
-                customerRepository.saveAll(customersToSave);
+                if (testMode) {
+                    // MODO PRUEBA: Escribir en tablas de prueba usando JDBC con UPSERT
+                    System.out.println("🧪 MODO PRUEBA ACTIVO: Escribiendo en tabla '" + testTableName + "'");
+                    Map<String, Long> savedIdsMap = saveCustomersToTestTableWithIds(customersToSave, rowsToSync);
+                    System.out.println("✅ " + savedIdsMap.size() + " clientes guardados en tabla de prueba");
 
-                // ========== SINCRONIZAR CONTACTOS DESPUÉS DEL BATCH SAVE ==========
-                int contactsCreated = 0;
-                for (int i = 0; i < customersToSave.size(); i++) {
-                    Customer customer = customersToSave.get(i);
-                    Map<String, Object> row = rowsToSync.get(i);
-                    try {
-                        contactsCreated += syncCustomerContacts(customer, row);
-                    } catch (Exception e) {
-                        errors.add("Error sincronizando contactos para " + customer.getIdentificationCode() + ": " + e.getMessage());
+                    // Sincronizar contactos a tabla de prueba
+                    int contactsCreated = 0;
+                    for (int i = 0; i < customersToSave.size(); i++) {
+                        Customer customer = customersToSave.get(i);
+                        Map<String, Object> row = rowsToSync.get(i);
+
+                        String lookupKey = customer.getIdentificationCode();
+                        if (lookupKey == null || lookupKey.isEmpty()) {
+                            lookupKey = customer.getDocument();
+                        }
+
+                        Long testClientId = savedIdsMap.get(lookupKey);
+                        if (testClientId != null) {
+                            try {
+                                contactsCreated += syncCustomerContactsToTestTable(testClientId, row);
+                            } catch (Exception e) {
+                                errors.add("Error sincronizando contactos para " + lookupKey + ": " + e.getMessage());
+                            }
+                        }
                     }
+                    System.out.println("📞 " + contactsCreated + " contactos guardados en tabla " + testContactTableName);
+                } else {
+                    // MODO PRODUCCIÓN: Usar UPSERT nativo para evitar duplicados
+                    System.out.println("🏭 MODO PRODUCCIÓN: Escribiendo en tabla 'clientes' con UPSERT");
+                    Map<String, Long> savedIdsMap = saveCustomersToProductionTableWithUpsert(customersToSave);
+                    System.out.println("✅ " + savedIdsMap.size() + " clientes procesados en tabla clientes");
+
+                    // Sincronizar contactos con UPSERT
+                    int contactsCreated = 0;
+                    for (int i = 0; i < customersToSave.size(); i++) {
+                        Customer customer = customersToSave.get(i);
+                        Map<String, Object> row = rowsToSync.get(i);
+
+                        String lookupKey = customer.getIdentificationCode();
+                        if (lookupKey == null || lookupKey.isEmpty()) {
+                            lookupKey = customer.getDocument();
+                        }
+
+                        Long clientId = savedIdsMap.get(lookupKey);
+                        if (clientId != null) {
+                            try {
+                                contactsCreated += syncCustomerContactsWithUpsert(clientId, row);
+                            } catch (Exception e) {
+                                errors.add("Error sincronizando contactos para " + lookupKey + ": " + e.getMessage());
+                            }
+                        }
+                    }
+                    System.out.println("📞 " + contactsCreated + " contactos sincronizados en tabla metodos_contacto");
                 }
-                System.out.println("📞 Contactos creados: " + contactsCreated);
             }
 
             return new SyncResult(customersCreated, customersUpdated, errors);
@@ -305,21 +346,36 @@ public class CustomerSyncService {
                     }
                     System.out.println("📞 " + contactsCreated + " contactos guardados en tabla " + testContactTableName);
                 } else {
-                    // MODO PRODUCCIÓN: Usar JPA repository
-                    customerRepository.saveAll(customersToSave);
+                    // MODO PRODUCCIÓN: Usar UPSERT nativo para evitar duplicados
+                    System.out.println("🏭 MODO PRODUCCIÓN: Escribiendo en tabla 'clientes' con UPSERT");
+                    Map<String, Long> savedIdsMap = saveCustomersToProductionTableWithUpsert(customersToSave);
+                    System.out.println("✅ " + savedIdsMap.size() + " clientes procesados en tabla clientes");
 
-                    // ========== SINCRONIZAR CONTACTOS DESPUÉS DEL BATCH SAVE ==========
+                    // ========== SINCRONIZAR CONTACTOS DESPUÉS DEL UPSERT ==========
                     int contactsCreated = 0;
                     for (int i = 0; i < customersToSave.size(); i++) {
                         Customer customer = customersToSave.get(i);
                         Map<String, Object> row = rowsToSync.get(i);
-                        try {
-                            contactsCreated += syncCustomerContacts(customer, row);
-                        } catch (Exception e) {
-                            errors.add("Error sincronizando contactos para " + customer.getIdentificationCode() + ": " + e.getMessage());
+
+                        // Usar codigo_identificacion o documento como clave
+                        String lookupKey = customer.getIdentificationCode();
+                        if (lookupKey == null || lookupKey.isEmpty()) {
+                            lookupKey = customer.getDocument();
+                        }
+
+                        // Obtener el ID del cliente en la tabla de producción
+                        Long clientId = savedIdsMap.get(lookupKey);
+                        if (clientId != null) {
+                            try {
+                                contactsCreated += syncCustomerContactsWithUpsert(clientId, row);
+                            } catch (Exception e) {
+                                errors.add("Error sincronizando contactos para " + lookupKey + ": " + e.getMessage());
+                            }
+                        } else {
+                            System.out.println("⚠️ No se encontró ID para cliente con clave: " + lookupKey);
                         }
                     }
-                    System.out.println("📞 Contactos creados: " + contactsCreated);
+                    System.out.println("📞 " + contactsCreated + " contactos sincronizados en tabla metodos_contacto");
                 }
             }
 
@@ -882,6 +938,180 @@ public class CustomerSyncService {
 
         System.out.println("🔍 IDs recuperados: " + resultMap.size() + " claves mapeadas");
         return resultMap;
+    }
+
+    /**
+     * Guarda clientes en la tabla de producción 'clientes' usando JDBC UPSERT (INSERT ... ON DUPLICATE KEY UPDATE).
+     * Retorna un Map de codigo_identificacion -> id para poder asociar los contactos.
+     */
+    private Map<String, Long> saveCustomersToProductionTableWithUpsert(List<Customer> customers) {
+        Map<String, Long> resultMap = new HashMap<>();
+        if (customers.isEmpty()) return resultMap;
+
+        // UPSERT: INSERT ... ON DUPLICATE KEY UPDATE
+        // Asume que 'codigo_identificacion' es UNIQUE KEY en tabla 'clientes'
+        String upsertSql = "INSERT INTO clientes (" +
+            "id_inquilino, nombre_inquilino, id_cartera, nombre_cartera, id_subcartera, nombre_subcartera, " +
+            "id_cliente, codigo_identificacion, documento, " +
+            "nombre_completo, primer_nombre, segundo_nombre, primer_apellido, segundo_apellido, " +
+            "fecha_nacimiento, edad, estado_civil, " +
+            "ocupacion, tipo_cliente, " +
+            "direccion, distrito, provincia, departamento, " +
+            "referencia_personal, numero_cuenta_linea_prestamo, " +
+            "dias_mora, monto_mora, monto_capital, " +
+            "fecha_creacion, fecha_actualizacion" +
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) " +
+            "ON DUPLICATE KEY UPDATE " +
+            "id_inquilino = VALUES(id_inquilino), " +
+            "nombre_inquilino = VALUES(nombre_inquilino), " +
+            "id_cartera = VALUES(id_cartera), " +
+            "nombre_cartera = VALUES(nombre_cartera), " +
+            "id_subcartera = VALUES(id_subcartera), " +
+            "nombre_subcartera = VALUES(nombre_subcartera), " +
+            "nombre_completo = VALUES(nombre_completo), " +
+            "primer_nombre = VALUES(primer_nombre), " +
+            "segundo_nombre = VALUES(segundo_nombre), " +
+            "primer_apellido = VALUES(primer_apellido), " +
+            "segundo_apellido = VALUES(segundo_apellido), " +
+            "fecha_nacimiento = VALUES(fecha_nacimiento), " +
+            "edad = VALUES(edad), " +
+            "estado_civil = VALUES(estado_civil), " +
+            "ocupacion = VALUES(ocupacion), " +
+            "tipo_cliente = VALUES(tipo_cliente), " +
+            "direccion = VALUES(direccion), " +
+            "distrito = VALUES(distrito), " +
+            "provincia = VALUES(provincia), " +
+            "departamento = VALUES(departamento), " +
+            "referencia_personal = VALUES(referencia_personal), " +
+            "numero_cuenta_linea_prestamo = VALUES(numero_cuenta_linea_prestamo), " +
+            "dias_mora = VALUES(dias_mora), " +
+            "monto_mora = VALUES(monto_mora), " +
+            "monto_capital = VALUES(monto_capital), " +
+            "fecha_actualizacion = NOW()";
+
+        List<Object[]> batchArgs = new ArrayList<>();
+        List<String> lookupKeys = new ArrayList<>();
+
+        for (Customer customer : customers) {
+            Object[] args = new Object[] {
+                customer.getTenantId(),
+                customer.getTenantName(),
+                customer.getPortfolioId(),
+                customer.getPortfolioName(),
+                customer.getSubPortfolioId(),
+                customer.getSubPortfolioName(),
+                customer.getCustomerId(),
+                customer.getIdentificationCode(),
+                customer.getDocument(),
+                customer.getFullName(),
+                customer.getFirstName(),
+                customer.getSecondName(),
+                customer.getFirstLastName(),
+                customer.getSecondLastName(),
+                customer.getBirthDate(),
+                customer.getAge(),
+                customer.getMaritalStatus(),
+                customer.getOccupation(),
+                customer.getCustomerType(),
+                customer.getAddress(),
+                customer.getDistrict(),
+                customer.getProvince(),
+                customer.getDepartment(),
+                customer.getPersonalReference(),
+                customer.getAccountNumber(),
+                customer.getOverdueDays(),
+                customer.getOverdueAmount(),
+                customer.getPrincipalAmount()
+            };
+            batchArgs.add(args);
+
+            // Usar codigo_identificacion si existe, sino documento
+            String lookupKey = customer.getIdentificationCode();
+            if (lookupKey == null || lookupKey.isEmpty()) {
+                lookupKey = customer.getDocument();
+            }
+            lookupKeys.add(lookupKey);
+        }
+
+        // Ejecutar batch UPSERT
+        System.out.println("🔄 Ejecutando UPSERT de " + batchArgs.size() + " clientes en tabla clientes");
+        int[] results = jdbcTemplate.batchUpdate(upsertSql, batchArgs);
+
+        int totalInserted = 0;
+        int totalUpdated = 0;
+        for (int r : results) {
+            if (r == 1) totalInserted++;
+            else if (r == 2) totalUpdated++;
+            else if (r == -2) totalInserted++;
+        }
+
+        System.out.println("✅ UPSERT completado: " + totalInserted + " insertados, " + totalUpdated + " actualizados");
+
+        // Obtener los IDs de los clientes insertados/actualizados
+        String selectIdsSql = "SELECT id, codigo_identificacion, documento FROM clientes " +
+                              "WHERE codigo_identificacion IN (" +
+                              String.join(",", Collections.nCopies(lookupKeys.size(), "?")) + ")" +
+                              " OR documento IN (" +
+                              String.join(",", Collections.nCopies(lookupKeys.size(), "?")) + ")";
+
+        // Combinar lookupKeys dos veces para la consulta
+        List<String> queryParams = new ArrayList<>(lookupKeys);
+        queryParams.addAll(lookupKeys);
+
+        List<Map<String, Object>> idResults = jdbcTemplate.queryForList(selectIdsSql, queryParams.toArray());
+        for (Map<String, Object> row : idResults) {
+            Long id = ((Number) row.get("id")).longValue();
+            String code = (String) row.get("codigo_identificacion");
+            String documento = (String) row.get("documento");
+
+            // Agregar al mapa por ambas claves si existen
+            if (code != null && !code.isEmpty()) {
+                resultMap.put(code, id);
+            }
+            if (documento != null && !documento.isEmpty()) {
+                resultMap.put(documento, id);
+            }
+        }
+
+        System.out.println("🔍 IDs recuperados de clientes: " + resultMap.size() + " claves mapeadas");
+        return resultMap;
+    }
+
+    /**
+     * Sincroniza los contactos de un cliente a la tabla de producción metodos_contacto con UPSERT
+     */
+    private int syncCustomerContactsWithUpsert(Long clientId, Map<String, Object> row) {
+        int contactsCreated = 0;
+
+        // Primero eliminar contactos existentes para este cliente
+        jdbcTemplate.update("DELETE FROM metodos_contacto WHERE id_cliente = ?", clientId);
+
+        // Insertar nuevos contactos
+        String insertSql = "INSERT INTO metodos_contacto " +
+            "(id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado) " +
+            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE')";
+
+        // Crear contactos desde los datos mapeados
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_principal", "telefono", row);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_secundario", "telefono", row);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_trabajo", "telefono", row);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "email", "email", row);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_referencia_1", "telefono", row);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_referencia_2", "telefono", row);
+
+        return contactsCreated;
+    }
+
+    /**
+     * Inserta un contacto en la tabla de producción si el valor está presente
+     */
+    private int insertContactToProduction(String insertSql, Long clientId, String subtype, String contactType, Map<String, Object> row) {
+        String contactValue = getStringValue(row, subtype);
+        if (contactValue != null && !contactValue.isEmpty()) {
+            jdbcTemplate.update(insertSql, clientId, contactType, subtype, contactValue, subtype);
+            return 1;
+        }
+        return 0;
     }
 
     /**
