@@ -46,6 +46,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     // Tamaño del batch para operaciones de UPDATE en carga diaria (optimización de rendimiento)
     private static final int BATCH_SIZE_FOR_DAILY_UPDATE = 500;
 
+    // Tamaño del batch para operaciones de INSERT masivo
+    private static final int BATCH_SIZE_FOR_INSERT = 1000;
+
     public HeaderConfigurationCommandServiceImpl(
             HeaderConfigurationRepository headerConfigurationRepository,
             SubPortfolioRepository subPortfolioRepository,
@@ -900,7 +903,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
-     * Ejecuta batch UPDATE para filas existentes
+     * Ejecuta batch UPDATE para filas existentes.
+     * Procesa en batches de BATCH_SIZE_FOR_INSERT para mejor rendimiento.
      */
     private int batchUpdateRows(String tableName, List<PreparedRowDataWithId> rows, List<HeaderConfiguration> headers) {
         if (rows.isEmpty()) return 0;
@@ -917,31 +921,39 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         String sql = "UPDATE " + tableName + " SET " + setClause + " WHERE id = ?";
 
-        logger.info("🔄 Ejecutando batch UPDATE de {} filas en tabla {}", rows.size(), tableName);
-
-        int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
-            @Override
-            public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
-                PreparedRowDataWithId rowData = rows.get(i);
-                List<Object> values = rowData.getValues();
-
-                // Setear valores de las columnas
-                for (int j = 0; j < values.size(); j++) {
-                    ps.setObject(j + 1, values.get(j));
-                }
-                // Setear el ID en el WHERE
-                ps.setInt(values.size() + 1, rowData.getExistingId());
-            }
-
-            @Override
-            public int getBatchSize() {
-                return rows.size();
-            }
-        });
-
         int totalUpdated = 0;
-        for (int count : updateCounts) {
-            if (count > 0) totalUpdated += count;
+        int totalBatches = (int) Math.ceil((double) rows.size() / BATCH_SIZE_FOR_INSERT);
+
+        logger.info("🔄 Ejecutando UPDATE de {} filas en {} batches en tabla {}", rows.size(), totalBatches, tableName);
+
+        // Procesar en batches
+        for (int batchStart = 0; batchStart < rows.size(); batchStart += BATCH_SIZE_FOR_INSERT) {
+            int batchEnd = Math.min(batchStart + BATCH_SIZE_FOR_INSERT, rows.size());
+            List<PreparedRowDataWithId> currentBatch = rows.subList(batchStart, batchEnd);
+
+            int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
+                    PreparedRowDataWithId rowData = currentBatch.get(i);
+                    List<Object> values = rowData.getValues();
+
+                    // Setear valores de las columnas
+                    for (int j = 0; j < values.size(); j++) {
+                        ps.setObject(j + 1, values.get(j));
+                    }
+                    // Setear el ID en el WHERE
+                    ps.setInt(values.size() + 1, rowData.getExistingId());
+                }
+
+                @Override
+                public int getBatchSize() {
+                    return currentBatch.size();
+                }
+            });
+
+            for (int count : updateCounts) {
+                if (count > 0) totalUpdated += count;
+            }
         }
 
         return totalUpdated;
@@ -1118,29 +1130,41 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
-     * Consulta qué identity_codes ya existen en la tabla
+     * Consulta qué identity_codes ya existen en la tabla.
+     * Procesa en batches para evitar IN clauses muy grandes (límite ~1000 elementos).
      */
     private Set<String> queryExistingIdentityCodes(String tableName, String identityCodeColumn, List<String> codes) {
         if (codes.isEmpty()) {
             return new HashSet<>();
         }
 
-        // Construir placeholders para IN clause
-        String placeholders = codes.stream().map(c -> "?").collect(java.util.stream.Collectors.joining(", "));
-        String sql = "SELECT " + identityCodeColumn + " FROM " + tableName +
-                     " WHERE " + identityCodeColumn + " IN (" + placeholders + ")";
+        Set<String> existingCodes = new HashSet<>();
+        int batchSize = 500; // Tamaño seguro para IN clause
 
-        try {
-            List<String> existingCodes = jdbcTemplate.queryForList(sql, String.class, codes.toArray());
-            return new HashSet<>(existingCodes);
-        } catch (Exception e) {
-            logger.error("❌ Error al consultar identity_codes existentes: {}", e.getMessage());
-            return new HashSet<>();
+        // Procesar en batches para evitar IN clause muy grande
+        for (int i = 0; i < codes.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, codes.size());
+            List<String> batch = codes.subList(i, end);
+
+            String placeholders = batch.stream().map(c -> "?").collect(java.util.stream.Collectors.joining(", "));
+            String sql = "SELECT " + identityCodeColumn + " FROM " + tableName +
+                         " WHERE " + identityCodeColumn + " IN (" + placeholders + ")";
+
+            try {
+                List<String> batchResult = jdbcTemplate.queryForList(sql, String.class, batch.toArray());
+                existingCodes.addAll(batchResult);
+            } catch (Exception e) {
+                logger.error("❌ Error al consultar identity_codes existentes (batch {}-{}): {}",
+                           i, end, e.getMessage());
+            }
         }
+
+        return existingCodes;
     }
 
     /**
-     * Batch UPDATE para registros existentes
+     * Batch UPDATE para registros existentes.
+     * Procesa en batches de BATCH_SIZE_FOR_INSERT para mejor rendimiento.
      */
     private int batchUpdateRows(String tableName, List<PreparedRowData> rows,
                                 List<HeaderConfiguration> headers, int identityCodeIndex,
@@ -1169,33 +1193,42 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                      " WHERE " + identityCodeColumn + " = ?";
 
         final int idxCodeIndex = identityCodeIndex;
-
-        int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
-            @Override
-            public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
-                PreparedRowData rowData = rows.get(i);
-                List<Object> values = rowData.getValues();
-
-                int paramIndex = 1;
-                // Setear valores de columnas (excepto identity_code)
-                for (int j = 0; j < values.size(); j++) {
-                    if (j == idxCodeIndex) continue;
-                    ps.setObject(paramIndex++, values.get(j));
-                }
-                // Setear identity_code para el WHERE
-                ps.setObject(paramIndex, values.get(idxCodeIndex));
-            }
-
-            @Override
-            public int getBatchSize() {
-                return rows.size();
-            }
-        });
-
         int totalUpdated = 0;
-        for (int count : updateCounts) {
-            if (count > 0) {
-                totalUpdated += count;
+        int totalBatches = (int) Math.ceil((double) rows.size() / BATCH_SIZE_FOR_INSERT);
+
+        logger.info("🔄 Ejecutando UPDATE de {} filas en {} batches", rows.size(), totalBatches);
+
+        // Procesar en batches
+        for (int batchStart = 0; batchStart < rows.size(); batchStart += BATCH_SIZE_FOR_INSERT) {
+            int batchEnd = Math.min(batchStart + BATCH_SIZE_FOR_INSERT, rows.size());
+            List<PreparedRowData> currentBatch = rows.subList(batchStart, batchEnd);
+
+            int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
+                    PreparedRowData rowData = currentBatch.get(i);
+                    List<Object> values = rowData.getValues();
+
+                    int paramIndex = 1;
+                    // Setear valores de columnas (excepto identity_code)
+                    for (int j = 0; j < values.size(); j++) {
+                        if (j == idxCodeIndex) continue;
+                        ps.setObject(paramIndex++, values.get(j));
+                    }
+                    // Setear identity_code para el WHERE
+                    ps.setObject(paramIndex, values.get(idxCodeIndex));
+                }
+
+                @Override
+                public int getBatchSize() {
+                    return currentBatch.size();
+                }
+            });
+
+            for (int count : updateCounts) {
+                if (count > 0) {
+                    totalUpdated += count;
+                }
             }
         }
 
@@ -1230,31 +1263,45 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         String sql = "INSERT INTO " + tableName + " (" + columns + ") VALUES (" + placeholders + ")";
 
-        logger.info("🚀 Ejecutando batch insert de {} filas en tabla {}", rows.size(), tableName);
+        int totalInserted = 0;
+        int totalBatches = (int) Math.ceil((double) rows.size() / BATCH_SIZE_FOR_INSERT);
 
-        // Usar batchUpdate con BatchPreparedStatementSetter para máximo rendimiento
-        int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
-            @Override
-            public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
-                PreparedRowData rowData = rows.get(i);
-                List<Object> values = rowData.getValues();
+        logger.info("🚀 Ejecutando INSERT de {} filas en {} batches de máximo {} registros",
+                   rows.size(), totalBatches, BATCH_SIZE_FOR_INSERT);
 
-                for (int j = 0; j < values.size(); j++) {
-                    ps.setObject(j + 1, values.get(j));
+        // Procesar en batches para evitar problemas de memoria y mejorar rendimiento
+        for (int batchStart = 0; batchStart < rows.size(); batchStart += BATCH_SIZE_FOR_INSERT) {
+            int batchEnd = Math.min(batchStart + BATCH_SIZE_FOR_INSERT, rows.size());
+            List<PreparedRowData> currentBatch = rows.subList(batchStart, batchEnd);
+
+            int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
+                    PreparedRowData rowData = currentBatch.get(i);
+                    List<Object> values = rowData.getValues();
+
+                    for (int j = 0; j < values.size(); j++) {
+                        ps.setObject(j + 1, values.get(j));
+                    }
+                }
+
+                @Override
+                public int getBatchSize() {
+                    return currentBatch.size();
+                }
+            });
+
+            // Sumar registros insertados en este batch
+            for (int count : updateCounts) {
+                if (count > 0) {
+                    totalInserted += count;
                 }
             }
 
-            @Override
-            public int getBatchSize() {
-                return rows.size();
-            }
-        });
-
-        // Sumar todos los registros insertados
-        int totalInserted = 0;
-        for (int count : updateCounts) {
-            if (count > 0) {
-                totalInserted += count;
+            // Log de progreso cada 5 batches o al final
+            int currentBatchNum = (batchStart / BATCH_SIZE_FOR_INSERT) + 1;
+            if (currentBatchNum % 5 == 0 || batchEnd == rows.size()) {
+                logger.info("📊 Progreso INSERT: {}/{} batches ({} registros)", currentBatchNum, totalBatches, batchEnd);
             }
         }
 
