@@ -128,45 +128,45 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
 
+        // SOLO archivamos la tabla INICIAL (ini_), NO la de actualización ni clientes
         String tableIni = buildTableName(subPortfolio, LoadType.INICIAL);
-        String tableAct = buildTableName(subPortfolio, LoadType.ACTUALIZACION);
         String archivePeriod = YearMonth.now().format(DateTimeFormatter.ofPattern("yyyy_MM"));
 
-        logger.info("🗄️ Iniciando snapshot para subcartera {} - Tablas: {}, {}",
-                subPortfolioId, tableIni, tableAct);
+        logger.info("🗄️ Iniciando snapshot para subcartera {} - Tabla inicial: {}",
+                subPortfolioId, tableIni);
         long startTime = System.currentTimeMillis();
 
         try {
             int tablesArchived = 0;
 
-            // Archivar tabla INICIAL si existe
+            // SOLO archivar tabla INICIAL (ini_) si existe
             if (dynamicTableExists(tableIni)) {
                 archiveTable(tableIni, archivePeriod);
                 tablesArchived++;
+                logger.info("✓ Tabla inicial {} archivada y limpiada", tableIni);
+            } else {
+                logger.warn("⚠️ Tabla inicial {} no existe, nada que archivar", tableIni);
             }
 
-            // Archivar tabla ACTUALIZACION si existe
-            if (dynamicTableExists(tableAct)) {
-                archiveTable(tableAct, archivePeriod);
-                tablesArchived++;
-            }
+            // NOTA: NO archivamos la tabla de actualización ni la tabla clientes
+            // Solo se archiva la tabla ini_ que contiene la carga inicial del mes
 
             long executionTime = System.currentTimeMillis() - startTime;
 
             // Registrar en notificaciones
             insertNotification("ARCHIVADO_SUBCARTERA",
                     "Snapshot subcartera " + subPortfolio.getSubPortfolioCode(),
-                    String.format("Archivadas %d tablas para periodo %s", tablesArchived, archivePeriod));
+                    String.format("Tabla inicial archivada para periodo %s", archivePeriod));
 
-            logger.info("✅ Snapshot para subcartera {} completado en {}ms. {} tablas archivadas",
+            logger.info("✅ Snapshot para subcartera {} completado en {}ms. {} tabla(s) archivada(s)",
                     subPortfolioId, executionTime, tablesArchived);
 
             return new SnapshotResult(
                 true,
                 tablesArchived,
                 archivePeriod,
-                String.format("Snapshot completado para %s. %d tablas archivadas.",
-                        subPortfolio.getSubPortfolioName(), tablesArchived),
+                String.format("Snapshot completado para %s. Tabla inicial archivada.",
+                        subPortfolio.getSubPortfolioName()),
                 executionTime
             );
 
