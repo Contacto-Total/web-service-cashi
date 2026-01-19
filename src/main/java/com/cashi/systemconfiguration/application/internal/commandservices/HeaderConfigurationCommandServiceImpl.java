@@ -1344,8 +1344,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                         // Sin regex, copiar el valor tal cual
                         value = sourceStr;
                     }
-                    logger.info("🔄 Transformación aplicada: {} [{}] → {} [{}]",
-                               header.getSourceField(), sourceValue, header.getHeaderName(), value);
+                    logger.debug("Transformación: {} → {}", header.getSourceField(), header.getHeaderName());
                 } else {
                     value = null;
                 }
@@ -1481,11 +1480,6 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     String fieldCode = header.getFieldDefinition().getFieldCode();
                     transformedData.put(fieldCode, value);
 
-                    // Log especial para numero_cuenta_linea_prestamo
-                    if ("numero_cuenta_linea_prestamo".equals(fieldCode)) {
-                        logger.info("💰 [MAPEO] NUM_CUENTA encontrado: header='{}' → fieldCode='{}' = '{}'",
-                                  header.getHeaderName(), fieldCode, value);
-                    }
                 } else if (header.getFieldDefinition() == null) {
                     logger.warn("⚠️ Header '{}' NO tiene FieldDefinition asociado", header.getHeaderName());
                 }
@@ -1600,20 +1594,11 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 }
 
                 String numeroCuentaLineaPrestamo = transformedData.get("numero_cuenta_linea_prestamo");
-                logger.debug("🔍 [ACCOUNT] Buscando 'numero_cuenta_linea_prestamo' en transformedData");
-                logger.debug("🔍 [ACCOUNT] Valor encontrado: '{}'", numeroCuentaLineaPrestamo);
-                logger.debug("🔍 [ACCOUNT] Campos en transformedData: {}", transformedData.keySet());
-
                 if (numeroCuentaLineaPrestamo != null && !numeroCuentaLineaPrestamo.trim().isEmpty()) {
                     newCustomer.setAccountNumber(numeroCuentaLineaPrestamo);
-                    logger.info("💰 AccountNumber SETEADO: {}", numeroCuentaLineaPrestamo);
-                } else {
-                    logger.warn("⚠️ AccountNumber NO encontrado en transformedData para cliente: {}", identificationCode);
                 }
 
                 Customer savedCustomer = customerRepository.save(newCustomer);
-                logger.info("✅ Cliente creado automáticamente: codigo_identificacion={}, documento={}, nombre={}, accountNumber={}",
-                           identificationCode, documento, nombreCompleto, savedCustomer.getAccountNumber());
 
                 // Crear métodos de contacto para el nuevo cliente
                 createContactMethodsForCustomer(savedCustomer, transformedData, headers);

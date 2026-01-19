@@ -693,7 +693,6 @@ public class CustomerSyncService {
 
         Integer edad = getIntegerValue(row, "edad");
         customer.setAge(edad);
-        System.out.println("   📅 Edad del row: " + edad + " (campo 'edad' en row: " + row.get("edad") + ")");
 
         customer.setMaritalStatus(getStringValue(row, "estado_civil"));
 
@@ -754,7 +753,6 @@ public class CustomerSyncService {
 
         Integer edad = getIntegerValue(row, "edad");
         customer.setAge(edad);
-        System.out.println("   📅 Edad del row: " + edad + " (campo 'edad' en row: " + row.get("edad") + ")");
 
         customer.setMaritalStatus(getStringValue(row, "estado_civil"));
 
@@ -914,8 +912,6 @@ public class CustomerSyncService {
         List<HeaderConfiguration> headerConfigs = headerConfigurationRepository
                 .findBySubPortfolioAndLoadType(subPortfolio, loadType);
 
-        System.out.println("🔍 [MAPEO] Configuraciones encontradas: " + headerConfigs.size());
-
         // Crear mapa con columnas del sistema
         Map<String, Object> mappedRow = new HashMap<>();
 
@@ -926,34 +922,15 @@ public class CustomerSyncService {
                 String headerName = sanitizeColumnName(config.getHeaderName());
                 String systemFieldCode = config.getFieldDefinition().getFieldCode();
                 columnMapping.put(headerName, systemFieldCode);
-                System.out.println("   ✓ Mapeo registrado: '" + config.getHeaderName() + "' (sanitized: '" + headerName + "') → '" + systemFieldCode + "' (FieldDef ID: " + config.getFieldDefinition().getId() + ")");
-            } else {
-                System.out.println("   ⚠️ Config sin FieldDefinition: '" + config.getHeaderName() + "' (ID config: " + config.getId() + ")");
             }
         }
-
-        System.out.println("🔍 [MAPEO] Columnas en el row: " + row.keySet());
 
         // Aplicar el mapeo
         for (Map.Entry<String, Object> entry : row.entrySet()) {
             String columnName = entry.getKey();
             Object value = entry.getValue();
-
-            // Si existe mapeo, usar el nombre del sistema, sino usar el nombre original
             String targetColumnName = columnMapping.getOrDefault(columnName, columnName);
             mappedRow.put(targetColumnName, value);
-
-            // Debug log
-            if (columnMapping.containsKey(columnName)) {
-                System.out.println("🗺️ Mapeo aplicado: '" + columnName + "' → '" + targetColumnName + "' = " + value);
-            }
-        }
-
-        // Log final para verificar si numero_cuenta_linea_prestamo está en el mappedRow
-        System.out.println("🔍 [MAPEO] MappedRow contiene 'numero_cuenta_linea_prestamo': " +
-                         mappedRow.containsKey("numero_cuenta_linea_prestamo"));
-        if (mappedRow.containsKey("numero_cuenta_linea_prestamo")) {
-            System.out.println("   💰 Valor: " + mappedRow.get("numero_cuenta_linea_prestamo"));
         }
 
         return mappedRow;
