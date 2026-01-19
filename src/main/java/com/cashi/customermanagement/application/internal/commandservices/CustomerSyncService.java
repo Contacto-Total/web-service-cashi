@@ -284,16 +284,23 @@ public class CustomerSyncService {
                     for (int i = 0; i < customersToSave.size(); i++) {
                         Customer customer = customersToSave.get(i);
                         Map<String, Object> row = rowsToSync.get(i);
-                        String identificationCode = customer.getIdentificationCode();
+
+                        // Usar codigo_identificacion o documento como clave
+                        String lookupKey = customer.getIdentificationCode();
+                        if (lookupKey == null || lookupKey.isEmpty()) {
+                            lookupKey = customer.getDocument();
+                        }
 
                         // Obtener el ID del cliente en la tabla de prueba
-                        Long testClientId = savedIdsMap.get(identificationCode);
+                        Long testClientId = savedIdsMap.get(lookupKey);
                         if (testClientId != null) {
                             try {
                                 contactsCreated += syncCustomerContactsToTestTable(testClientId, row);
                             } catch (Exception e) {
-                                errors.add("Error sincronizando contactos para " + identificationCode + ": " + e.getMessage());
+                                errors.add("Error sincronizando contactos para " + lookupKey + ": " + e.getMessage());
                             }
+                        } else {
+                            System.out.println("⚠️ No se encontró ID para cliente con clave: " + lookupKey);
                         }
                     }
                     System.out.println("📞 " + contactsCreated + " contactos guardados en tabla " + testContactTableName);
@@ -789,7 +796,7 @@ public class CustomerSyncService {
             "fecha_actualizacion = NOW()";
 
         List<Object[]> batchArgs = new ArrayList<>();
-        List<String> identificationCodes = new ArrayList<>();
+        List<String> lookupKeys = new ArrayList<>(); // Puede ser codigo_identificacion o documento
 
         for (Customer customer : customers) {
             Object[] args = new Object[] {
@@ -823,7 +830,13 @@ public class CustomerSyncService {
                 customer.getPrincipalAmount()
             };
             batchArgs.add(args);
-            identificationCodes.add(customer.getIdentificationCode());
+
+            // Usar codigo_identificacion si existe, sino documento
+            String lookupKey = customer.getIdentificationCode();
+            if (lookupKey == null || lookupKey.isEmpty()) {
+                lookupKey = customer.getDocument();
+            }
+            lookupKeys.add(lookupKey);
         }
 
         // Ejecutar batch UPSERT
@@ -841,17 +854,33 @@ public class CustomerSyncService {
         System.out.println("✅ UPSERT completado: " + totalInserted + " insertados, " + totalUpdated + " actualizados");
 
         // Obtener los IDs de los clientes insertados/actualizados
-        String selectIdsSql = "SELECT id, codigo_identificacion FROM " + testTableName +
+        // Buscar por codigo_identificacion O por documento
+        String selectIdsSql = "SELECT id, codigo_identificacion, documento FROM " + testTableName +
                               " WHERE codigo_identificacion IN (" +
-                              String.join(",", Collections.nCopies(identificationCodes.size(), "?")) + ")";
+                              String.join(",", Collections.nCopies(lookupKeys.size(), "?")) + ")" +
+                              " OR documento IN (" +
+                              String.join(",", Collections.nCopies(lookupKeys.size(), "?")) + ")";
 
-        List<Map<String, Object>> idResults = jdbcTemplate.queryForList(selectIdsSql, identificationCodes.toArray());
+        // Combinar lookupKeys dos veces para la consulta
+        List<String> queryParams = new ArrayList<>(lookupKeys);
+        queryParams.addAll(lookupKeys);
+
+        List<Map<String, Object>> idResults = jdbcTemplate.queryForList(selectIdsSql, queryParams.toArray());
         for (Map<String, Object> row : idResults) {
             Long id = ((Number) row.get("id")).longValue();
             String code = (String) row.get("codigo_identificacion");
-            resultMap.put(code, id);
+            String documento = (String) row.get("documento");
+
+            // Agregar al mapa por ambas claves si existen
+            if (code != null && !code.isEmpty()) {
+                resultMap.put(code, id);
+            }
+            if (documento != null && !documento.isEmpty()) {
+                resultMap.put(documento, id);
+            }
         }
 
+        System.out.println("🔍 IDs recuperados: " + resultMap.size() + " claves mapeadas");
         return resultMap;
     }
 
