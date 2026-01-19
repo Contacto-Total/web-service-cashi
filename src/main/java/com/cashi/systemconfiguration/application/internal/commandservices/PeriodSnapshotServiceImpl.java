@@ -33,14 +33,22 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public PeriodInfo checkPeriodStatus(Long subPortfolioId) {
+        logger.info("🔍 [checkPeriodStatus] Iniciando para subPortfolioId: {}", subPortfolioId);
+
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
+        logger.info("✓ SubPortfolio encontrado: {} ({})", subPortfolio.getSubPortfolioName(), subPortfolio.getSubPortfolioCode());
 
         String tableName = buildTableName(subPortfolio, LoadType.INICIAL);
+        logger.info("✓ Nombre de tabla construido: {}", tableName);
+
         boolean tableExists = dynamicTableExists(tableName);
+        logger.info("✓ Tabla existe: {}", tableExists);
 
         if (!tableExists) {
+            logger.info("→ Tabla no existe, retornando PeriodInfo vacío");
             return new PeriodInfo(
                 subPortfolioId,
                 tableName,
@@ -53,10 +61,15 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
 
         // Contar registros y obtener última fecha de carga
         long recordCount = getTableRecordCount(tableName);
-        String lastLoadDate = getLastLoadDate(tableName);
-        YearMonth currentPeriod = determineCurrentPeriod(lastLoadDate);
+        logger.info("✓ RecordCount: {}", recordCount);
 
-        return new PeriodInfo(
+        String lastLoadDate = getLastLoadDate(tableName);
+        logger.info("✓ LastLoadDate: {}", lastLoadDate);
+
+        YearMonth currentPeriod = determineCurrentPeriod(lastLoadDate);
+        logger.info("✓ CurrentPeriod: {}", currentPeriod);
+
+        PeriodInfo result = new PeriodInfo(
             subPortfolioId,
             tableName,
             recordCount > 0,
@@ -64,6 +77,8 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
             currentPeriod,
             lastLoadDate
         );
+        logger.info("✅ [checkPeriodStatus] Completado: {}", result);
+        return result;
     }
 
     @Override
@@ -170,12 +185,14 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public boolean requiresPeriodChangeConfirmation(Long subPortfolioId) {
         PeriodInfo periodInfo = checkPeriodStatus(subPortfolioId);
         return periodInfo.hasExistingData();
     }
 
     @Override
+    @Transactional(readOnly = true)
     public Optional<String> getLastArchivedPeriod(Long subPortfolioId) {
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
@@ -214,11 +231,20 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
     // ==================== Métodos privados ====================
 
     private String buildTableName(SubPortfolio subPortfolio, LoadType loadType) {
-        String tenantCode = subPortfolio.getPortfolio().getTenant().getTenantCode().toLowerCase();
-        String portfolioCode = subPortfolio.getPortfolio().getPortfolioCode().toLowerCase();
+        logger.info("  → buildTableName: subPortfolio={}, loadType={}", subPortfolio.getId(), loadType);
+
+        var portfolio = subPortfolio.getPortfolio();
+        logger.info("  → portfolio: {}", portfolio != null ? portfolio.getPortfolioCode() : "NULL");
+
+        var tenant = portfolio != null ? portfolio.getTenant() : null;
+        logger.info("  → tenant: {}", tenant != null ? tenant.getTenantCode() : "NULL");
+
+        String tenantCode = tenant.getTenantCode().toLowerCase();
+        String portfolioCode = portfolio.getPortfolioCode().toLowerCase();
         String subPortfolioCode = subPortfolio.getSubPortfolioCode().toLowerCase();
 
         String baseName = tenantCode + "_" + portfolioCode + "_" + subPortfolioCode;
+        logger.info("  → baseName: {}", baseName);
 
         if (loadType == LoadType.INICIAL) {
             return "ini_" + baseName;
