@@ -24,6 +24,7 @@ import java.time.LocalDate;
 import java.time.Period;
 import java.time.ZoneId;
 import java.util.*;
+import java.util.Collections;
 
 /**
  * Servicio para sincronizar clientes desde tablas dinámicas a tabla clientes
@@ -50,10 +51,16 @@ public class CustomerSyncService {
     private boolean testMode;
 
     /**
-     * Nombre de la tabla de prueba
+     * Nombre de la tabla de prueba para clientes
      */
     @Value("${app.customer-sync.test-table:cliente_prueba}")
     private String testTableName;
+
+    /**
+     * Nombre de la tabla de prueba para métodos de contacto
+     */
+    @Value("${app.customer-sync.test-contact-table:metodos_contacto_prueba}")
+    private String testContactTableName;
 
     public CustomerSyncService(
             EntityManager entityManager,
@@ -267,10 +274,29 @@ public class CustomerSyncService {
             // ========== BATCH SAVE: Guardar todos los clientes ==========
             if (!customersToSave.isEmpty()) {
                 if (testMode) {
-                    // MODO PRUEBA: Escribir en tabla de prueba usando JDBC
+                    // MODO PRUEBA: Escribir en tablas de prueba usando JDBC
                     System.out.println("🧪 MODO PRUEBA ACTIVO: Escribiendo en tabla '" + testTableName + "'");
-                    int savedToTest = saveCustomersToTestTable(customersToSave, rowsToSync);
-                    System.out.println("✅ " + savedToTest + " clientes guardados en tabla de prueba");
+                    Map<String, Long> savedIdsMap = saveCustomersToTestTableWithIds(customersToSave, rowsToSync);
+                    System.out.println("✅ " + savedIdsMap.size() + " clientes guardados en tabla de prueba");
+
+                    // Sincronizar contactos a tabla de prueba
+                    int contactsCreated = 0;
+                    for (int i = 0; i < customersToSave.size(); i++) {
+                        Customer customer = customersToSave.get(i);
+                        Map<String, Object> row = rowsToSync.get(i);
+                        String identificationCode = customer.getIdentificationCode();
+
+                        // Obtener el ID del cliente en la tabla de prueba
+                        Long testClientId = savedIdsMap.get(identificationCode);
+                        if (testClientId != null) {
+                            try {
+                                contactsCreated += syncCustomerContactsToTestTable(testClientId, row);
+                            } catch (Exception e) {
+                                errors.add("Error sincronizando contactos para " + identificationCode + ": " + e.getMessage());
+                            }
+                        }
+                    }
+                    System.out.println("📞 " + contactsCreated + " contactos guardados en tabla " + testContactTableName);
                 } else {
                     // MODO PRODUCCIÓN: Usar JPA repository
                     customerRepository.saveAll(customersToSave);
@@ -713,18 +739,17 @@ public class CustomerSyncService {
     }
 
     /**
-     * Guarda clientes en la tabla de prueba usando JDBC batch insert.
-     * Esta tabla debe tener la misma estructura que la tabla clientes.
+     * Guarda clientes en la tabla de prueba usando JDBC UPSERT (INSERT ... ON DUPLICATE KEY UPDATE).
+     * Retorna un Map de codigo_identificacion -> id para poder asociar los contactos.
+     * NO hace TRUNCATE - mantiene los datos existentes y actualiza/inserta según corresponda.
      */
-    private int saveCustomersToTestTable(List<Customer> customers, List<Map<String, Object>> rows) {
-        if (customers.isEmpty()) return 0;
+    private Map<String, Long> saveCustomersToTestTableWithIds(List<Customer> customers, List<Map<String, Object>> rows) {
+        Map<String, Long> resultMap = new HashMap<>();
+        if (customers.isEmpty()) return resultMap;
 
-        // Primero, limpiar la tabla de prueba (opcional, para pruebas repetidas)
-        jdbcTemplate.execute("TRUNCATE TABLE " + testTableName);
-        System.out.println("🗑️ Tabla " + testTableName + " limpiada");
-
-        // Usar los mismos nombres de columna que la tabla clientes (nombres en español)
-        String insertSql = "INSERT INTO " + testTableName + " (" +
+        // UPSERT: INSERT ... ON DUPLICATE KEY UPDATE
+        // Asume que 'codigo_identificacion' es UNIQUE KEY
+        String upsertSql = "INSERT INTO " + testTableName + " (" +
             "id_inquilino, nombre_inquilino, id_cartera, nombre_cartera, id_subcartera, nombre_subcartera, " +
             "id_cliente, codigo_identificacion, documento, " +
             "nombre_completo, primer_nombre, segundo_nombre, primer_apellido, segundo_apellido, " +
@@ -734,9 +759,37 @@ public class CustomerSyncService {
             "referencia_personal, numero_cuenta_linea_prestamo, " +
             "dias_mora, monto_mora, monto_capital, " +
             "fecha_creacion, fecha_actualizacion" +
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())";
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) " +
+            "ON DUPLICATE KEY UPDATE " +
+            "id_inquilino = VALUES(id_inquilino), " +
+            "nombre_inquilino = VALUES(nombre_inquilino), " +
+            "id_cartera = VALUES(id_cartera), " +
+            "nombre_cartera = VALUES(nombre_cartera), " +
+            "id_subcartera = VALUES(id_subcartera), " +
+            "nombre_subcartera = VALUES(nombre_subcartera), " +
+            "nombre_completo = VALUES(nombre_completo), " +
+            "primer_nombre = VALUES(primer_nombre), " +
+            "segundo_nombre = VALUES(segundo_nombre), " +
+            "primer_apellido = VALUES(primer_apellido), " +
+            "segundo_apellido = VALUES(segundo_apellido), " +
+            "fecha_nacimiento = VALUES(fecha_nacimiento), " +
+            "edad = VALUES(edad), " +
+            "estado_civil = VALUES(estado_civil), " +
+            "ocupacion = VALUES(ocupacion), " +
+            "tipo_cliente = VALUES(tipo_cliente), " +
+            "direccion = VALUES(direccion), " +
+            "distrito = VALUES(distrito), " +
+            "provincia = VALUES(provincia), " +
+            "departamento = VALUES(departamento), " +
+            "referencia_personal = VALUES(referencia_personal), " +
+            "numero_cuenta_linea_prestamo = VALUES(numero_cuenta_linea_prestamo), " +
+            "dias_mora = VALUES(dias_mora), " +
+            "monto_mora = VALUES(monto_mora), " +
+            "monto_capital = VALUES(monto_capital), " +
+            "fecha_actualizacion = NOW()";
 
         List<Object[]> batchArgs = new ArrayList<>();
+        List<String> identificationCodes = new ArrayList<>();
 
         for (Customer customer : customers) {
             Object[] args = new Object[] {
@@ -770,17 +823,73 @@ public class CustomerSyncService {
                 customer.getPrincipalAmount()
             };
             batchArgs.add(args);
+            identificationCodes.add(customer.getIdentificationCode());
         }
 
-        // Ejecutar batch insert
-        int[] results = jdbcTemplate.batchUpdate(insertSql, batchArgs);
+        // Ejecutar batch UPSERT
+        System.out.println("🔄 Ejecutando UPSERT de " + batchArgs.size() + " clientes en tabla " + testTableName);
+        int[] results = jdbcTemplate.batchUpdate(upsertSql, batchArgs);
+
         int totalInserted = 0;
+        int totalUpdated = 0;
         for (int r : results) {
-            if (r > 0) totalInserted += r;
-            else if (r == -2) totalInserted++; // SUCCESS_NO_INFO
+            if (r == 1) totalInserted++;
+            else if (r == 2) totalUpdated++;
+            else if (r == -2) totalInserted++;
         }
 
-        return totalInserted;
+        System.out.println("✅ UPSERT completado: " + totalInserted + " insertados, " + totalUpdated + " actualizados");
+
+        // Obtener los IDs de los clientes insertados/actualizados
+        String selectIdsSql = "SELECT id, codigo_identificacion FROM " + testTableName +
+                              " WHERE codigo_identificacion IN (" +
+                              String.join(",", Collections.nCopies(identificationCodes.size(), "?")) + ")";
+
+        List<Map<String, Object>> idResults = jdbcTemplate.queryForList(selectIdsSql, identificationCodes.toArray());
+        for (Map<String, Object> row : idResults) {
+            Long id = ((Number) row.get("id")).longValue();
+            String code = (String) row.get("codigo_identificacion");
+            resultMap.put(code, id);
+        }
+
+        return resultMap;
+    }
+
+    /**
+     * Sincroniza los contactos de un cliente a la tabla de prueba
+     */
+    private int syncCustomerContactsToTestTable(Long clientId, Map<String, Object> row) {
+        int contactsCreated = 0;
+
+        // Primero eliminar contactos existentes para este cliente en la tabla de prueba
+        jdbcTemplate.update("DELETE FROM " + testContactTableName + " WHERE id_cliente = ?", clientId);
+
+        // Insertar nuevos contactos
+        String insertSql = "INSERT INTO " + testContactTableName +
+            " (id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado) " +
+            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE')";
+
+        // Crear contactos desde los datos mapeados
+        contactsCreated += insertContactIfPresent(insertSql, clientId, "telefono_principal", "telefono", row);
+        contactsCreated += insertContactIfPresent(insertSql, clientId, "telefono_secundario", "telefono", row);
+        contactsCreated += insertContactIfPresent(insertSql, clientId, "telefono_trabajo", "telefono", row);
+        contactsCreated += insertContactIfPresent(insertSql, clientId, "email", "email", row);
+        contactsCreated += insertContactIfPresent(insertSql, clientId, "telefono_referencia_1", "telefono", row);
+        contactsCreated += insertContactIfPresent(insertSql, clientId, "telefono_referencia_2", "telefono", row);
+
+        return contactsCreated;
+    }
+
+    /**
+     * Inserta un contacto en la tabla de prueba si el valor está presente
+     */
+    private int insertContactIfPresent(String insertSql, Long clientId, String subtype, String contactType, Map<String, Object> row) {
+        String contactValue = getStringValue(row, subtype);
+        if (contactValue != null && !contactValue.isEmpty()) {
+            jdbcTemplate.update(insertSql, clientId, contactType, subtype, contactValue, subtype);
+            return 1;
+        }
+        return 0;
     }
 
     /**
