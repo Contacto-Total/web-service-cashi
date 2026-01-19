@@ -388,6 +388,221 @@ public class CustomerSyncService {
     }
 
     /**
+     * Umbral para decidir entre sincronización selectiva vs completa.
+     * Si se actualizan más de este número de registros, es más eficiente cargar todo.
+     */
+    private static final int SELECTIVE_SYNC_THRESHOLD = 500;
+
+    /**
+     * Sincroniza SOLO los clientes especificados por sus códigos de identificación.
+     * Usado para carga diaria donde solo queremos sincronizar los registros que fueron actualizados.
+     *
+     * OPTIMIZACIÓN: Si hay más de SELECTIVE_SYNC_THRESHOLD códigos, usa el método completo
+     * porque el overhead del IN clause grande es mayor que cargar todo.
+     *
+     * @param subPortfolioId ID de la subcartera
+     * @param loadType Tipo de carga (normalmente INICIAL)
+     * @param identificationCodes Lista de códigos de identificación a sincronizar
+     * @return Resultado de la sincronización
+     */
+    @Transactional
+    public SyncResult syncCustomersByIdentificationCodes(Long subPortfolioId, LoadType loadType, Set<String> identificationCodes) {
+        if (identificationCodes == null || identificationCodes.isEmpty()) {
+            System.out.println("⚠️ No hay códigos de identificación para sincronizar");
+            return new SyncResult(0, 0, new ArrayList<>());
+        }
+
+        // Si hay muchos códigos, es más eficiente usar el método completo
+        if (identificationCodes.size() > SELECTIVE_SYNC_THRESHOLD) {
+            System.out.println("📊 " + identificationCodes.size() + " códigos superan umbral de " + SELECTIVE_SYNC_THRESHOLD +
+                             " - usando sincronización completa para mejor rendimiento");
+            return syncCustomersFromSubPortfolio(subPortfolioId, loadType);
+        }
+
+        System.out.println("🔄 Sincronización selectiva: " + identificationCodes.size() + " clientes para SubPortfolio ID: " + subPortfolioId);
+
+        // 1. Obtener SubPortfolio con sus relaciones
+        SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
+                .orElseThrow(() -> new IllegalArgumentException("SubPortfolio no encontrado: " + subPortfolioId));
+
+        Portfolio portfolio = subPortfolio.getPortfolio();
+        Tenant tenant = portfolio.getTenant();
+
+        // 2. Construir nombre de tabla dinámica
+        String tableName = buildDynamicTableName(
+                tenant.getTenantCode(),
+                portfolio.getPortfolioCode(),
+                subPortfolio.getSubPortfolioCode(),
+                loadType
+        );
+
+        System.out.println("📊 Tabla dinámica: " + tableName);
+
+        int customersCreated = 0;
+        int customersUpdated = 0;
+        List<String> errors = new ArrayList<>();
+
+        try {
+            // 3. Verificar que la tabla existe
+            if (!tableExists(tableName)) {
+                throw new IllegalArgumentException("La tabla dinámica no existe: " + tableName);
+            }
+
+            // 4. Leer SOLO los registros especificados de la tabla dinámica
+            List<Map<String, Object>> rows = readDynamicTableDataByIds(tableName, identificationCodes);
+            System.out.println("📊 Registros encontrados para sincronizar: " + rows.size());
+
+            if (rows.isEmpty()) {
+                System.out.println("⚠️ No se encontraron registros con los códigos especificados");
+                return new SyncResult(0, 0, errors);
+            }
+
+            // 5. Cargar SOLO los clientes que necesitamos verificar (optimizado)
+            Map<String, Customer> existingCustomersMap = loadExistingCustomersByIds(tenant.getId().longValue(), identificationCodes);
+            System.out.println("📊 Clientes existentes encontrados: " + existingCustomersMap.size() + " de " + identificationCodes.size());
+
+            // Listas para batch operations
+            List<Customer> customersToSave = new ArrayList<>();
+            List<Map<String, Object>> rowsToSync = new ArrayList<>();
+
+            // 6. Procesar cada registro
+            for (Map<String, Object> row : rows) {
+                try {
+                    Map<String, Object> mappedRow = mapColumnsToSystemFields(row, subPortfolio, loadType);
+
+                    String identificationCode = getStringValue(mappedRow, "codigo_identificacion");
+                    String document = getStringValue(mappedRow, "documento");
+
+                    if (document == null || document.isEmpty()) {
+                        errors.add("Documento vacío en registro");
+                        continue;
+                    }
+
+                    Customer existingCustomer = existingCustomersMap.get(identificationCode);
+
+                    Customer customer;
+                    if (existingCustomer != null) {
+                        customer = existingCustomer;
+                        customer.setTenantId(tenant.getId().longValue());
+                        customer.setTenantName(tenant.getTenantName());
+                        customer.setPortfolioId(portfolio.getId().longValue());
+                        customer.setPortfolioName(portfolio.getPortfolioName());
+                        customer.setSubPortfolioId(subPortfolioId.longValue());
+                        customer.setSubPortfolioName(subPortfolio.getSubPortfolioName());
+                        updateCustomerFromRow(customer, mappedRow);
+                        customersUpdated++;
+                    } else {
+                        customer = createCustomerFromRow(mappedRow, tenant, portfolio, subPortfolio);
+                        customersCreated++;
+                    }
+
+                    customersToSave.add(customer);
+                    rowsToSync.add(mappedRow);
+
+                } catch (Exception e) {
+                    errors.add("Error procesando registro: " + e.getMessage());
+                }
+            }
+
+            // 7. BATCH SAVE
+            if (!customersToSave.isEmpty()) {
+                if (testMode) {
+                    System.out.println("🧪 MODO PRUEBA: Escribiendo en tabla '" + testTableName + "'");
+                    Map<String, Long> savedIdsMap = saveCustomersToTestTableWithIds(customersToSave, rowsToSync);
+                    System.out.println("✅ " + savedIdsMap.size() + " clientes guardados en tabla de prueba");
+
+                    int contactsCreated = 0;
+                    for (int i = 0; i < customersToSave.size(); i++) {
+                        Customer customer = customersToSave.get(i);
+                        Map<String, Object> row = rowsToSync.get(i);
+                        String lookupKey = customer.getIdentificationCode();
+                        if (lookupKey == null || lookupKey.isEmpty()) {
+                            lookupKey = customer.getDocument();
+                        }
+                        Long testClientId = savedIdsMap.get(lookupKey);
+                        if (testClientId != null) {
+                            try {
+                                contactsCreated += syncCustomerContactsToTestTable(testClientId, row);
+                            } catch (Exception e) {
+                                errors.add("Error sincronizando contactos para " + lookupKey + ": " + e.getMessage());
+                            }
+                        }
+                    }
+                    System.out.println("📞 " + contactsCreated + " contactos guardados en tabla " + testContactTableName);
+                } else {
+                    System.out.println("🏭 MODO PRODUCCIÓN: Escribiendo en tabla 'clientes' con UPSERT");
+                    Map<String, Long> savedIdsMap = saveCustomersToProductionTableWithUpsert(customersToSave);
+                    System.out.println("✅ " + savedIdsMap.size() + " clientes procesados en tabla clientes");
+
+                    int contactsCreated = 0;
+                    for (int i = 0; i < customersToSave.size(); i++) {
+                        Customer customer = customersToSave.get(i);
+                        Map<String, Object> row = rowsToSync.get(i);
+                        String lookupKey = customer.getIdentificationCode();
+                        if (lookupKey == null || lookupKey.isEmpty()) {
+                            lookupKey = customer.getDocument();
+                        }
+                        Long clientId = savedIdsMap.get(lookupKey);
+                        if (clientId != null) {
+                            try {
+                                contactsCreated += syncCustomerContactsWithUpsert(clientId, row);
+                            } catch (Exception e) {
+                                errors.add("Error sincronizando contactos para " + lookupKey + ": " + e.getMessage());
+                            }
+                        }
+                    }
+                    System.out.println("📞 " + contactsCreated + " contactos sincronizados en tabla metodos_contacto");
+                }
+            }
+
+            return new SyncResult(customersCreated, customersUpdated, errors);
+
+        } catch (Exception e) {
+            System.err.println("❌ Error fatal en sincronización selectiva: " + e.getMessage());
+            throw new RuntimeException("Error en sincronización de clientes: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Carga solo los clientes específicos por sus códigos de identificación (optimizado).
+     * En lugar de cargar todos los clientes del tenant, carga solo los que necesitamos.
+     */
+    private Map<String, Customer> loadExistingCustomersByIds(Long tenantId, Set<String> identificationCodes) {
+        Map<String, Customer> resultMap = new HashMap<>();
+        if (identificationCodes.isEmpty()) {
+            return resultMap;
+        }
+
+        // Usar el repository para buscar por tenant y códigos específicos
+        List<Customer> customers = customerRepository.findByTenantIdAndIdentificationCodeIn(tenantId, identificationCodes);
+
+        for (Customer c : customers) {
+            if (c.getIdentificationCode() != null) {
+                resultMap.put(c.getIdentificationCode(), c);
+            }
+        }
+
+        return resultMap;
+    }
+
+    /**
+     * Lee datos de la tabla dinámica filtrando solo por los códigos de identificación especificados
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> readDynamicTableDataByIds(String tableName, Set<String> identificationCodes) {
+        if (identificationCodes.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // Construir placeholders para IN clause
+        String placeholders = String.join(",", Collections.nCopies(identificationCodes.size(), "?"));
+        String sql = "SELECT * FROM " + tableName + " WHERE codigo_identificacion IN (" + placeholders + ")";
+
+        List<Map<String, Object>> results = jdbcTemplate.queryForList(sql, identificationCodes.toArray());
+        return results;
+    }
+
+    /**
      * Construye el nombre de la tabla dinámica de carga inicial
      */
     private String buildDynamicTableName(String tenantCode, String portfolioCode, String subPortfolioCode, LoadType loadType) {

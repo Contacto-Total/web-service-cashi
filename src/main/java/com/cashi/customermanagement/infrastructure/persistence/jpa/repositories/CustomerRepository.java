@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -15,6 +16,7 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     Optional<Customer> findByDocument(String document);
     List<Customer> findByFullNameContainingIgnoreCase(String name);
     List<Customer> findByTenantId(Long tenantId);
+    List<Customer> findByTenantIdAndIdentificationCodeIn(Long tenantId, Collection<String> identificationCodes);
     Optional<Customer> findByTenantIdAndIdentificationCode(Long tenantId, String identificationCode);
     Optional<Customer> findByTenantIdAndDocument(Long tenantId, String document);
 

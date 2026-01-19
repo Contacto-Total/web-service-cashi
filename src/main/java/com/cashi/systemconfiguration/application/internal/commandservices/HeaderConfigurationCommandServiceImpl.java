@@ -2156,6 +2156,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             // Paso 3: Preparar datos para batch update
             List<Object[]> batchArgs = new ArrayList<>();
             List<Integer> rowIndices = new ArrayList<>(); // Para tracking de errores
+            List<String> linkValuesInOrder = new ArrayList<>(); // Para rastrear qué registros se actualizaron
 
             for (int i = 0; i < data.size(); i++) {
                 Map<String, Object> row = data.get(i);
@@ -2180,6 +2181,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
                     batchArgs.add(args);
                     rowIndices.add(i);
+                    linkValuesInOrder.add(linkValue); // Guardar el linkValue en orden
 
                 } catch (Exception e) {
                     failedInInicial++;
@@ -2187,12 +2189,13 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 }
             }
 
-            // Paso 4: Ejecutar batch updates
+            // Paso 4: Ejecutar batch updates y recolectar IDs actualizados
             logger.info("🚀 Ejecutando {} actualizaciones en batches de {}...",
                        batchArgs.size(), BATCH_SIZE_FOR_DAILY_UPDATE);
 
             int totalBatches = (int) Math.ceil((double) batchArgs.size() / BATCH_SIZE_FOR_DAILY_UPDATE);
             int processedBatches = 0;
+            Set<String> updatedIdentificationCodes = new HashSet<>(); // Códigos de identificación actualizados
 
             for (int batchStart = 0; batchStart < batchArgs.size(); batchStart += BATCH_SIZE_FOR_DAILY_UPDATE) {
                 int batchEnd = Math.min(batchStart + BATCH_SIZE_FOR_DAILY_UPDATE, batchArgs.size());
@@ -2201,10 +2204,15 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 try {
                     int[] results = jdbcTemplate.batchUpdate(updateSql, currentBatch);
 
-                    // Contar resultados
+                    // Contar resultados y recolectar IDs actualizados
                     for (int k = 0; k < results.length; k++) {
                         if (results[k] > 0) {
                             updatedInInicial += results[k];
+                            // Agregar el linkValue del registro actualizado exitosamente
+                            int globalIndex = batchStart + k;
+                            if (globalIndex < linkValuesInOrder.size()) {
+                                updatedIdentificationCodes.add(linkValuesInOrder.get(globalIndex));
+                            }
                         } else if (results[k] == 0) {
                             notFoundInInicial++;
                         }
@@ -2224,6 +2232,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 }
             }
 
+            logger.info("📊 Códigos de identificación actualizados exitosamente: {}", updatedIdentificationCodes.size());
+            result.put("updatedIdentificationCodes", updatedIdentificationCodes);
+
             result.put("inicial", Map.of(
                     "updatedRows", updatedInInicial,
                     "notFoundRows", notFoundInInicial,
@@ -2240,16 +2251,20 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 "failedRows", failedInInicial
         ));
 
-        // ========== FASE 3: Sincronizar clientes SOLO desde INICIAL ==========
-        logger.info("📊 Fase 3: Sincronizando clientes desde tabla INICIAL");
-        if (updatedInInicial > 0 || ((int) actualizacionResult.getOrDefault("insertedRows", 0)) > 0) {
+        // ========== FASE 3: Sincronizar SOLO los clientes actualizados ==========
+        @SuppressWarnings("unchecked")
+        Set<String> updatedCodes = (Set<String>) result.getOrDefault("updatedIdentificationCodes", new HashSet<>());
+        logger.info("📊 Fase 3: Sincronizando {} clientes actualizados desde tabla INICIAL", updatedCodes.size());
+
+        if (!updatedCodes.isEmpty()) {
             try {
-                // Sincronizar SOLO desde tabla INICIAL
-                CustomerSyncService.SyncResult syncResult = customerSyncService.syncCustomersFromSubPortfolio(
+                // Sincronizar SOLO los clientes que fueron actualizados (sincronización selectiva)
+                CustomerSyncService.SyncResult syncResult = customerSyncService.syncCustomersByIdentificationCodes(
                         subPortfolioId.longValue(),
-                        LoadType.INICIAL  // Siempre sincronizar desde INICIAL
+                        LoadType.INICIAL,  // Siempre sincronizar desde INICIAL
+                        updatedCodes       // Solo los códigos actualizados
                 );
-                logger.info("✅ Sincronización completada: {} clientes creados, {} actualizados",
+                logger.info("✅ Sincronización selectiva completada: {} clientes creados, {} actualizados",
                         syncResult.getCustomersCreated(), syncResult.getCustomersUpdated());
 
                 result.put("syncCustomersCreated", syncResult.getCustomersCreated());
@@ -2261,7 +2276,14 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 logger.error("❌ Error en sincronización de clientes: {}", e.getMessage(), e);
                 result.put("syncError", "Error al sincronizar clientes: " + e.getMessage());
             }
+        } else {
+            logger.info("⚠️ No hay clientes para sincronizar (ningún registro actualizado en INICIAL)");
+            result.put("syncCustomersCreated", 0);
+            result.put("syncCustomersUpdated", 0);
         }
+
+        // Limpiar el set temporal del resultado
+        result.remove("updatedIdentificationCodes");
 
         // Preparar resumen
         result.put("totalRows", data.size());
