@@ -10,6 +10,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.CallableStatement;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
@@ -137,38 +139,33 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         long startTime = System.currentTimeMillis();
 
         try {
-            int tablesArchived = 0;
-
-            // SOLO archivar tabla INICIAL (ini_) si existe
-            if (dynamicTableExists(tableIni)) {
-                archiveTable(tableIni, archivePeriod);
-                tablesArchived++;
-                logger.info("✓ Tabla inicial {} archivada y limpiada", tableIni);
-            } else {
-                logger.warn("⚠️ Tabla inicial {} no existe, nada que archivar", tableIni);
-            }
-
-            // NOTA: NO archivamos la tabla de actualización ni la tabla clientes
-            // Solo se archiva la tabla ini_ que contiene la carga inicial del mes
+            // Ejecutar stored procedure (1 solo round-trip, transacción atómica en BD)
+            ArchiveResult archiveResult = callArchiveStoredProcedure(tableIni, archivePeriod);
 
             long executionTime = System.currentTimeMillis() - startTime;
 
-            // Registrar en notificaciones
-            insertNotification("ARCHIVADO_SUBCARTERA",
-                    "Snapshot subcartera " + subPortfolio.getSubPortfolioCode(),
-                    String.format("Tabla inicial archivada para periodo %s", archivePeriod));
+            if (archiveResult.success()) {
+                logger.info("✅ Snapshot para subcartera {} completado en {}ms. {} registros archivados. Mensaje: {}",
+                        subPortfolioId, executionTime, archiveResult.recordsArchived(), archiveResult.message());
 
-            logger.info("✅ Snapshot para subcartera {} completado en {}ms. {} tabla(s) archivada(s)",
-                    subPortfolioId, executionTime, tablesArchived);
-
-            return new SnapshotResult(
-                true,
-                tablesArchived,
-                archivePeriod,
-                String.format("Snapshot completado para %s. Tabla inicial archivada.",
-                        subPortfolio.getSubPortfolioName()),
-                executionTime
-            );
+                return new SnapshotResult(
+                    true,
+                    archiveResult.recordsArchived() > 0 ? 1 : 0,
+                    archivePeriod,
+                    String.format("Snapshot completado para %s. %d registros archivados.",
+                            subPortfolio.getSubPortfolioName(), archiveResult.recordsArchived()),
+                    executionTime
+                );
+            } else {
+                logger.error("❌ Stored procedure falló: {}", archiveResult.message());
+                return new SnapshotResult(
+                    false,
+                    0,
+                    archivePeriod,
+                    archiveResult.message(),
+                    executionTime
+                );
+            }
 
         } catch (Exception e) {
             long executionTime = System.currentTimeMillis() - startTime;
@@ -182,6 +179,33 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
                 executionTime
             );
         }
+    }
+
+    /**
+     * Record interno para el resultado del stored procedure
+     */
+    private record ArchiveResult(boolean success, long recordsArchived, String message) {}
+
+    /**
+     * Llama al stored procedure sp_archivar_periodo
+     * Ejecuta todo en 1 round-trip con transacción atómica en la BD
+     */
+    private ArchiveResult callArchiveStoredProcedure(String tableName, String archivePeriod) {
+        return jdbcTemplate.execute(connection -> {
+            CallableStatement cs = connection.prepareCall("{CALL sp_archivar_periodo(?, ?, ?, ?, ?)}");
+            cs.setString(1, tableName);
+            cs.setString(2, archivePeriod);
+            cs.registerOutParameter(3, Types.BIGINT);   // p_records_archived
+            cs.registerOutParameter(4, Types.BOOLEAN);  // p_success
+            cs.registerOutParameter(5, Types.VARCHAR);  // p_message
+            return cs;
+        }, (CallableStatement cs) -> {
+            cs.execute();
+            long recordsArchived = cs.getLong(3);
+            boolean success = cs.getBoolean(4);
+            String message = cs.getString(5);
+            return new ArchiveResult(success, recordsArchived, message);
+        });
     }
 
     @Override
@@ -306,46 +330,8 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         }
     }
 
-    private void archiveTable(String tableName, String archivePeriod) {
-        String archivedTableName = tableName + "_" + archivePeriod;
-
-        logger.info("📦 Archivando tabla {} -> {}.{}", tableName, HISTORIC_DATABASE, archivedTableName);
-
-        // Asegurar que la base de datos histórica existe
-        String createDbSql = String.format("CREATE DATABASE IF NOT EXISTS %s", HISTORIC_DATABASE);
-        jdbcTemplate.execute(createDbSql);
-
-        // Contar registros antes de archivar
-        long recordsBefore = getTableRecordCount(tableName);
-        logger.info("📊 Registros a archivar de {}: {}", tableName, recordsBefore);
-
-        // Crear tabla en BD histórica si no existe
-        String createSql = String.format(
-                "CREATE TABLE IF NOT EXISTS %s.%s LIKE %s.%s",
-                HISTORIC_DATABASE, archivedTableName, MAIN_DATABASE, tableName);
-        jdbcTemplate.execute(createSql);
-        logger.info("✓ Tabla histórica creada: {}.{}", HISTORIC_DATABASE, archivedTableName);
-
-        // Copiar datos
-        String insertSql = String.format(
-                "INSERT INTO %s.%s SELECT * FROM %s.%s",
-                HISTORIC_DATABASE, archivedTableName, MAIN_DATABASE, tableName);
-        jdbcTemplate.execute(insertSql);
-        logger.info("✓ Datos copiados a tabla histórica");
-
-        // Verificar que los datos se copiaron correctamente
-        String countSql = String.format("SELECT COUNT(*) FROM %s.%s", HISTORIC_DATABASE, archivedTableName);
-        Long recordsArchived = jdbcTemplate.queryForObject(countSql, Long.class);
-        logger.info("📊 Registros en tabla histórica: {}", recordsArchived);
-
-        // Limpiar la tabla original después de verificar
-        String truncateSql = String.format("TRUNCATE TABLE %s.%s", MAIN_DATABASE, tableName);
-        jdbcTemplate.execute(truncateSql);
-        logger.info("✓ Tabla original {} limpiada (TRUNCATE)", tableName);
-
-        logger.info("✅ Tabla {} archivada exitosamente. {} registros movidos a {}.{}",
-                tableName, recordsArchived, HISTORIC_DATABASE, archivedTableName);
-    }
+    // NOTA: El método archiveTable fue reemplazado por el stored procedure sp_archivar_periodo
+    // que ejecuta toda la lógica en 1 round-trip con transacción atómica en la BD
 
     private int countArchivedTables(String archivePeriod) {
         try {
@@ -361,12 +347,5 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         }
     }
 
-    private void insertNotification(String type, String title, String message) {
-        try {
-            String sql = "INSERT INTO notificaciones_sistema (tipo, titulo, mensaje) VALUES (?, ?, ?)";
-            jdbcTemplate.update(sql, type, title, message);
-        } catch (Exception e) {
-            logger.warn("No se pudo insertar notificación: {}", e.getMessage());
-        }
-    }
+    // NOTA: insertNotification ya no se usa aquí, el stored procedure lo hace internamente
 }
