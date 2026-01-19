@@ -1,16 +1,16 @@
 -- =====================================================
--- Stored Procedure: sp_archivar_periodo
--- Descripción: Archiva una tabla de subcartera a la BD histórica
--- Uso: CALL sp_archivar_periodo('ini_sam_mas_elm', '2025_01', @records, @success, @msg);
+-- Stored Procedure: sp_archivar_diario
+-- Descripción: Archiva una tabla de carga diaria (actualización) a la BD histórica
+-- Uso: CALL sp_archivar_diario('sam_mas_elm', '2025_01_19', @records, @success, @msg);
 -- =====================================================
 
 DELIMITER //
 
-DROP PROCEDURE IF EXISTS sp_archivar_periodo //
+DROP PROCEDURE IF EXISTS sp_archivar_diario //
 
-CREATE PROCEDURE sp_archivar_periodo(
+CREATE PROCEDURE sp_archivar_diario(
     IN p_table_name VARCHAR(100),
-    IN p_archive_period VARCHAR(10),
+    IN p_archive_date VARCHAR(15),
     OUT p_records_archived BIGINT,
     OUT p_success BOOLEAN,
     OUT p_message VARCHAR(500)
@@ -32,8 +32,8 @@ BEGIN
         ROLLBACK;
     END;
 
-    -- Construir nombre de tabla archivada
-    SET v_archived_table = CONCAT(p_table_name, '_', p_archive_period);
+    -- Construir nombre de tabla archivada (tabla_YYYY_MM_DD)
+    SET v_archived_table = CONCAT(p_table_name, '_', p_archive_date);
 
     -- Verificar que la tabla origen existe
     SELECT COUNT(*) INTO v_table_exists
@@ -102,13 +102,13 @@ BEGIN
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
 
-                -- 8. Registrar en notificaciones del sistema (opcional, ignora si tabla no existe)
+                -- 8. Registrar en notificaciones del sistema (opcional)
                 BEGIN
                     DECLARE CONTINUE HANDLER FOR 1146 BEGIN END; -- Table doesn't exist
                     INSERT INTO notificaciones_sistema (tipo, titulo, mensaje, created_at)
                     VALUES (
-                        'ARCHIVADO_TABLA',
-                        CONCAT('Snapshot: ', p_table_name),
+                        'ARCHIVADO_DIARIO',
+                        CONCAT('Snapshot diario: ', p_table_name),
                         CONCAT(v_records_after, ' registros archivados a ', v_hist_db, '.', v_archived_table),
                         NOW()
                     );

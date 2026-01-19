@@ -74,4 +74,53 @@ public interface PeriodSnapshotService {
      * @return Periodo archivado más reciente (ej: "2025_12") o empty si no hay
      */
     Optional<String> getLastArchivedPeriod(Long subPortfolioId);
+
+    // ==================== Métodos para Snapshot Diario ====================
+
+    /**
+     * Información del estado diario de una subcartera (tabla de actualización)
+     */
+    record DailyInfo(
+        Long subPortfolioId,
+        String tableName,
+        boolean hasExistingData,
+        long recordCount,
+        String lastLoadDate,
+        String lastArchivedDate
+    ) {}
+
+    /**
+     * Verifica el estado de la tabla de actualización (carga diaria) para una subcartera.
+     * Usado para determinar si una nueva carga diaria requiere archivar datos existentes.
+     *
+     * @param subPortfolioId ID de la subcartera
+     * @return Información del estado de la tabla de actualización
+     */
+    DailyInfo checkDailyStatus(Long subPortfolioId);
+
+    /**
+     * Verifica si se requiere confirmación para la carga diaria.
+     * Retorna true si ya hay datos cargados en la tabla de actualización.
+     *
+     * @param subPortfolioId ID de la subcartera
+     * @return true si hay datos existentes que serían afectados
+     */
+    boolean requiresDailyChangeConfirmation(Long subPortfolioId);
+
+    /**
+     * Ejecuta snapshot diario para una subcartera específica.
+     * Archiva la tabla de actualización con fecha del día.
+     *
+     * @param subPortfolioId ID de la subcartera
+     * @return Resultado de la operación
+     */
+    SnapshotResult executeDailySnapshotForSubPortfolio(Long subPortfolioId);
+
+    /**
+     * Obtiene la última fecha de archivo diario para una subcartera.
+     *
+     * @param subPortfolioId ID de la subcartera
+     * @return Fecha archivada más reciente (ej: "2025_01_19") o empty si no hay
+     */
+    Optional<String> getLastArchivedDailyDate(Long subPortfolioId);
 }

@@ -348,4 +348,187 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
     }
 
     // NOTA: insertNotification ya no se usa aquí, el stored procedure lo hace internamente
+
+    // ==================== Métodos para Snapshot Diario ====================
+
+    @Override
+    @Transactional(readOnly = true)
+    public DailyInfo checkDailyStatus(Long subPortfolioId) {
+        logger.info("🔍 [checkDailyStatus] Verificando estado diario para subPortfolioId: {}", subPortfolioId);
+
+        SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
+                .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
+
+        // Tabla de actualización (sin prefijo ini_)
+        String tableName = buildTableName(subPortfolio, LoadType.ACTUALIZACION);
+        logger.info("✓ Nombre de tabla actualización: {}", tableName);
+
+        boolean tableExists = dynamicTableExists(tableName);
+        logger.info("✓ Tabla existe: {}", tableExists);
+
+        if (!tableExists) {
+            return new DailyInfo(
+                subPortfolioId,
+                tableName,
+                false,
+                0,
+                null,
+                null
+            );
+        }
+
+        long recordCount = getTableRecordCount(tableName);
+        String lastLoadDate = getLastLoadDate(tableName);
+        Optional<String> lastArchivedDate = getLastArchivedDailyDate(subPortfolioId);
+
+        DailyInfo result = new DailyInfo(
+            subPortfolioId,
+            tableName,
+            recordCount > 0,
+            recordCount,
+            lastLoadDate,
+            lastArchivedDate.orElse(null)
+        );
+
+        logger.info("✅ [checkDailyStatus] Completado: {}", result);
+        return result;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean requiresDailyChangeConfirmation(Long subPortfolioId) {
+        DailyInfo dailyInfo = checkDailyStatus(subPortfolioId);
+        return dailyInfo.hasExistingData();
+    }
+
+    @Override
+    @Transactional
+    public SnapshotResult executeDailySnapshotForSubPortfolio(Long subPortfolioId) {
+        SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
+                .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
+
+        // Tabla de actualización (sin prefijo ini_)
+        String tableActualizacion = buildTableName(subPortfolio, LoadType.ACTUALIZACION);
+        String archiveDate = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy_MM_dd"));
+
+        logger.info("🗄️ Iniciando snapshot diario para subcartera {} - Tabla: {}, Fecha: {}",
+                subPortfolioId, tableActualizacion, archiveDate);
+        long startTime = System.currentTimeMillis();
+
+        try {
+            // Verificar si la tabla existe
+            if (!dynamicTableExists(tableActualizacion)) {
+                return new SnapshotResult(true, 0, archiveDate,
+                    "Tabla no existe, nada que archivar", System.currentTimeMillis() - startTime);
+            }
+
+            // Ejecutar stored procedure
+            DailyArchiveResult archiveResult = callDailyArchiveStoredProcedure(tableActualizacion, archiveDate);
+
+            long executionTime = System.currentTimeMillis() - startTime;
+
+            if (archiveResult.success()) {
+                logger.info("✅ Snapshot diario completado en {}ms. {} registros archivados. Mensaje: {}",
+                        executionTime, archiveResult.recordsArchived(), archiveResult.message());
+
+                return new SnapshotResult(
+                    true,
+                    archiveResult.recordsArchived() > 0 ? 1 : 0,
+                    archiveDate,
+                    String.format("Snapshot diario completado para %s. %d registros archivados.",
+                            subPortfolio.getSubPortfolioName(), archiveResult.recordsArchived()),
+                    executionTime
+                );
+            } else {
+                logger.error("❌ Stored procedure diario falló: {}", archiveResult.message());
+                return new SnapshotResult(
+                    false,
+                    0,
+                    archiveDate,
+                    archiveResult.message(),
+                    executionTime
+                );
+            }
+
+        } catch (Exception e) {
+            long executionTime = System.currentTimeMillis() - startTime;
+            logger.error("❌ Error en snapshot diario para subcartera {}: {}", subPortfolioId, e.getMessage(), e);
+
+            return new SnapshotResult(
+                false,
+                0,
+                archiveDate,
+                "Error: " + e.getMessage(),
+                executionTime
+            );
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<String> getLastArchivedDailyDate(Long subPortfolioId) {
+        SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
+                .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
+
+        String tableActualizacion = buildTableName(subPortfolio, LoadType.ACTUALIZACION);
+
+        try {
+            // Buscar tablas archivadas diarias en la BD histórica
+            // Formato: sam_mas_elm_YYYY_MM_DD
+            String sql = """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = ?
+                AND table_name LIKE ?
+                AND table_name REGEXP ?
+                ORDER BY table_name DESC
+                LIMIT 1
+                """;
+
+            // Regex para capturar fecha YYYY_MM_DD al final
+            String pattern = tableActualizacion + "_[0-9]{4}_[0-9]{2}_[0-9]{2}$";
+
+            List<String> archivedTables = jdbcTemplate.queryForList(
+                    sql, String.class, HISTORIC_DATABASE, tableActualizacion + "_%", pattern);
+
+            if (archivedTables.isEmpty()) {
+                return Optional.empty();
+            }
+
+            // Extraer fecha del nombre de la tabla (ej: sam_mas_elm_2025_01_19 -> 2025_01_19)
+            String lastTable = archivedTables.get(0);
+            String date = lastTable.substring(tableActualizacion.length() + 1); // +1 for underscore
+            return Optional.of(date);
+
+        } catch (Exception e) {
+            logger.warn("No se pudo obtener la última fecha archivada diaria: {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Record interno para el resultado del stored procedure diario
+     */
+    private record DailyArchiveResult(boolean success, long recordsArchived, String message) {}
+
+    /**
+     * Llama al stored procedure sp_archivar_diario
+     */
+    private DailyArchiveResult callDailyArchiveStoredProcedure(String tableName, String archiveDate) {
+        return jdbcTemplate.execute(connection -> {
+            CallableStatement cs = connection.prepareCall("{CALL sp_archivar_diario(?, ?, ?, ?, ?)}");
+            cs.setString(1, tableName);
+            cs.setString(2, archiveDate);
+            cs.registerOutParameter(3, Types.BIGINT);   // p_records_archived
+            cs.registerOutParameter(4, Types.BOOLEAN);  // p_success
+            cs.registerOutParameter(5, Types.VARCHAR);  // p_message
+            return cs;
+        }, (CallableStatement cs) -> {
+            cs.execute();
+            long recordsArchived = cs.getLong(3);
+            boolean success = cs.getBoolean(4);
+            String message = cs.getString(5);
+            return new DailyArchiveResult(success, recordsArchived, message);
+        });
+    }
 }
