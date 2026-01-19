@@ -7,12 +7,14 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.CrossOrigin;
 
 import java.util.Map;
 import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/v1/system-config/period-snapshot")
+@CrossOrigin(origins = "*", maxAge = 3600)
 @Tag(name = "Period Snapshot", description = "Gestión de snapshots y cambios de periodo mensual")
 public class PeriodSnapshotController {
 
