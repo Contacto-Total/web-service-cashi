@@ -322,7 +322,8 @@ public class CustomerSyncService {
             }
 
             // 4. Leer SOLO los registros especificados de la tabla dinámica
-            List<Map<String, Object>> rows = readDynamicTableDataByIds(tableName, identificationCodes);
+            // Pasamos subPortfolio y loadType para resolver el nombre real de la columna
+            List<Map<String, Object>> rows = readDynamicTableDataByIds(tableName, identificationCodes, subPortfolio, loadType);
             System.out.println("📊 Registros encontrados para sincronizar: " + rows.size());
 
             if (rows.isEmpty()) {
@@ -418,20 +419,60 @@ public class CustomerSyncService {
     }
 
     /**
-     * Lee datos de la tabla dinámica filtrando solo por los códigos de identificación especificados
+     * Lee datos de la tabla dinámica filtrando solo por los códigos de identificación especificados.
+     *
+     * IMPORTANTE: Las tablas dinámicas usan los nombres originales del Excel, no los nombres del sistema.
+     * Este método consulta HeaderConfiguration para encontrar el nombre real de la columna que mapea
+     * a 'codigo_identificacion' del sistema.
      */
     @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> readDynamicTableDataByIds(String tableName, Set<String> identificationCodes) {
+    private List<Map<String, Object>> readDynamicTableDataByIds(String tableName, Set<String> identificationCodes,
+                                                                  SubPortfolio subPortfolio, LoadType loadType) {
         if (identificationCodes.isEmpty()) {
             return new ArrayList<>();
         }
 
+        // Buscar el nombre real de la columna que mapea a 'codigo_identificacion'
+        String actualColumnName = findActualColumnName(subPortfolio, loadType, "codigo_identificacion");
+
+        if (actualColumnName == null) {
+            System.err.println("⚠️ No se encontró configuración de cabecera para 'codigo_identificacion' en subportfolio " +
+                              subPortfolio.getId() + ", loadType " + loadType);
+            // Fallback: intentar con el nombre sanitizado más común
+            actualColumnName = "codigo_identificacion";
+        }
+
+        System.out.println("🔍 Usando columna '" + actualColumnName + "' para filtrar por codigo_identificacion");
+
         // Construir placeholders para IN clause
         String placeholders = String.join(",", Collections.nCopies(identificationCodes.size(), "?"));
-        String sql = "SELECT * FROM " + tableName + " WHERE codigo_identificacion IN (" + placeholders + ")";
+        String sql = "SELECT * FROM " + tableName + " WHERE `" + actualColumnName + "` IN (" + placeholders + ")";
 
         List<Map<String, Object>> results = jdbcTemplate.queryForList(sql, identificationCodes.toArray());
         return results;
+    }
+
+    /**
+     * Busca el nombre real de la columna en la tabla dinámica que corresponde a un campo del sistema.
+     *
+     * @param subPortfolio SubPortfolio donde buscar la configuración
+     * @param loadType Tipo de carga (INICIAL, ACTUALIZACION, etc.)
+     * @param systemFieldCode Código del campo del sistema (ej: 'codigo_identificacion')
+     * @return El nombre sanitizado de la columna en la tabla dinámica, o null si no se encuentra
+     */
+    private String findActualColumnName(SubPortfolio subPortfolio, LoadType loadType, String systemFieldCode) {
+        List<HeaderConfiguration> headerConfigs = headerConfigurationRepository
+                .findBySubPortfolioAndLoadType(subPortfolio, loadType);
+
+        for (HeaderConfiguration config : headerConfigs) {
+            if (config.getFieldDefinition() != null &&
+                systemFieldCode.equals(config.getFieldDefinition().getFieldCode())) {
+                // Retornar el nombre sanitizado de la columna (como se guarda en la tabla dinámica)
+                return sanitizeColumnName(config.getHeaderName());
+            }
+        }
+
+        return null;
     }
 
     /**
