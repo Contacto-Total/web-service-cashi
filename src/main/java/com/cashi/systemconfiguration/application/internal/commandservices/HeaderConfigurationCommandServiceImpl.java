@@ -2204,9 +2204,27 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     Object[] args = new Object[columnsList.size() + 1];
                     for (int j = 0; j < columnsList.size(); j++) {
                         String colName = columnsList.get(j);
-                        Object value = findValueForColumn(row, colName, inicialHeaderMap);
-                        // Buscar el header correspondiente para conversión de tipo
+                        // Buscar el header correspondiente para obtener regex y tipo de dato
                         HeaderConfiguration header = findHeaderByColumnName(inicialHeaderMap, colName);
+
+                        // Buscar el valor usando sourceField si está configurado, si no usar nombre de columna directo
+                        Object value = null;
+                        if (header != null && header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
+                            // Buscar por sourceField primero (ej: IDENTITY_CODE -> documento)
+                            value = findValueBySourceField(row, header.getSourceField());
+                        }
+                        if (value == null) {
+                            value = findValueForColumn(row, colName, inicialHeaderMap);
+                        }
+
+                        // Aplicar regex si está configurado (para transformar D000080413598 -> 80413598)
+                        if (value != null && header != null && header.getRegexPattern() != null && !header.getRegexPattern().trim().isEmpty()) {
+                            String sourceStr = value.toString();
+                            value = applyRegexTransformation(sourceStr, header.getRegexPattern(), header.getHeaderName());
+                            logger.debug("🔄 Regex aplicado para {}: {} -> {}", colName, sourceStr, value);
+                        }
+
+                        // Convertir al tipo de dato correcto
                         args[j] = (value != null && header != null) ? convertValueForUpdate(value, header) : null;
                     }
                     args[columnsList.size()] = linkValue; // WHERE clause
@@ -2398,6 +2416,28 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                         }
                     }
                 }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Busca un valor en la fila usando el sourceField especificado.
+     * Útil para campos transformados donde el sourceField indica la columna origen (ej: IDENTITY_CODE -> documento)
+     */
+    private Object findValueBySourceField(Map<String, Object> row, String sourceField) {
+        if (sourceField == null || sourceField.trim().isEmpty()) {
+            return null;
+        }
+
+        // Buscar el valor directamente por sourceField
+        for (Map.Entry<String, Object> entry : row.entrySet()) {
+            String key = entry.getKey();
+            if (key.equalsIgnoreCase(sourceField) ||
+                key.equalsIgnoreCase(sourceField.trim()) ||
+                sanitizeColumnName(key).equalsIgnoreCase(sanitizeColumnName(sourceField))) {
+                return entry.getValue();
             }
         }
 
