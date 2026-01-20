@@ -397,7 +397,7 @@ public class CustomerController {
     */
 
     @Operation(summary = "Sincronizar clientes desde tabla dinámica de carga inicial",
-               description = "Lee clientes de la tabla dinámica ini_<prov>_<car>_<subcartera> y los sincroniza a la tabla clientes")
+               description = "Lee clientes de la tabla dinámica <prov>_<car>_<subcartera> (LoadType.INICIAL) y los sincroniza a la tabla clientes")
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Sincronización completada exitosamente"),
         @ApiResponse(responseCode = "400", description = "Error en sincronización")
@@ -449,7 +449,7 @@ public class CustomerController {
                description = "Lee clientes de una tabla dinámica especificada por nombre y los sincroniza")
     @PostMapping("/sync/table/{tableName}/{tenantId}")
     public ResponseEntity<?> syncCustomersFromTable(
-            @Parameter(description = "Nombre de la tabla", example = "ini_t01_pp_con") @PathVariable String tableName,
+            @Parameter(description = "Nombre de la tabla", example = "sam_mas_elm") @PathVariable String tableName,
             @Parameter(description = "ID del tenant", example = "1") @PathVariable Long tenantId) {
 
         System.out.println("🔄 POST /api/v1/customers/sync/table/" + tableName + "/" + tenantId);

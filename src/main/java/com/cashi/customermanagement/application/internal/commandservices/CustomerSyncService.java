@@ -23,7 +23,7 @@ import java.util.*;
 
 /**
  * Servicio para sincronizar clientes desde tablas dinámicas a tabla clientes.
- * Lee datos de tablas ini_<prov>_<car>_<subcartera> y los consolida en la tabla clientes.
+ * Lee datos de tablas <prov>_<car>_<subcartera> (LoadType.INICIAL) y los consolida en la tabla clientes.
  *
  * Optimizaciones implementadas:
  * - UPSERT batch para clientes (INSERT ... ON DUPLICATE KEY UPDATE)
@@ -476,16 +476,16 @@ public class CustomerSyncService {
     }
 
     /**
-     * Construye el nombre de la tabla dinámica de carga inicial
+     * Construye el nombre de la tabla dinámica según el tipo de carga
      */
     private String buildDynamicTableName(String tenantCode, String portfolioCode, String subPortfolioCode, LoadType loadType) {
-        String prefix = (loadType == LoadType.INICIAL) ? "ini_" : "";
-        return String.format("%s%s_%s_%s",
-                prefix,
+        String baseName = String.format("%s_%s_%s",
                 tenantCode.toLowerCase(),
                 portfolioCode.toLowerCase(),
                 subPortfolioCode.toLowerCase()
         );
+        // Usar el prefijo definido en LoadType
+        return loadType.getTablePrefix() + baseName;
     }
 
     /**

@@ -96,7 +96,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
             long executionTime = System.currentTimeMillis() - startTime;
             String archivePeriod = YearMonth.now().format(DateTimeFormatter.ofPattern("yyyy_MM"));
 
-            // Contar tablas archivadas (aproximación basada en tablas ini_)
+            // Contar tablas archivadas en el periodo
             int tablesArchived = countArchivedTables(archivePeriod);
 
             logger.info("✅ Snapshot global completado en {}ms. {} tablas archivadas para periodo {}",
@@ -130,17 +130,17 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
 
-        // SOLO archivamos la tabla INICIAL (ini_), NO la de actualización ni clientes
-        String tableIni = buildTableName(subPortfolio, LoadType.INICIAL);
+        // Archivamos la tabla INICIAL (tabla maestra de trabajo), NO la de actualización ni clientes
+        String tableInicialcial = buildTableName(subPortfolio, LoadType.INICIAL);
         String archivePeriod = YearMonth.now().format(DateTimeFormatter.ofPattern("yyyy_MM"));
 
         logger.info("🗄️ Iniciando snapshot para subcartera {} - Tabla inicial: {}",
-                subPortfolioId, tableIni);
+                subPortfolioId, tableInicial);
         long startTime = System.currentTimeMillis();
 
         try {
             // Ejecutar stored procedure (1 solo round-trip, transacción atómica en BD)
-            ArchiveResult archiveResult = callArchiveStoredProcedure(tableIni, archivePeriod);
+            ArchiveResult archiveResult = callArchiveStoredProcedure(tableInicial, archivePeriod);
 
             long executionTime = System.currentTimeMillis() - startTime;
 
@@ -221,7 +221,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
 
-        String tableIni = buildTableName(subPortfolio, LoadType.INICIAL);
+        String tableInicial = buildTableName(subPortfolio, LoadType.INICIAL);
 
         try {
             // Buscar tablas archivadas en la BD histórica
@@ -235,15 +235,15 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
                 """;
 
             List<String> archivedTables = jdbcTemplate.queryForList(
-                    sql, String.class, HISTORIC_DATABASE, tableIni + "_%");
+                    sql, String.class, HISTORIC_DATABASE, tableInicial + "_%");
 
             if (archivedTables.isEmpty()) {
                 return Optional.empty();
             }
 
-            // Extraer periodo del nombre de la tabla (ej: ini_sam_mas_elm_2025_01 -> 2025_01)
+            // Extraer periodo del nombre de la tabla (ej: sam_mas_elm_2025_01 -> 2025_01)
             String lastTable = archivedTables.get(0);
-            String period = lastTable.substring(tableIni.length() + 1); // +1 for the underscore
+            String period = lastTable.substring(tableInicial.length() + 1); // +1 for the underscore
             return Optional.of(period);
 
         } catch (Exception e) {
@@ -270,10 +270,8 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         String baseName = tenantCode + "_" + portfolioCode + "_" + subPortfolioCode;
         logger.info("  → baseName: {}", baseName);
 
-        if (loadType == LoadType.INICIAL) {
-            return "ini_" + baseName;
-        }
-        return baseName;
+        // Usar el prefijo definido en LoadType
+        return loadType.getTablePrefix() + baseName;
     }
 
     private boolean dynamicTableExists(String tableName) {
@@ -359,7 +357,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
 
-        // Tabla de actualización (sin prefijo ini_)
+        // Tabla de actualización (con prefijo ini_) - histórico diario
         String tableName = buildTableName(subPortfolio, LoadType.ACTUALIZACION);
         logger.info("✓ Nombre de tabla actualización: {}", tableName);
 
@@ -407,7 +405,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
 
-        // Tabla de actualización (sin prefijo ini_)
+        // Tabla de actualización (con prefijo ini_) - histórico diario
         String tableActualizacion = buildTableName(subPortfolio, LoadType.ACTUALIZACION);
         String archiveDate = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy_MM_dd"));
 

@@ -5,16 +5,19 @@ package com.cashi.shared.domain.model.valueobjects;
  */
 public enum LoadType {
     /**
-     * Carga inicial del mes - datos completos
-     * Tabla dinámica: ini_<codproveedor>_<codcartera>_<codsubcartera>
+     * Carga inicial del mes - datos completos (tabla maestra de trabajo)
+     * Tabla dinámica: <codproveedor>_<codcartera>_<codsubcartera> (sin prefijo)
+     * Ejemplo: sam_mas_elm
+     * Esta es la tabla principal usada por cashi-discador-backend
      */
-    INICIAL("Carga Inicial del Mes", "ini_"),
+    INICIAL("Carga Inicial del Mes", ""),
 
     /**
-     * Carga diaria - actualizaciones
-     * Tabla dinámica: <codproveedor>_<codcartera>_<codsubcartera> (sin prefijo)
+     * Carga diaria - actualizaciones (histórico diario)
+     * Tabla dinámica: ini_<codproveedor>_<codcartera>_<codsubcartera>
+     * Ejemplo: ini_sam_mas_elm
      */
-    ACTUALIZACION("Carga Diaria", "");
+    ACTUALIZACION("Carga Diaria", "ini_");
 
     private final String displayName;
     private final String tablePrefix;

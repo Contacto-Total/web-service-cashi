@@ -455,8 +455,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
     /**
      * Construye el nombre de la tabla dinámica basado en la subcartera y el tipo de carga
-     * INICIAL: ini_<codproveedor>_<codcartera>_<codsubcartera>
-     * ACTUALIZACION: <codproveedor>_<codcartera>_<codsubcartera> (sin prefijo)
+     * INICIAL: <codproveedor>_<codcartera>_<codsubcartera> (sin prefijo) - tabla maestra de trabajo
+     * ACTUALIZACION: ini_<codproveedor>_<codcartera>_<codsubcartera> - histórico diario
      */
     private String buildTableName(SubPortfolio subPortfolio, LoadType loadType) {
         String tenantCode = subPortfolio.getPortfolio().getTenant().getTenantCode().toLowerCase();

@@ -326,7 +326,7 @@ public class FileWatcherService {
             logger.info("Datos leídos: {} filas", data.size());
 
             // Importar a tabla dinámica usando HeaderConfigurationCommandService
-            // SOLO usa LoadType.ACTUALIZACION (tablas act_*)
+            // Usa LoadType.ACTUALIZACION (tablas con prefijo ini_)
             Map<String, Object> result = headerConfigService.importDataToTable(
                     subPortfolioId,
                     LoadType.ACTUALIZACION,
