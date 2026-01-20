@@ -131,7 +131,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
 
         // Archivamos la tabla INICIAL (tabla maestra de trabajo), NO la de actualización ni clientes
-        String tableInicialcial = buildTableName(subPortfolio, LoadType.INICIAL);
+        String tableInicial = buildTableName(subPortfolio, LoadType.INICIAL);
         String archivePeriod = YearMonth.now().format(DateTimeFormatter.ofPattern("yyyy_MM"));
 
         logger.info("🗄️ Iniciando snapshot para subcartera {} - Tabla inicial: {}",
