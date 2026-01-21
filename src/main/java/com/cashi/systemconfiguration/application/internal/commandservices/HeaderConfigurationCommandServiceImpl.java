@@ -2044,12 +2044,20 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 ));
             } else {
                 // Nueva cabecera a importar
+                Integer fieldDefId = sourceHeader.getFieldDefinition() != null
+                    ? sourceHeader.getFieldDefinition().getId()
+                    : null;
                 headersToImport.add(new HeaderPreviewItem(
                         sourceHeader.getHeaderName(),
                         sourceHeader.getDataType(),
                         sourceHeader.getDisplayLabel(),
                         aliasCount > 0,
-                        aliasCount
+                        aliasCount,
+                        fieldDefId,
+                        sourceHeader.getFormat(),
+                        sourceHeader.getRequired() != null && sourceHeader.getRequired() == 1,
+                        sourceHeader.getSourceField(),
+                        sourceHeader.getRegexPattern()
                 ));
             }
         }

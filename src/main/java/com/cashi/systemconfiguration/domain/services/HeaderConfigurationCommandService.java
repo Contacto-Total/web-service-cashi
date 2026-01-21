@@ -142,7 +142,13 @@ public interface HeaderConfigurationCommandService {
         String dataType,
         String displayLabel,
         boolean hasAliases,
-        int aliasCount
+        int aliasCount,
+        // Campos adicionales para permitir agregar a memoria en frontend
+        Integer fieldDefinitionId,
+        String format,
+        boolean required,
+        String sourceField,
+        String regexPattern
     ) {}
 
     record ConflictItem(
