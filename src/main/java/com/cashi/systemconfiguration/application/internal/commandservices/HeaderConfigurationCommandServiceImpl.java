@@ -1852,10 +1852,14 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
     // ==================== ACTUALIZACIÓN DE DATOS COMPLEMENTARIOS ====================
 
+    // Tamaño del batch para operaciones de UPDATE complementario
+    private static final int BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE = 500;
+
     @Override
     @Transactional
     public Map<String, Object> updateComplementaryDataInTable(Integer subPortfolioId, LoadType loadType,
                                                                List<Map<String, Object>> data, String linkField) {
+        long startTime = System.currentTimeMillis();
         logger.info("📦 Actualizando datos complementarios: subPortfolioId={}, loadType={}, linkField={}, rows={}",
                    subPortfolioId, loadType, linkField, data.size());
 
@@ -1876,127 +1880,227 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             throw new IllegalArgumentException("No hay cabeceras configuradas para esta subcartera y tipo de carga.");
         }
 
-        // Buscar la columna de enlace en las cabeceras configuradas
-        // El linkField del archivo puede tener un nombre diferente al de la tabla
-        String linkColumnName = null;
-        String normalizedLinkField = normalizeHeaderName(linkField);
+        // ========== OPTIMIZACIÓN 1: Cargar todas las columnas existentes en la tabla UNA SOLA VEZ ==========
+        Set<String> existingColumns = loadTableColumns(tableName);
+        logger.info("📊 Columnas existentes en tabla: {}", existingColumns.size());
 
+        // ========== OPTIMIZACIÓN 2: Pre-computar mapeo de cabeceras ==========
+        Map<String, HeaderConfiguration> headerMap = new HashMap<>();
         for (HeaderConfiguration header : headers) {
-            // Comparar con el nombre de la cabecera
-            if (normalizeHeaderName(header.getHeaderName()).equals(normalizedLinkField)) {
-                linkColumnName = sanitizeColumnName(header.getHeaderName());
-                logger.info("✅ Campo de enlace '{}' mapeado a columna '{}'", linkField, linkColumnName);
-                break;
+            String normalizedName = normalizeHeaderName(header.getHeaderName());
+            headerMap.put(normalizedName, header);
+        }
+
+        // Buscar la columna de enlace
+        String linkColumnName = findLinkColumnName(linkField, headers);
+        logger.info("✅ Campo de enlace '{}' mapeado a columna '{}'", linkField, linkColumnName);
+
+        // ========== OPTIMIZACIÓN 3: Identificar columnas a actualizar (solo una vez) ==========
+        if (data.isEmpty()) {
+            return buildComplementaryResult(0, 0, 0, 0, tableName, new ArrayList<>(), startTime);
+        }
+
+        // Obtener las columnas del primer registro para determinar estructura
+        Map<String, Object> sampleRow = data.get(0);
+        List<ColumnUpdateInfo> columnsToUpdate = new ArrayList<>();
+
+        for (String columnKey : sampleRow.keySet()) {
+            // Saltar el campo de enlace
+            if (normalizeHeaderName(columnKey).equals(normalizeHeaderName(linkField))) {
+                continue;
             }
-            // También buscar en sourceField (campos transformados)
-            if (header.getSourceField() != null && normalizeHeaderName(header.getSourceField()).equals(normalizedLinkField)) {
-                linkColumnName = sanitizeColumnName(header.getHeaderName());
-                logger.info("✅ Campo de enlace '{}' (sourceField) mapeado a columna '{}'", linkField, linkColumnName);
-                break;
+
+            String sanitizedColumn = sanitizeColumnName(columnKey);
+
+            // Verificar si la columna existe (usando el cache)
+            if (existingColumns.contains(sanitizedColumn.toLowerCase())) {
+                HeaderConfiguration matchingHeader = headerMap.get(normalizeHeaderName(columnKey));
+                columnsToUpdate.add(new ColumnUpdateInfo(columnKey, sanitizedColumn, matchingHeader));
+            } else {
+                logger.debug("Columna '{}' no existe en tabla, ignorando", sanitizedColumn);
             }
         }
 
-        // Si no se encontró en cabeceras, usar el nombre sanitizado directamente
-        if (linkColumnName == null) {
-            linkColumnName = sanitizeColumnName(linkField);
-            logger.warn("⚠️ Campo de enlace '{}' no encontrado en cabeceras configuradas, usando nombre directo: '{}'",
-                       linkField, linkColumnName);
+        if (columnsToUpdate.isEmpty()) {
+            logger.warn("No hay columnas válidas para actualizar");
+            return buildComplementaryResult(data.size(), 0, 0, data.size(), tableName,
+                List.of("No se encontraron columnas válidas para actualizar"), startTime);
         }
 
+        logger.info("📝 Columnas a actualizar: {}", columnsToUpdate.stream()
+            .map(c -> c.sanitizedName).toList());
+
+        // ========== OPTIMIZACIÓN 4: Construir SQL una sola vez ==========
+        String updateSql = buildComplementaryUpdateSql(tableName, columnsToUpdate, linkColumnName);
+        logger.debug("SQL de actualización: {}", updateSql);
+
+        // ========== OPTIMIZACIÓN 5: Procesar en batches ==========
         int updatedRows = 0;
         int notFoundRows = 0;
         int failedRows = 0;
         List<String> errors = new ArrayList<>();
 
-        // Procesar cada fila de datos
-        for (int i = 0; i < data.size(); i++) {
-            Map<String, Object> row = data.get(i);
+        int totalBatches = (int) Math.ceil((double) data.size() / BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE);
+        logger.info("📦 Procesando {} registros en {} batches de hasta {} registros",
+                   data.size(), totalBatches, BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE);
+
+        for (int batchNum = 0; batchNum < totalBatches; batchNum++) {
+            int startIdx = batchNum * BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE;
+            int endIdx = Math.min(startIdx + BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE, data.size());
+            List<Map<String, Object>> batch = data.subList(startIdx, endIdx);
+
             try {
-                // Obtener el valor del campo de enlace (case-insensitive)
-                Object linkValue = getValueFromRowData(row, linkField);
-                if (linkValue == null || linkValue.toString().trim().isEmpty()) {
-                    failedRows++;
-                    errors.add("Fila " + (i + 1) + ": Campo de enlace '" + linkField + "' vacío o nulo");
-                    continue;
-                }
+                int[] results = executeBatchComplementaryUpdate(batch, updateSql, columnsToUpdate, linkField, errors, startIdx);
 
-                String linkValueStr = linkValue.toString().trim();
-
-                // Construir la cláusula SET con las columnas a actualizar
-                StringBuilder setClause = new StringBuilder();
-                List<Object> values = new ArrayList<>();
-                boolean firstColumn = true;
-
-                for (Map.Entry<String, Object> entry : row.entrySet()) {
-                    String columnKey = entry.getKey();
-                    Object columnValue = entry.getValue();
-
-                    // Saltar el campo de enlace (no lo actualizamos)
-                    if (normalizeHeaderName(columnKey).equals(normalizeHeaderName(linkField))) {
-                        continue;
-                    }
-
-                    // Buscar la configuración de cabecera correspondiente
-                    HeaderConfiguration matchingHeader = null;
-                    for (HeaderConfiguration header : headers) {
-                        if (normalizeHeaderName(header.getHeaderName()).equals(normalizeHeaderName(columnKey))) {
-                            matchingHeader = header;
-                            break;
-                        }
-                    }
-
-                    String sanitizedColumn = sanitizeColumnName(columnKey);
-
-                    // Solo actualizar si la columna existe en la tabla
-                    if (columnExists(tableName, sanitizedColumn)) {
-                        if (!firstColumn) {
-                            setClause.append(", ");
-                        }
-                        setClause.append(sanitizedColumn).append(" = ?");
-                        values.add(convertValueForUpdate(columnValue, matchingHeader));
-                        firstColumn = false;
-                    } else {
-                        logger.debug("Columna '{}' no existe en tabla, ignorando", sanitizedColumn);
+                for (int i = 0; i < results.length; i++) {
+                    if (results[i] > 0) {
+                        updatedRows += results[i];
+                    } else if (results[i] == 0) {
+                        notFoundRows++;
                     }
                 }
 
-                if (values.isEmpty()) {
-                    logger.warn("Fila {} no tiene columnas válidas para actualizar", i + 1);
-                    continue;
-                }
-
-                // Ejecutar UPDATE
-                String sql = "UPDATE " + tableName + " SET " + setClause +
-                            " WHERE " + linkColumnName + " = ?";
-                values.add(linkValueStr);
-
-                int rowsAffected = jdbcTemplate.update(sql, values.toArray());
-
-                if (rowsAffected > 0) {
-                    updatedRows += rowsAffected;
-                    logger.debug("✅ Actualizado registro con {}={}: {} filas", linkField, linkValueStr, rowsAffected);
-                } else {
-                    notFoundRows++;
-                    logger.debug("⚠️ No se encontró registro con {}={}", linkField, linkValueStr);
+                if ((batchNum + 1) % 10 == 0 || batchNum == totalBatches - 1) {
+                    logger.info("📊 Progreso: {}/{} batches ({} registros procesados)",
+                               batchNum + 1, totalBatches, endIdx);
                 }
 
             } catch (Exception e) {
-                failedRows++;
-                errors.add("Fila " + (i + 1) + ": " + e.getMessage());
-                logger.error("Error actualizando fila {}: {}", i + 1, e.getMessage());
+                logger.error("Error en batch {}: {}", batchNum + 1, e.getMessage());
+                // Marcar todo el batch como fallido
+                failedRows += batch.size();
+                errors.add("Batch " + (batchNum + 1) + " falló: " + e.getMessage());
             }
         }
 
-        logger.info("✅ Actualización complementaria completada: {} actualizados, {} no encontrados, {} fallidos",
-                   updatedRows, notFoundRows, failedRows);
+        // Contar filas fallidas basado en errores individuales
+        failedRows = errors.size();
 
-        // Preparar respuesta
+        long duration = System.currentTimeMillis() - startTime;
+        logger.info("✅ Actualización complementaria completada en {}ms: {} actualizados, {} no encontrados, {} fallidos",
+                   duration, updatedRows, notFoundRows, failedRows);
+
+        return buildComplementaryResult(data.size(), updatedRows, notFoundRows, failedRows, tableName, errors, startTime);
+    }
+
+    /**
+     * Carga todas las columnas existentes en una tabla (optimización para evitar consultas repetidas)
+     */
+    private Set<String> loadTableColumns(String tableName) {
+        String safeTableName = validateAndSanitizeTableName(tableName);
+        String sql = "SELECT column_name FROM information_schema.columns " +
+                    "WHERE table_schema = DATABASE() AND table_name = ?";
+        List<String> columns = jdbcTemplate.queryForList(sql, String.class, safeTableName);
+        return columns.stream()
+            .map(String::toLowerCase)
+            .collect(java.util.stream.Collectors.toSet());
+    }
+
+    /**
+     * Encuentra el nombre de columna de enlace en las cabeceras
+     */
+    private String findLinkColumnName(String linkField, List<HeaderConfiguration> headers) {
+        String normalizedLinkField = normalizeHeaderName(linkField);
+
+        for (HeaderConfiguration header : headers) {
+            if (normalizeHeaderName(header.getHeaderName()).equals(normalizedLinkField)) {
+                return sanitizeColumnName(header.getHeaderName());
+            }
+            if (header.getSourceField() != null && normalizeHeaderName(header.getSourceField()).equals(normalizedLinkField)) {
+                return sanitizeColumnName(header.getHeaderName());
+            }
+        }
+
+        // Si no se encontró, usar nombre sanitizado directamente
+        logger.warn("⚠️ Campo de enlace '{}' no encontrado en cabeceras, usando nombre directo", linkField);
+        return sanitizeColumnName(linkField);
+    }
+
+    /**
+     * Información de una columna a actualizar
+     */
+    private record ColumnUpdateInfo(String originalName, String sanitizedName, HeaderConfiguration header) {}
+
+    /**
+     * Construye el SQL de UPDATE para carga complementaria
+     */
+    private String buildComplementaryUpdateSql(String tableName, List<ColumnUpdateInfo> columns, String linkColumnName) {
+        StringBuilder sql = new StringBuilder("UPDATE ");
+        sql.append(tableName);
+        sql.append(" SET ");
+
+        boolean first = true;
+        for (ColumnUpdateInfo col : columns) {
+            if (!first) {
+                sql.append(", ");
+            }
+            sql.append(col.sanitizedName).append(" = ?");
+            first = false;
+        }
+
+        sql.append(" WHERE ").append(linkColumnName).append(" = ?");
+        return sql.toString();
+    }
+
+    /**
+     * Ejecuta un batch de actualizaciones complementarias
+     */
+    private int[] executeBatchComplementaryUpdate(List<Map<String, Object>> batch, String sql,
+                                                   List<ColumnUpdateInfo> columnsToUpdate, String linkField,
+                                                   List<String> errors, int startIdx) {
+        List<Object[]> batchArgs = new ArrayList<>();
+
+        for (int i = 0; i < batch.size(); i++) {
+            Map<String, Object> row = batch.get(i);
+            int rowNum = startIdx + i + 1;
+
+            try {
+                // Obtener valor del campo de enlace
+                Object linkValue = getValueFromRowData(row, linkField);
+                if (linkValue == null || linkValue.toString().trim().isEmpty()) {
+                    errors.add("Fila " + rowNum + ": Campo de enlace vacío");
+                    continue;
+                }
+
+                // Preparar valores para el UPDATE
+                Object[] args = new Object[columnsToUpdate.size() + 1];
+                int idx = 0;
+
+                for (ColumnUpdateInfo col : columnsToUpdate) {
+                    Object value = getValueFromRowData(row, col.originalName);
+                    args[idx++] = convertValueForUpdate(value, col.header);
+                }
+
+                // Último parámetro: valor del campo de enlace para WHERE
+                args[idx] = linkValue.toString().trim();
+                batchArgs.add(args);
+
+            } catch (Exception e) {
+                errors.add("Fila " + rowNum + ": " + e.getMessage());
+            }
+        }
+
+        if (batchArgs.isEmpty()) {
+            return new int[0];
+        }
+
+        // Ejecutar batch update
+        return jdbcTemplate.batchUpdate(sql, batchArgs);
+    }
+
+    /**
+     * Construye el resultado de la operación complementaria
+     */
+    private Map<String, Object> buildComplementaryResult(int totalRows, int updatedRows, int notFoundRows,
+                                                          int failedRows, String tableName, List<String> errors,
+                                                          long startTime) {
         Map<String, Object> result = new HashMap<>();
-        result.put("totalRows", data.size());
+        result.put("totalRows", totalRows);
         result.put("updatedRows", updatedRows);
         result.put("notFoundRows", notFoundRows);
         result.put("failedRows", failedRows);
         result.put("tableName", tableName);
+        result.put("durationMs", System.currentTimeMillis() - startTime);
 
         if (!errors.isEmpty()) {
             result.put("errors", errors.size() > 10 ? errors.subList(0, 10) : errors);
