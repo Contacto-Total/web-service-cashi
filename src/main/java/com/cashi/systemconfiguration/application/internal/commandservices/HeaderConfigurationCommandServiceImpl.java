@@ -1853,7 +1853,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     // ==================== ACTUALIZACIÓN DE DATOS COMPLEMENTARIOS ====================
 
     // Tamaño del batch para operaciones de UPDATE complementario
-    private static final int BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE = 500;
+    private static final int BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE = 1; // TODO: Cambiar a 500 después de pruebas
 
     @Override
     @Transactional
