@@ -2456,4 +2456,252 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         }
         return null;
     }
+
+    // ==================== Import from SubPortfolio ====================
+
+    @Override
+    @Transactional(readOnly = true)
+    public ImportPreviewResult previewImportFromSubPortfolio(Integer targetSubPortfolioId,
+                                                              Integer sourceSubPortfolioId,
+                                                              LoadType loadType) {
+        // Validaciones
+        if (targetSubPortfolioId == null || sourceSubPortfolioId == null) {
+            throw new IllegalArgumentException("Los IDs de subcartera origen y destino son obligatorios");
+        }
+        if (loadType == null) {
+            throw new IllegalArgumentException("El tipo de carga es obligatorio");
+        }
+        if (targetSubPortfolioId.equals(sourceSubPortfolioId)) {
+            throw new IllegalArgumentException("La subcartera origen y destino no pueden ser la misma");
+        }
+
+        // Obtener subcarteras
+        SubPortfolio sourceSubPortfolio = subPortfolioRepository.findById(sourceSubPortfolioId)
+                .orElseThrow(() -> new IllegalArgumentException("Subcartera origen no encontrada: " + sourceSubPortfolioId));
+        SubPortfolio targetSubPortfolio = subPortfolioRepository.findById(targetSubPortfolioId)
+                .orElseThrow(() -> new IllegalArgumentException("Subcartera destino no encontrada: " + targetSubPortfolioId));
+
+        // Obtener cabeceras de origen y destino
+        List<HeaderConfiguration> sourceHeaders = headerConfigurationRepository
+                .findBySubPortfolioAndLoadType(sourceSubPortfolio, loadType);
+        List<HeaderConfiguration> targetHeaders = headerConfigurationRepository
+                .findBySubPortfolioAndLoadType(targetSubPortfolio, loadType);
+
+        // Crear set de nombres de cabeceras destino para búsqueda rápida
+        Set<String> targetHeaderNames = new HashSet<>();
+        Map<String, HeaderConfiguration> targetHeaderMap = new HashMap<>();
+        for (HeaderConfiguration header : targetHeaders) {
+            String normalizedName = header.getHeaderName().toLowerCase().trim();
+            targetHeaderNames.add(normalizedName);
+            targetHeaderMap.put(normalizedName, header);
+        }
+
+        // Clasificar cabeceras
+        List<HeaderPreviewItem> headersToImport = new ArrayList<>();
+        List<ConflictItem> conflicts = new ArrayList<>();
+
+        for (HeaderConfiguration sourceHeader : sourceHeaders) {
+            String normalizedName = sourceHeader.getHeaderName().toLowerCase().trim();
+            int aliasCount = sourceHeader.getAliases() != null ? sourceHeader.getAliases().size() : 0;
+
+            if (targetHeaderNames.contains(normalizedName)) {
+                // Conflicto: existe en destino
+                HeaderConfiguration targetHeader = targetHeaderMap.get(normalizedName);
+                conflicts.add(new ConflictItem(
+                        sourceHeader.getHeaderName(),
+                        sourceHeader.getDisplayLabel(),
+                        targetHeader.getDisplayLabel()
+                ));
+            } else {
+                // Nueva cabecera a importar
+                headersToImport.add(new HeaderPreviewItem(
+                        sourceHeader.getHeaderName(),
+                        sourceHeader.getDataType(),
+                        sourceHeader.getDisplayLabel(),
+                        aliasCount > 0,
+                        aliasCount
+                ));
+            }
+        }
+
+        return new ImportPreviewResult(
+                sourceSubPortfolioId,
+                sourceSubPortfolio.getSubPortfolioName(),
+                targetSubPortfolioId,
+                targetSubPortfolio.getSubPortfolioName(),
+                loadType,
+                headersToImport,
+                conflicts,
+                headersToImport.size(),
+                conflicts.size()
+        );
+    }
+
+    @Override
+    @Transactional
+    public ImportResult importFromSubPortfolio(Integer targetSubPortfolioId,
+                                                Integer sourceSubPortfolioId,
+                                                LoadType loadType,
+                                                String conflictResolution,
+                                                List<String> headersToReplace) {
+        // Validaciones
+        if (targetSubPortfolioId == null || sourceSubPortfolioId == null) {
+            throw new IllegalArgumentException("Los IDs de subcartera origen y destino son obligatorios");
+        }
+        if (loadType == null) {
+            throw new IllegalArgumentException("El tipo de carga es obligatorio");
+        }
+        if (conflictResolution == null || conflictResolution.trim().isEmpty()) {
+            throw new IllegalArgumentException("La resolución de conflictos es obligatoria");
+        }
+        if (targetSubPortfolioId.equals(sourceSubPortfolioId)) {
+            throw new IllegalArgumentException("La subcartera origen y destino no pueden ser la misma");
+        }
+
+        // Normalizar conflictResolution
+        String resolution = conflictResolution.toUpperCase().trim();
+        if (!resolution.equals("SKIP") && !resolution.equals("REPLACE") && !resolution.equals("SELECTIVE")) {
+            throw new IllegalArgumentException("Resolución de conflictos inválida: " + conflictResolution + ". Use SKIP, REPLACE o SELECTIVE");
+        }
+
+        // Obtener subcarteras
+        SubPortfolio sourceSubPortfolio = subPortfolioRepository.findById(sourceSubPortfolioId)
+                .orElseThrow(() -> new IllegalArgumentException("Subcartera origen no encontrada: " + sourceSubPortfolioId));
+        SubPortfolio targetSubPortfolio = subPortfolioRepository.findById(targetSubPortfolioId)
+                .orElseThrow(() -> new IllegalArgumentException("Subcartera destino no encontrada: " + targetSubPortfolioId));
+
+        // Obtener cabeceras de origen y destino
+        List<HeaderConfiguration> sourceHeaders = headerConfigurationRepository
+                .findBySubPortfolioAndLoadType(sourceSubPortfolio, loadType);
+        List<HeaderConfiguration> targetHeaders = headerConfigurationRepository
+                .findBySubPortfolioAndLoadType(targetSubPortfolio, loadType);
+
+        // Crear map de cabeceras destino
+        Map<String, HeaderConfiguration> targetHeaderMap = new HashMap<>();
+        for (HeaderConfiguration header : targetHeaders) {
+            targetHeaderMap.put(header.getHeaderName().toLowerCase().trim(), header);
+        }
+
+        // Crear set de headers a reemplazar (normalizado)
+        Set<String> headersToReplaceSet = new HashSet<>();
+        if (headersToReplace != null) {
+            for (String h : headersToReplace) {
+                headersToReplaceSet.add(h.toLowerCase().trim());
+            }
+        }
+
+        int headersImported = 0;
+        int headersSkipped = 0;
+        int headersReplaced = 0;
+        int aliasesImported = 0;
+        List<String> errors = new ArrayList<>();
+
+        for (HeaderConfiguration sourceHeader : sourceHeaders) {
+            String normalizedName = sourceHeader.getHeaderName().toLowerCase().trim();
+            HeaderConfiguration existingTarget = targetHeaderMap.get(normalizedName);
+
+            try {
+                if (existingTarget != null) {
+                    // Hay conflicto
+                    boolean shouldReplace = false;
+
+                    if (resolution.equals("REPLACE")) {
+                        shouldReplace = true;
+                    } else if (resolution.equals("SELECTIVE")) {
+                        shouldReplace = headersToReplaceSet.contains(normalizedName);
+                    }
+                    // SKIP: shouldReplace = false
+
+                    if (shouldReplace) {
+                        // Eliminar cabecera existente (cascade elimina aliases)
+                        headerConfigurationRepository.delete(existingTarget);
+                        headerConfigurationRepository.flush();
+
+                        // Copiar cabecera de origen
+                        int aliasesCopied = copyHeaderConfiguration(sourceHeader, targetSubPortfolio, loadType);
+                        headersReplaced++;
+                        aliasesImported += aliasesCopied;
+                    } else {
+                        headersSkipped++;
+                    }
+                } else {
+                    // No hay conflicto, copiar directamente
+                    int aliasesCopied = copyHeaderConfiguration(sourceHeader, targetSubPortfolio, loadType);
+                    headersImported++;
+                    aliasesImported += aliasesCopied;
+                }
+            } catch (Exception e) {
+                errors.add("Error al importar cabecera '" + sourceHeader.getHeaderName() + "': " + e.getMessage());
+                logger.error("Error al importar cabecera '{}': {}", sourceHeader.getHeaderName(), e.getMessage());
+            }
+        }
+
+        logger.info("Importación de cabeceras completada: {} importadas, {} reemplazadas, {} omitidas, {} aliases, {} errores",
+                headersImported, headersReplaced, headersSkipped, aliasesImported, errors.size());
+
+        return new ImportResult(
+                errors.isEmpty(),
+                headersImported,
+                headersSkipped,
+                headersReplaced,
+                aliasesImported,
+                errors
+        );
+    }
+
+    /**
+     * Copia una configuración de cabecera de origen a la subcartera destino, incluyendo aliases.
+     *
+     * @param sourceHeader Cabecera origen a copiar
+     * @param targetSubPortfolio Subcartera destino
+     * @param loadType Tipo de carga
+     * @return Número de aliases copiados
+     */
+    private int copyHeaderConfiguration(HeaderConfiguration sourceHeader, SubPortfolio targetSubPortfolio, LoadType loadType) {
+        HeaderConfiguration newHeader;
+
+        if (sourceHeader.getFieldDefinition() != null) {
+            // Cabecera vinculada al catálogo
+            newHeader = new HeaderConfiguration(
+                    targetSubPortfolio,
+                    sourceHeader.getFieldDefinition(),
+                    sourceHeader.getHeaderName(),
+                    sourceHeader.getDisplayLabel(),
+                    sourceHeader.getFormat(),
+                    sourceHeader.getRequired(),
+                    loadType
+            );
+        } else {
+            // Cabecera personalizada
+            newHeader = new HeaderConfiguration(
+                    targetSubPortfolio,
+                    sourceHeader.getHeaderName(),
+                    sourceHeader.getDataType(),
+                    sourceHeader.getDisplayLabel(),
+                    sourceHeader.getFormat(),
+                    sourceHeader.getRequired(),
+                    loadType
+            );
+        }
+
+        // Copiar campos de transformación
+        newHeader.setSourceField(sourceHeader.getSourceField());
+        newHeader.setRegexPattern(sourceHeader.getRegexPattern());
+
+        // Guardar la cabecera
+        HeaderConfiguration savedHeader = headerConfigurationRepository.save(newHeader);
+
+        // Copiar aliases
+        int aliasesCopied = 0;
+        if (sourceHeader.getAliases() != null && !sourceHeader.getAliases().isEmpty()) {
+            for (var sourceAlias : sourceHeader.getAliases()) {
+                savedHeader.addAlias(sourceAlias.getAlias(), sourceAlias.isPrincipal());
+                aliasesCopied++;
+            }
+            // Guardar con aliases
+            headerConfigurationRepository.save(savedHeader);
+        }
+
+        return aliasesCopied;
+    }
 }

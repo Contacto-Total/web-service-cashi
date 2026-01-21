@@ -91,4 +91,72 @@ public interface HeaderConfigurationCommandService {
         String sourceField,
         String regexPattern
     ) {}
+
+    // ==================== Import from SubPortfolio ====================
+
+    /**
+     * Preview de importación de cabeceras desde otra subcartera.
+     * Identifica qué cabeceras se importarían y cuáles tienen conflictos.
+     *
+     * @param targetSubPortfolioId ID de la subcartera destino
+     * @param sourceSubPortfolioId ID de la subcartera origen
+     * @param loadType Tipo de carga a importar
+     * @return Preview con cabeceras a importar y conflictos
+     */
+    ImportPreviewResult previewImportFromSubPortfolio(Integer targetSubPortfolioId,
+                                                       Integer sourceSubPortfolioId,
+                                                       LoadType loadType);
+
+    /**
+     * Ejecuta la importación de cabeceras desde otra subcartera.
+     *
+     * @param targetSubPortfolioId ID de la subcartera destino
+     * @param sourceSubPortfolioId ID de la subcartera origen
+     * @param loadType Tipo de carga a importar
+     * @param conflictResolution Cómo resolver conflictos: "SKIP", "REPLACE", "SELECTIVE"
+     * @param headersToReplace Lista de headerNames a reemplazar (solo para SELECTIVE)
+     * @return Resultado con estadísticas de la importación
+     */
+    ImportResult importFromSubPortfolio(Integer targetSubPortfolioId,
+                                         Integer sourceSubPortfolioId,
+                                         LoadType loadType,
+                                         String conflictResolution,
+                                         List<String> headersToReplace);
+
+    // Records para importación desde subcartera
+
+    record ImportPreviewResult(
+        Integer sourceSubPortfolioId,
+        String sourceSubPortfolioName,
+        Integer targetSubPortfolioId,
+        String targetSubPortfolioName,
+        LoadType loadType,
+        List<HeaderPreviewItem> headersToImport,
+        List<ConflictItem> conflicts,
+        int totalNew,
+        int totalConflicts
+    ) {}
+
+    record HeaderPreviewItem(
+        String headerName,
+        String dataType,
+        String displayLabel,
+        boolean hasAliases,
+        int aliasCount
+    ) {}
+
+    record ConflictItem(
+        String headerName,
+        String sourceDisplayLabel,
+        String targetDisplayLabel
+    ) {}
+
+    record ImportResult(
+        boolean success,
+        int headersImported,
+        int headersSkipped,
+        int headersReplaced,
+        int aliasesImported,
+        List<String> errors
+    ) {}
 }

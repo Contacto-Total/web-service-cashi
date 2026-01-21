@@ -694,4 +694,49 @@ public class HeaderConfigurationController {
                     .body(Map.of("message", e.getMessage()));
         }
     }
+
+    // ========== ENDPOINTS PARA IMPORTAR DESDE OTRA SUBCARTERA ==========
+
+    @Operation(summary = "Preview de importación de cabeceras desde otra subcartera",
+               description = "Muestra qué cabeceras se importarían y cuáles tienen conflictos con la subcartera destino")
+    @GetMapping("/subportfolio/{targetId}/import-preview")
+    public ResponseEntity<?> previewImportFromSubPortfolio(
+            @PathVariable Integer targetId,
+            @RequestParam Integer sourceSubPortfolioId,
+            @RequestParam LoadType loadType) {
+        try {
+            var result = commandService.previewImportFromSubPortfolio(targetId, sourceSubPortfolioId, loadType);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Error al generar preview: " + e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Importar configuración de cabeceras desde otra subcartera",
+               description = "Copia las configuraciones de cabeceras (incluyendo aliases) desde una subcartera origen. " +
+                           "Opciones de resolución de conflictos: SKIP (omitir duplicados), REPLACE (reemplazar todos), " +
+                           "SELECTIVE (reemplazar solo los especificados en headersToReplace)")
+    @PostMapping("/subportfolio/{targetId}/import-from-subportfolio")
+    public ResponseEntity<?> importFromSubPortfolio(
+            @PathVariable Integer targetId,
+            @RequestBody ImportFromSubPortfolioRequest request) {
+        try {
+            var result = commandService.importFromSubPortfolio(
+                    targetId,
+                    request.sourceSubPortfolioId(),
+                    request.loadType(),
+                    request.conflictResolution(),
+                    request.headersToReplace()
+            );
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Error al importar cabeceras: " + e.getMessage()));
+        }
+    }
 }
