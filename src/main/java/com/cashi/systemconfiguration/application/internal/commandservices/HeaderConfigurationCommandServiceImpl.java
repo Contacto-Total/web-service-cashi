@@ -352,6 +352,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 case "TEXTO" -> "VARCHAR(255)";
                 case "NUMERICO" -> "DECIMAL(18,2)";
                 case "FECHA" -> "DATE";
+                case "BOOLEANO", "BOOLEAN" -> "BIT";
                 default -> "VARCHAR(255)";
             };
         }
@@ -409,6 +410,15 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     "Formato inválido para tipo FECHA: '" + format + "'. " +
                     "Formatos válidos: DATE, DATETIME, DATETIME(n), TIMESTAMP, TIMESTAMP(n) o patrones de fecha como 'dd/MM/yyyy'"
                 );
+
+            case "BOOLEANO":
+            case "BOOLEAN":
+                // Para BOOLEANO, el formato puede ser BIT o TINYINT
+                if (formatUpper.equals("BIT") || formatUpper.equals("TINYINT") ||
+                    formatUpper.equals("BOOLEAN")) {
+                    return formatUpper.equals("BOOLEAN") ? "BIT" : formatUpper;
+                }
+                return "BIT"; // Default para booleano
 
             default:
                 return "VARCHAR(255)";
@@ -1421,6 +1431,25 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                             throw new IllegalArgumentException("Valor no es fecha válida para campo " + header.getHeaderName() + ": " + value +
                                 " (formato esperado: " + (header.getFormat() != null ? header.getFormat() : "auto-detectado") + ")" +
                                 " - Error: " + e.getMessage());
+                        }
+                        break;
+                    case "BOOLEANO":
+                    case "BOOLEAN":
+                        // Convertir a booleano (1 o 0 para BIT en SQL Server)
+                        try {
+                            if (value instanceof Boolean) {
+                                values.add((Boolean) value ? 1 : 0);
+                            } else {
+                                String boolStr = value.toString().trim().toLowerCase();
+                                boolean boolValue = boolStr.equals("true") || boolStr.equals("1") ||
+                                    boolStr.equals("si") || boolStr.equals("sí") ||
+                                    boolStr.equals("yes") || boolStr.equals("verdadero") ||
+                                    boolStr.equals("v") || boolStr.equals("y") ||
+                                    boolStr.equals("activo") || boolStr.equals("habilitado");
+                                values.add(boolValue ? 1 : 0);
+                            }
+                        } catch (Exception e) {
+                            throw new IllegalArgumentException("Valor no es booleano válido para campo " + header.getHeaderName() + ": " + value);
                         }
                         break;
                     case "TEXTO":

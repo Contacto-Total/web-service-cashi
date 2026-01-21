@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 
 /**
  * Utilidad para validación completa de tipos de datos
- * Soporta: TEXTO, NUMERICO, FECHA, EMAIL, TELEFONO, URL, DNI, RUC
+ * Soporta: TEXTO, NUMERICO, FECHA, BOOLEANO, EMAIL, TELEFONO, URL, DNI, RUC
  */
 public final class DataTypeValidator {
 
@@ -72,7 +72,7 @@ public final class DataTypeValidator {
      * Valida y convierte un valor según el tipo de dato especificado
      *
      * @param value Valor a validar (puede ser null)
-     * @param dataType Tipo de dato (TEXTO, NUMERICO, FECHA, EMAIL, TELEFONO, URL, DNI, RUC, CE)
+     * @param dataType Tipo de dato (TEXTO, NUMERICO, FECHA, BOOLEANO, EMAIL, TELEFONO, URL, DNI, RUC, CE)
      * @param format Formato específico (para fechas y números)
      * @param fieldName Nombre del campo (para mensajes de error)
      * @param required Si el campo es obligatorio
@@ -103,6 +103,10 @@ public final class DataTypeValidator {
 
                 case "FECHA":
                     return validateDate(value, strValue, format, fieldName);
+
+                case "BOOLEANO":
+                case "BOOLEAN":
+                    return validateBoolean(value, strValue, fieldName);
 
                 case "EMAIL":
                     return validateEmail(strValue, fieldName);
@@ -193,6 +197,39 @@ public final class DataTypeValidator {
         }
     }
 
+    private static ValidationResult validateBoolean(Object value, String strValue, String fieldName) {
+        // Si ya es Boolean, retornar directamente
+        if (value instanceof Boolean) {
+            return ValidationResult.success(value);
+        }
+
+        // Normalizar el string para comparación
+        String normalized = strValue.toLowerCase().trim();
+
+        // Valores que representan TRUE
+        if (normalized.equals("true") || normalized.equals("1") ||
+            normalized.equals("si") || normalized.equals("sí") ||
+            normalized.equals("yes") || normalized.equals("verdadero") ||
+            normalized.equals("v") || normalized.equals("y") ||
+            normalized.equals("activo") || normalized.equals("habilitado")) {
+            return ValidationResult.success(true);
+        }
+
+        // Valores que representan FALSE
+        if (normalized.equals("false") || normalized.equals("0") ||
+            normalized.equals("no") || normalized.equals("falso") ||
+            normalized.equals("f") || normalized.equals("n") ||
+            normalized.equals("inactivo") || normalized.equals("deshabilitado")) {
+            return ValidationResult.success(false);
+        }
+
+        // Valor no reconocido como booleano
+        return ValidationResult.failure(
+            "Valor no es booleano válido para campo '" + fieldName + "': " + strValue +
+            " (valores válidos: true/false, 1/0, si/no, yes/no, verdadero/falso)"
+        );
+    }
+
     private static ValidationResult validateEmail(String strValue, String fieldName) {
         if (!EMAIL_PATTERN.matcher(strValue).matches()) {
             return ValidationResult.failure(
@@ -271,8 +308,9 @@ public final class DataTypeValidator {
     public static boolean isSupportedDataType(String dataType) {
         if (dataType == null) return false;
         return switch (dataType.toUpperCase()) {
-            case "TEXTO", "NUMERICO", "FECHA", "EMAIL", "TELEFONO", "PHONE",
-                 "URL", "DNI", "RUC", "CE", "CARNET_EXTRANJERIA" -> true;
+            case "TEXTO", "NUMERICO", "FECHA", "BOOLEANO", "BOOLEAN",
+                 "EMAIL", "TELEFONO", "PHONE", "URL", "DNI", "RUC",
+                 "CE", "CARNET_EXTRANJERIA" -> true;
             default -> false;
         };
     }
