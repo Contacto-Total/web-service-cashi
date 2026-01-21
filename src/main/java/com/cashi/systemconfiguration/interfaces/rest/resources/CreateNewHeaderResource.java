@@ -9,7 +9,7 @@ public record CreateNewHeaderResource(
     Integer subPortfolioId,
     LoadType loadType,
     String headerName,
-    String dataType,        // TEXTO, NUMERICO, FECHA
+    String dataType,        // TEXTO, NUMERICO, FECHA, BOOLEANO
     String displayLabel,
     String format,
     boolean required,

@@ -48,7 +48,7 @@ public class FieldDefinition {
     private String description;
 
     /**
-     * Tipo de dato del campo (TEXTO, NUMERICO, FECHA)
+     * Tipo de dato del campo (TEXTO, NUMERICO, FECHA, BOOLEANO)
      */
     @Column(name = "tipo_dato", nullable = false, length = 20)
     private String dataType;

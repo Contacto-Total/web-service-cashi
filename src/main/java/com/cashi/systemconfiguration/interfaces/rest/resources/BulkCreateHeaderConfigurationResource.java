@@ -24,7 +24,7 @@ public record BulkCreateHeaderConfigurationResource(
         @Schema(description = "Nombre de la cabecera tal como viene del proveedor", example = "DNI", required = true)
         String headerName,
 
-        @Schema(description = "Tipo de dato (TEXTO, NUMERICO, FECHA)", example = "TEXTO", required = true)
+        @Schema(description = "Tipo de dato (TEXTO, NUMERICO, FECHA, BOOLEANO)", example = "TEXTO", required = true)
         String dataType,
 
         @Schema(description = "Etiqueta visual para mostrar en UI", example = "Número de Documento", required = true)

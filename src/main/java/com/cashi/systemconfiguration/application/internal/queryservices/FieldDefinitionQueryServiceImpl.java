@@ -31,8 +31,8 @@ public class FieldDefinitionQueryServiceImpl implements FieldDefinitionQueryServ
     @Override
     public List<FieldDefinition> getAllActiveByDataType(String dataType) {
         String normalizedType = dataType.toUpperCase();
-        if (!normalizedType.equals("TEXTO") && !normalizedType.equals("NUMERICO") && !normalizedType.equals("FECHA")) {
-            throw new IllegalArgumentException("Tipo de dato inválido: " + dataType + ". Use: TEXTO, NUMERICO o FECHA");
+        if (!normalizedType.equals("TEXTO") && !normalizedType.equals("NUMERICO") && !normalizedType.equals("FECHA") && !normalizedType.equals("BOOLEANO")) {
+            throw new IllegalArgumentException("Tipo de dato inválido: " + dataType + ". Use: TEXTO, NUMERICO, FECHA o BOOLEANO");
         }
         return fieldDefinitionRepository.findByDataType(normalizedType);
     }

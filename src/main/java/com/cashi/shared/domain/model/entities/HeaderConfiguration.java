@@ -53,7 +53,7 @@ public class HeaderConfiguration {
 
     /**
      * Tipo de dato (heredado del catálogo pero almacenado por performance)
-     * Valores: TEXTO, NUMERICO, FECHA
+     * Valores: TEXTO, NUMERICO, FECHA, BOOLEANO
      */
     @Column(name = "tipo_dato", nullable = false, length = 20)
     private String dataType;

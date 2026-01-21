@@ -106,8 +106,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             }
 
             // Validar que dataType sea válido
-            if (!List.of("TEXTO", "NUMERICO", "FECHA").contains(dataType.toUpperCase())) {
-                throw new IllegalArgumentException("DataType inválido: " + dataType + ". Valores válidos: TEXTO, NUMERICO, FECHA");
+            if (!List.of("TEXTO", "NUMERICO", "FECHA", "BOOLEANO").contains(dataType.toUpperCase())) {
+                throw new IllegalArgumentException("DataType inválido: " + dataType + ". Valores válidos: TEXTO, NUMERICO, FECHA, BOOLEANO");
             }
 
             // Crear configuración de campo personalizado
@@ -237,8 +237,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 }
 
                 // Validar que dataType sea válido
-                if (!List.of("TEXTO", "NUMERICO", "FECHA").contains(data.dataType().toUpperCase())) {
-                    throw new IllegalArgumentException("DataType inválido para campo personalizado: " + data.dataType() + ". Valores válidos: TEXTO, NUMERICO, FECHA");
+                if (!List.of("TEXTO", "NUMERICO", "FECHA", "BOOLEANO").contains(data.dataType().toUpperCase())) {
+                    throw new IllegalArgumentException("DataType inválido para campo personalizado: " + data.dataType() + ". Valores válidos: TEXTO, NUMERICO, FECHA, BOOLEANO");
                 }
 
                 // Crear configuración de campo personalizado
