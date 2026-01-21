@@ -11,6 +11,8 @@ import com.cashi.shared.infrastructure.persistence.jpa.repositories.HeaderConfig
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.SubPortfolioRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +34,8 @@ import java.util.*;
  */
 @Service
 public class CustomerSyncService {
+
+    private static final Logger logger = LoggerFactory.getLogger(CustomerSyncService.class);
 
     @PersistenceContext
     private final EntityManager entityManager;
@@ -59,7 +63,7 @@ public class CustomerSyncService {
      */
     @Transactional
     public SyncResult syncCustomersFromTable(String tableName, Long tenantId) {
-        System.out.println("🔄 Iniciando sincronización de clientes desde tabla: " + tableName);
+        logger.info("Iniciando sincronización de clientes desde tabla: {}", tableName);
 
         int customersCreated = 0;
         int customersUpdated = 0;
@@ -128,17 +132,14 @@ public class CustomerSyncService {
             // ========== BATCH SAVE: Guardar todos los clientes con UPSERT ==========
             if (!customersToSave.isEmpty()) {
                 Map<String, Long> savedIdsMap = saveCustomersToProductionTableWithUpsert(customersToSave);
-                System.out.println("✅ " + savedIdsMap.size() + " clientes procesados en tabla clientes");
-
-                // Sincronizar contactos en batch
                 int contactsCreated = syncAllCustomerContactsBatch(savedIdsMap, customersToSave, rowsToSync, "metodos_contacto");
-                System.out.println("📞 " + contactsCreated + " contactos sincronizados en tabla metodos_contacto");
+                logger.info("Sincronización completada: {} clientes, {} contactos", savedIdsMap.size(), contactsCreated);
             }
 
             return new SyncResult(customersCreated, customersUpdated, errors);
 
         } catch (Exception e) {
-            System.err.println("❌ Error fatal en sincronización: " + e.getMessage());
+            logger.error("Error en sincronización desde tabla {}: {}", tableName, e.getMessage(), e);
             throw new RuntimeException("Error en sincronización de clientes: " + e.getMessage(), e);
         }
     }
@@ -148,16 +149,14 @@ public class CustomerSyncService {
      */
     @Transactional
     public SyncResult syncCustomersFromSubPortfolio(Long subPortfolioId, LoadType loadType) {
-        System.out.println("🔄 Iniciando sincronización de clientes para SubPortfolio ID: " + subPortfolioId + ", LoadType: " + loadType);
+        logger.info("Sincronizando clientes para SubPortfolio: {}, LoadType: {}", subPortfolioId, loadType);
 
-        // 1. Obtener SubPortfolio con sus relaciones
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("SubPortfolio no encontrado: " + subPortfolioId));
 
         Portfolio portfolio = subPortfolio.getPortfolio();
         Tenant tenant = portfolio.getTenant();
 
-        // 2. Construir nombre de tabla dinámica
         String tableName = buildDynamicTableName(
                 tenant.getTenantCode(),
                 portfolio.getPortfolioCode(),
@@ -165,7 +164,7 @@ public class CustomerSyncService {
                 loadType
         );
 
-        System.out.println("📊 Tabla dinámica: " + tableName);
+        logger.debug("Tabla dinámica: {}", tableName);
 
         int customersCreated = 0;
         int customersUpdated = 0;
@@ -243,17 +242,15 @@ public class CustomerSyncService {
             // ========== BATCH SAVE: Guardar todos los clientes con UPSERT ==========
             if (!customersToSave.isEmpty()) {
                 Map<String, Long> savedIdsMap = saveCustomersToProductionTableWithUpsert(customersToSave);
-                System.out.println("✅ " + savedIdsMap.size() + " clientes procesados en tabla clientes");
-
-                // Sincronizar contactos en batch
                 int contactsCreated = syncAllCustomerContactsBatch(savedIdsMap, customersToSave, rowsToSync, "metodos_contacto");
-                System.out.println("📞 " + contactsCreated + " contactos sincronizados en tabla metodos_contacto");
+                logger.info("Sincronización SubPortfolio {} completada: {} clientes, {} contactos",
+                        subPortfolioId, savedIdsMap.size(), contactsCreated);
             }
 
             return new SyncResult(customersCreated, customersUpdated, errors);
 
         } catch (Exception e) {
-            System.err.println("❌ Error fatal en sincronización: " + e.getMessage());
+            logger.error("Error en sincronización SubPortfolio {}: {}", subPortfolioId, e.getMessage(), e);
             throw new RuntimeException("Error en sincronización de clientes: " + e.getMessage(), e);
         }
     }
@@ -281,18 +278,19 @@ public class CustomerSyncService {
     @Transactional
     public SyncResult syncCustomersByIdentificationCodes(Long subPortfolioId, LoadType loadType, Set<String> identificationCodes) {
         if (identificationCodes == null || identificationCodes.isEmpty()) {
-            System.out.println("⚠️ No hay códigos de identificación para sincronizar");
+            logger.debug("No hay códigos de identificación para sincronizar");
             return new SyncResult(0, 0, new ArrayList<>());
         }
 
         // Si hay muchos códigos, es más eficiente usar el método completo
         if (identificationCodes.size() > SELECTIVE_SYNC_THRESHOLD) {
-            System.out.println("📊 " + identificationCodes.size() + " códigos superan umbral de " + SELECTIVE_SYNC_THRESHOLD +
-                             " - usando sincronización completa para mejor rendimiento");
+            logger.info("Sincronización completa: {} códigos superan umbral de {}",
+                    identificationCodes.size(), SELECTIVE_SYNC_THRESHOLD);
             return syncCustomersFromSubPortfolio(subPortfolioId, loadType);
         }
 
-        System.out.println("🔄 Sincronización selectiva: " + identificationCodes.size() + " clientes para SubPortfolio ID: " + subPortfolioId);
+        logger.info("Sincronización selectiva: {} clientes para SubPortfolio {}",
+                identificationCodes.size(), subPortfolioId);
 
         // 1. Obtener SubPortfolio con sus relaciones
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
@@ -309,31 +307,27 @@ public class CustomerSyncService {
                 loadType
         );
 
-        System.out.println("📊 Tabla dinámica: " + tableName);
+        logger.debug("Tabla dinámica: {}", tableName);
 
         int customersCreated = 0;
         int customersUpdated = 0;
         List<String> errors = new ArrayList<>();
 
         try {
-            // 3. Verificar que la tabla existe
             if (!tableExists(tableName)) {
                 throw new IllegalArgumentException("La tabla dinámica no existe: " + tableName);
             }
 
-            // 4. Leer SOLO los registros especificados de la tabla dinámica
-            // Pasamos subPortfolio y loadType para resolver el nombre real de la columna
             List<Map<String, Object>> rows = readDynamicTableDataByIds(tableName, identificationCodes, subPortfolio, loadType);
-            System.out.println("📊 Registros encontrados para sincronizar: " + rows.size());
+            logger.debug("Registros encontrados: {}", rows.size());
 
             if (rows.isEmpty()) {
-                System.out.println("⚠️ No se encontraron registros con los códigos especificados");
+                logger.debug("No se encontraron registros con los códigos especificados");
                 return new SyncResult(0, 0, errors);
             }
 
-            // 5. Cargar SOLO los clientes que necesitamos verificar (optimizado)
             Map<String, Customer> existingCustomersMap = loadExistingCustomersByIds(tenant.getId().longValue(), identificationCodes);
-            System.out.println("📊 Clientes existentes encontrados: " + existingCustomersMap.size() + " de " + identificationCodes.size());
+            logger.debug("Clientes existentes: {} de {}", existingCustomersMap.size(), identificationCodes.size());
 
             // Listas para batch operations
             List<Customer> customersToSave = new ArrayList<>();
@@ -381,17 +375,15 @@ public class CustomerSyncService {
             // 7. BATCH SAVE con UPSERT
             if (!customersToSave.isEmpty()) {
                 Map<String, Long> savedIdsMap = saveCustomersToProductionTableWithUpsert(customersToSave);
-                System.out.println("✅ " + savedIdsMap.size() + " clientes procesados en tabla clientes");
-
-                // Sincronizar contactos en batch
                 int contactsCreated = syncAllCustomerContactsBatch(savedIdsMap, customersToSave, rowsToSync, "metodos_contacto");
-                System.out.println("📞 " + contactsCreated + " contactos sincronizados en tabla metodos_contacto");
+                logger.info("Sincronización selectiva completada: {} clientes, {} contactos",
+                        savedIdsMap.size(), contactsCreated);
             }
 
             return new SyncResult(customersCreated, customersUpdated, errors);
 
         } catch (Exception e) {
-            System.err.println("❌ Error fatal en sincronización selectiva: " + e.getMessage());
+            logger.error("Error en sincronización selectiva: {}", e.getMessage(), e);
             throw new RuntimeException("Error en sincronización de clientes: " + e.getMessage(), e);
         }
     }
@@ -436,13 +428,12 @@ public class CustomerSyncService {
         String actualColumnName = findActualColumnName(subPortfolio, loadType, "codigo_identificacion");
 
         if (actualColumnName == null) {
-            System.err.println("⚠️ No se encontró configuración de cabecera para 'codigo_identificacion' en subportfolio " +
-                              subPortfolio.getId() + ", loadType " + loadType);
-            // Fallback: intentar con el nombre sanitizado más común
+            logger.warn("No se encontró configuración de cabecera para 'codigo_identificacion' en subportfolio {}, loadType {}",
+                    subPortfolio.getId(), loadType);
             actualColumnName = "codigo_identificacion";
         }
 
-        System.out.println("🔍 Usando columna '" + actualColumnName + "' para filtrar por codigo_identificacion");
+        logger.debug("Usando columna '{}' para filtrar por codigo_identificacion", actualColumnName);
 
         // Construir placeholders para IN clause
         String placeholders = String.join(",", Collections.nCopies(identificationCodes.size(), "?"));
@@ -720,7 +711,7 @@ public class CustomerSyncService {
                 return LocalDate.parse(value.toString());
             }
         } catch (Exception e) {
-            System.err.println("⚠️ Error parseando fecha: " + value);
+            logger.debug("Error parseando fecha: {}", value);
             return null;
         }
     }
@@ -745,7 +736,7 @@ public class CustomerSyncService {
                 }
             }
         } catch (NumberFormatException e) {
-            System.err.println("⚠️ Error parseando Integer del campo '" + columnName + "': " + value);
+            logger.debug("Error parseando Integer del campo '{}': {}", columnName, value);
             return null;
         }
     }
@@ -918,7 +909,7 @@ public class CustomerSyncService {
         }
 
         // Ejecutar batch UPSERT
-        System.out.println("🔄 Ejecutando UPSERT de " + batchArgs.size() + " clientes en tabla clientes");
+        logger.debug("Ejecutando UPSERT de {} clientes", batchArgs.size());
         int[] results = jdbcTemplate.batchUpdate(upsertSql, batchArgs);
 
         int totalInserted = 0;
@@ -929,7 +920,7 @@ public class CustomerSyncService {
             else if (r == -2) totalInserted++;
         }
 
-        System.out.println("✅ UPSERT completado: " + totalInserted + " insertados, " + totalUpdated + " actualizados");
+        logger.debug("UPSERT completado: {} insertados, {} actualizados", totalInserted, totalUpdated);
 
         // Obtener los IDs de los clientes insertados/actualizados EN BATCHES
         // Evitar IN clause gigante que causa problemas de rendimiento
@@ -957,7 +948,7 @@ public class CustomerSyncService {
             }
         }
 
-        System.out.println("🔍 IDs recuperados de clientes: " + resultMap.size() + " claves mapeadas");
+        logger.debug("IDs recuperados: {} claves mapeadas", resultMap.size());
         return resultMap;
     }
 
@@ -1000,7 +991,7 @@ public class CustomerSyncService {
             return 0;
         }
 
-        System.out.println("📞 Iniciando sincronización batch de contactos para " + customers.size() + " clientes");
+        logger.debug("Sincronizando contactos batch para {} clientes", customers.size());
 
         // 1. Recopilar todos los IDs de clientes para DELETE batch
         Set<Long> allClientIds = new HashSet<>();
@@ -1031,8 +1022,7 @@ public class CustomerSyncService {
             int deleted = jdbcTemplate.update(deleteSql, batch.toArray());
             totalDeleted += deleted;
         }
-        System.out.println("🗑️ Eliminados " + totalDeleted + " contactos existentes en " +
-                          ((clientIdList.size() + deleteBatchSize - 1) / deleteBatchSize) + " batches");
+        logger.debug("Eliminados {} contactos existentes", totalDeleted);
 
         // 3. Recopilar todos los contactos a insertar
         List<Object[]> contactsToInsert = new ArrayList<>();
@@ -1064,7 +1054,7 @@ public class CustomerSyncService {
 
         // 4. INSERT en batches de 1000 contactos
         if (contactsToInsert.isEmpty()) {
-            System.out.println("📞 No hay contactos para insertar");
+            logger.debug("No hay contactos para insertar");
             return 0;
         }
 
@@ -1085,9 +1075,7 @@ public class CustomerSyncService {
             }
         }
 
-        System.out.println("✅ Insertados " + totalInserted + " contactos en " +
-                          ((contactsToInsert.size() + insertBatchSize - 1) / insertBatchSize) + " batches");
-
+        logger.debug("Insertados {} contactos", totalInserted);
         return totalInserted;
     }
 

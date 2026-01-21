@@ -37,20 +37,14 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
     @Override
     @Transactional(readOnly = true)
     public PeriodInfo checkPeriodStatus(Long subPortfolioId) {
-        logger.info("🔍 [checkPeriodStatus] Iniciando para subPortfolioId: {}", subPortfolioId);
-
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
-        logger.info("✓ SubPortfolio encontrado: {} ({})", subPortfolio.getSubPortfolioName(), subPortfolio.getSubPortfolioCode());
 
         String tableName = buildTableName(subPortfolio, LoadType.INICIAL);
-        logger.info("✓ Nombre de tabla construido: {}", tableName);
-
         boolean tableExists = dynamicTableExists(tableName);
-        logger.info("✓ Tabla existe: {}", tableExists);
 
         if (!tableExists) {
-            logger.info("→ Tabla no existe, retornando PeriodInfo vacío");
+            logger.debug("Tabla {} no existe para subcartera {}", tableName, subPortfolioId);
             return new PeriodInfo(
                 subPortfolioId,
                 tableName,
@@ -61,17 +55,11 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
             );
         }
 
-        // Contar registros y obtener última fecha de carga
         long recordCount = getTableRecordCount(tableName);
-        logger.info("✓ RecordCount: {}", recordCount);
-
         String lastLoadDate = getLastLoadDate(tableName);
-        logger.info("✓ LastLoadDate: {}", lastLoadDate);
-
         YearMonth currentPeriod = determineCurrentPeriod(lastLoadDate);
-        logger.info("✓ CurrentPeriod: {}", currentPeriod);
 
-        PeriodInfo result = new PeriodInfo(
+        return new PeriodInfo(
             subPortfolioId,
             tableName,
             recordCount > 0,
@@ -79,28 +67,23 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
             currentPeriod,
             lastLoadDate
         );
-        logger.info("✅ [checkPeriodStatus] Completado: {}", result);
-        return result;
     }
 
     @Override
     @Transactional
     public SnapshotResult executeGlobalSnapshot() {
-        logger.info("🗄️ Iniciando snapshot global de todas las carteras...");
+        logger.info("Iniciando snapshot global de todas las carteras");
         long startTime = System.currentTimeMillis();
 
         try {
-            // Ejecutar el stored procedure
             jdbcTemplate.execute("CALL sp_snapshot_carteras_mensual()");
 
             long executionTime = System.currentTimeMillis() - startTime;
             String archivePeriod = YearMonth.now().format(DateTimeFormatter.ofPattern("yyyy_MM"));
-
-            // Contar tablas archivadas en el periodo
             int tablesArchived = countArchivedTables(archivePeriod);
 
-            logger.info("✅ Snapshot global completado en {}ms. {} tablas archivadas para periodo {}",
-                    executionTime, tablesArchived, archivePeriod);
+            logger.info("Snapshot global completado: {} tablas archivadas, periodo {}, {}ms",
+                    tablesArchived, archivePeriod, executionTime);
 
             return new SnapshotResult(
                 true,
@@ -112,7 +95,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
 
         } catch (Exception e) {
             long executionTime = System.currentTimeMillis() - startTime;
-            logger.error("❌ Error en snapshot global: {}", e.getMessage(), e);
+            logger.error("Error en snapshot global: {}", e.getMessage(), e);
 
             return new SnapshotResult(
                 false,
@@ -130,23 +113,17 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
 
-        // Archivamos la tabla INICIAL (tabla maestra de trabajo), NO la de actualización ni clientes
         String tableInicial = buildTableName(subPortfolio, LoadType.INICIAL);
         String archivePeriod = YearMonth.now().format(DateTimeFormatter.ofPattern("yyyy_MM"));
-
-        logger.info("🗄️ Iniciando snapshot para subcartera {} - Tabla inicial: {}",
-                subPortfolioId, tableInicial);
         long startTime = System.currentTimeMillis();
 
         try {
-            // Ejecutar stored procedure (1 solo round-trip, transacción atómica en BD)
             ArchiveResult archiveResult = callArchiveStoredProcedure(tableInicial, archivePeriod);
-
             long executionTime = System.currentTimeMillis() - startTime;
 
             if (archiveResult.success()) {
-                logger.info("✅ Snapshot para subcartera {} completado en {}ms. {} registros archivados. Mensaje: {}",
-                        subPortfolioId, executionTime, archiveResult.recordsArchived(), archiveResult.message());
+                logger.info("Snapshot subcartera {}: {} registros archivados, {}ms",
+                        subPortfolioId, archiveResult.recordsArchived(), executionTime);
 
                 return new SnapshotResult(
                     true,
@@ -157,7 +134,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
                     executionTime
                 );
             } else {
-                logger.error("❌ Stored procedure falló: {}", archiveResult.message());
+                logger.error("Snapshot fallido para subcartera {}: {}", subPortfolioId, archiveResult.message());
                 return new SnapshotResult(
                     false,
                     0,
@@ -169,7 +146,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
 
         } catch (Exception e) {
             long executionTime = System.currentTimeMillis() - startTime;
-            logger.error("❌ Error en snapshot para subcartera {}: {}", subPortfolioId, e.getMessage(), e);
+            logger.error("Error en snapshot subcartera {}: {}", subPortfolioId, e.getMessage(), e);
 
             return new SnapshotResult(
                 false,
@@ -255,22 +232,14 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
     // ==================== Métodos privados ====================
 
     private String buildTableName(SubPortfolio subPortfolio, LoadType loadType) {
-        logger.info("  → buildTableName: subPortfolio={}, loadType={}", subPortfolio.getId(), loadType);
-
         var portfolio = subPortfolio.getPortfolio();
-        logger.info("  → portfolio: {}", portfolio != null ? portfolio.getPortfolioCode() : "NULL");
-
-        var tenant = portfolio != null ? portfolio.getTenant() : null;
-        logger.info("  → tenant: {}", tenant != null ? tenant.getTenantCode() : "NULL");
+        var tenant = portfolio.getTenant();
 
         String tenantCode = tenant.getTenantCode().toLowerCase();
         String portfolioCode = portfolio.getPortfolioCode().toLowerCase();
         String subPortfolioCode = subPortfolio.getSubPortfolioCode().toLowerCase();
 
         String baseName = tenantCode + "_" + portfolioCode + "_" + subPortfolioCode;
-        logger.info("  → baseName: {}", baseName);
-
-        // Usar el prefijo definido en LoadType
         return loadType.getTablePrefix() + baseName;
     }
 
@@ -352,19 +321,14 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
     @Override
     @Transactional(readOnly = true)
     public DailyInfo checkDailyStatus(Long subPortfolioId) {
-        logger.info("🔍 [checkDailyStatus] Verificando estado diario para subPortfolioId: {}", subPortfolioId);
-
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
 
-        // Tabla de actualización (con prefijo ini_) - histórico diario
         String tableName = buildTableName(subPortfolio, LoadType.ACTUALIZACION);
-        logger.info("✓ Nombre de tabla actualización: {}", tableName);
-
         boolean tableExists = dynamicTableExists(tableName);
-        logger.info("✓ Tabla existe: {}", tableExists);
 
         if (!tableExists) {
+            logger.debug("Tabla diaria {} no existe para subcartera {}", tableName, subPortfolioId);
             return new DailyInfo(
                 subPortfolioId,
                 tableName,
@@ -379,7 +343,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         String lastLoadDate = getLastLoadDate(tableName);
         Optional<String> lastArchivedDate = getLastArchivedDailyDate(subPortfolioId);
 
-        DailyInfo result = new DailyInfo(
+        return new DailyInfo(
             subPortfolioId,
             tableName,
             recordCount > 0,
@@ -387,9 +351,6 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
             lastLoadDate,
             lastArchivedDate.orElse(null)
         );
-
-        logger.info("✅ [checkDailyStatus] Completado: {}", result);
-        return result;
     }
 
     @Override
@@ -405,29 +366,22 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
 
-        // Tabla de actualización (con prefijo ini_) - histórico diario
         String tableActualizacion = buildTableName(subPortfolio, LoadType.ACTUALIZACION);
         String archiveDate = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy_MM_dd"));
-
-        logger.info("🗄️ Iniciando snapshot diario para subcartera {} - Tabla: {}, Fecha: {}",
-                subPortfolioId, tableActualizacion, archiveDate);
         long startTime = System.currentTimeMillis();
 
         try {
-            // Verificar si la tabla existe
             if (!dynamicTableExists(tableActualizacion)) {
                 return new SnapshotResult(true, 0, archiveDate,
                     "Tabla no existe, nada que archivar", System.currentTimeMillis() - startTime);
             }
 
-            // Ejecutar stored procedure
             DailyArchiveResult archiveResult = callDailyArchiveStoredProcedure(tableActualizacion, archiveDate);
-
             long executionTime = System.currentTimeMillis() - startTime;
 
             if (archiveResult.success()) {
-                logger.info("✅ Snapshot diario completado en {}ms. {} registros archivados. Mensaje: {}",
-                        executionTime, archiveResult.recordsArchived(), archiveResult.message());
+                logger.info("Snapshot diario subcartera {}: {} registros archivados, {}ms",
+                        subPortfolioId, archiveResult.recordsArchived(), executionTime);
 
                 return new SnapshotResult(
                     true,
@@ -438,7 +392,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
                     executionTime
                 );
             } else {
-                logger.error("❌ Stored procedure diario falló: {}", archiveResult.message());
+                logger.error("Snapshot diario fallido para subcartera {}: {}", subPortfolioId, archiveResult.message());
                 return new SnapshotResult(
                     false,
                     0,
@@ -450,7 +404,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
 
         } catch (Exception e) {
             long executionTime = System.currentTimeMillis() - startTime;
-            logger.error("❌ Error en snapshot diario para subcartera {}: {}", subPortfolioId, e.getMessage(), e);
+            logger.error("Error en snapshot diario subcartera {}: {}", subPortfolioId, e.getMessage(), e);
 
             return new SnapshotResult(
                 false,

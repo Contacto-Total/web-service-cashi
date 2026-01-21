@@ -79,7 +79,7 @@ public class FileWatcherService {
                 }
             }
 
-            logger.info("⏰ Hora programada alcanzada: {}. Iniciando importación automática.", scheduledTime);
+            logger.info("Hora programada {}: iniciando importación automática", scheduledTime);
 
             // Actualizar última revisión
             config.setLastCheckAt(LocalDateTime.now());
@@ -110,7 +110,7 @@ public class FileWatcherService {
             }
 
             ImportConfiguration config = configOpt.get();
-            logger.info("🔄 Trigger manual de importación iniciado");
+            logger.info("Trigger manual de importación iniciado");
 
             // Buscar archivo a procesar
             File fileToProcess = findNextFileToProcess(config);
@@ -167,27 +167,24 @@ public class FileWatcherService {
             // Buscar el primer archivo no procesado (verificación basada en hash MD5)
             for (File file : files) {
                 try {
-                    // Calcular hash MD5 del contenido del archivo
                     String fileHash = calculateFileMD5(file);
-                    logger.debug("📄 Archivo: {} - Hash: {}", file.getName(), fileHash);
+                    logger.debug("Archivo: {} - Hash: {}", file.getName(), fileHash);
 
-                    // Verificar si este contenido ya fue procesado exitosamente
                     boolean alreadyProcessed = historyRepository.existsByFileHashAndStatus(
                             fileHash,
                             "EXITOSO"
                     );
 
                     if (alreadyProcessed) {
-                        logger.info("⏭️  Archivo {} ya procesado (hash duplicado: {})", file.getName(), fileHash);
+                        logger.debug("Archivo {} ya procesado (hash: {})", file.getName(), fileHash);
                         continue;
                     }
 
-                    logger.info("✅ Archivo {} es nuevo (hash: {})", file.getName(), fileHash);
+                    logger.debug("Archivo {} es nuevo", file.getName());
                     return file;
 
                 } catch (Exception hashException) {
-                    logger.error("Error al calcular hash para {}: {}", file.getName(), hashException.getMessage());
-                    // Si falla el hash, saltar este archivo
+                    logger.warn("Error al calcular hash para {}: {}", file.getName(), hashException.getMessage());
                     continue;
                 }
             }
@@ -228,32 +225,27 @@ public class FileWatcherService {
 
             // Buscar el primer archivo no procesado (verificar por HASH MD5, no por ruta)
             File fileToProcess = null;
-            logger.info("📂 Encontrados {} archivos que coinciden con el patrón", files.length);
+            logger.debug("Encontrados {} archivos que coinciden con el patrón", files.length);
 
             for (File file : files) {
                 try {
-                    logger.info("🔍 Verificando archivo: {}", file.getName());
-
-                    // Calcular hash MD5 del contenido del archivo
                     String fileHash = calculateFileMD5(file);
-                    logger.info("🔐 Hash calculado: {}", fileHash);
+                    logger.debug("Verificando archivo: {}, hash: {}", file.getName(), fileHash);
 
-                    // Verificar si el CONTENIDO (hash) ya fue procesado exitosamente
                     boolean alreadyProcessed = historyRepository.existsByFileHashAndStatus(
                             fileHash,
                             "EXITOSO"
                     );
 
                     if (!alreadyProcessed) {
-                        logger.info("✅ Archivo {} no procesado, se seleccionará para importar", file.getName());
+                        logger.debug("Archivo {} seleccionado para importar", file.getName());
                         fileToProcess = file;
                         break;
                     } else {
-                        logger.info("⏭️  Archivo {} ya procesado (hash: {}), se omite", file.getName(), fileHash);
+                        logger.debug("Archivo {} ya procesado, se omite", file.getName());
                     }
                 } catch (Exception e) {
-                    logger.error("❌ Error al calcular hash de {}: {}", file.getName(), e.getMessage());
-                    // Si hay error calculando hash, intentar procesarlo de todas formas
+                    logger.warn("Error al calcular hash de {}: {}", file.getName(), e.getMessage());
                     fileToProcess = file;
                     break;
                 }
@@ -285,14 +277,12 @@ public class FileWatcherService {
         try {
             logger.info("Importando datos del archivo: {}", fileName);
 
-            // Calcular hash MD5 del archivo
             fileHash = calculateFileMD5(file);
-            logger.info("🔐 Hash MD5 del archivo: {}", fileHash);
+            logger.debug("Hash MD5 del archivo: {}", fileHash);
 
-            // Verificar si el contenido ya fue procesado
             boolean alreadyProcessed = historyRepository.existsByFileHashAndStatus(fileHash, "EXITOSO");
             if (alreadyProcessed) {
-                logger.warn("⚠️  El contenido de este archivo ya fue procesado anteriormente");
+                logger.warn("El contenido del archivo ya fue procesado anteriormente");
                 return Map.of(
                     "success", false,
                     "message", "El contenido de este archivo ya fue procesado anteriormente (archivo duplicado)",
@@ -469,7 +459,7 @@ public class FileWatcherService {
                 columnNames.add(headerName);
             }
 
-            logger.info("📋 Cabeceras encontradas en Excel: {}", columnNames);
+            logger.debug("Cabeceras Excel: {}", columnNames);
 
             // Leer filas de datos
             for (int i = 1; i <= sheet.getLastRowNum(); i++) {
@@ -524,29 +514,17 @@ public class FileWatcherService {
                 .build()
                 .parse(new StringReader(content))) {
 
-            // Log de cabeceras detectadas
             if (parser.getHeaderMap() != null) {
-                logger.info("📋 Cabeceras encontradas en CSV: {}", parser.getHeaderNames());
+                logger.debug("Cabeceras CSV: {}", parser.getHeaderNames());
             }
 
-            int rowNum = 0;
             for (CSVRecord record : parser) {
                 Map<String, Object> rowData = new HashMap<>();
                 record.toMap().forEach(rowData::put);
                 data.add(rowData);
-
-                // Log solo de la primera fila para debug
-                if (rowNum == 0) {
-                    logger.info("📊 Primera fila de datos (muestra): {}",
-                        rowData.entrySet().stream()
-                            .limit(5)
-                            .map(e -> e.getKey() + "=" + e.getValue())
-                            .collect(java.util.stream.Collectors.joining(", ")));
-                }
-                rowNum++;
             }
 
-            logger.info("✅ Total filas leídas del CSV: {}", data.size());
+            logger.debug("Total filas leídas del CSV: {}", data.size());
         }
 
         return data;

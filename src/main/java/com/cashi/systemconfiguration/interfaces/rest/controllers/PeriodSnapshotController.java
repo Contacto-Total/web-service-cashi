@@ -6,6 +6,8 @@ import com.cashi.systemconfiguration.domain.services.PeriodSnapshotService.Perio
 import com.cashi.systemconfiguration.domain.services.PeriodSnapshotService.SnapshotResult;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -19,6 +21,8 @@ import java.util.Optional;
 @Tag(name = "Period Snapshot", description = "Gestión de snapshots y cambios de periodo mensual")
 public class PeriodSnapshotController {
 
+    private static final Logger logger = LoggerFactory.getLogger(PeriodSnapshotController.class);
+
     private final PeriodSnapshotService periodSnapshotService;
 
     public PeriodSnapshotController(PeriodSnapshotService periodSnapshotService) {
@@ -30,13 +34,8 @@ public class PeriodSnapshotController {
     @GetMapping("/subportfolio/{subPortfolioId}/status")
     public ResponseEntity<?> checkPeriodStatus(@PathVariable Integer subPortfolioId) {
         try {
-            System.out.println("📊 [PeriodSnapshot] Verificando estado para subPortfolioId: " + subPortfolioId);
-
             PeriodInfo info = periodSnapshotService.checkPeriodStatus(subPortfolioId.longValue());
-            System.out.println("📊 [PeriodSnapshot] PeriodInfo obtenido: " + info);
-
             Optional<String> lastArchived = periodSnapshotService.getLastArchivedPeriod(subPortfolioId.longValue());
-            System.out.println("📊 [PeriodSnapshot] LastArchived: " + lastArchived.orElse("ninguno"));
 
             PeriodStatusResponse response = new PeriodStatusResponse(
                 info.subPortfolioId(),
@@ -46,15 +45,12 @@ public class PeriodSnapshotController {
                 info.currentPeriod() != null ? info.currentPeriod().toString() : null,
                 info.lastLoadDate(),
                 lastArchived.orElse(null),
-                info.hasExistingData() // requiresConfirmation
+                info.hasExistingData()
             );
 
-            System.out.println("✅ [PeriodSnapshot] Respuesta: requiresConfirmation=" + response.requiresConfirmation()
-                + ", recordCount=" + response.recordCount());
             return ResponseEntity.ok(response);
         } catch (Exception e) {
-            System.err.println("❌ [PeriodSnapshot] Error en checkPeriodStatus: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error en checkPeriodStatus para subcartera {}: {}", subPortfolioId, e.getMessage());
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
         }
     }
@@ -74,8 +70,7 @@ public class PeriodSnapshotController {
                 "tableName", info.tableName()
             ));
         } catch (Exception e) {
-            System.err.println("❌ [PeriodSnapshot] Error en requiresConfirmation: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error en requiresConfirmation para subcartera {}: {}", subPortfolioId, e.getMessage());
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
         }
     }
@@ -85,12 +80,7 @@ public class PeriodSnapshotController {
     @PostMapping("/subportfolio/{subPortfolioId}/execute")
     public ResponseEntity<?> executeSnapshotForSubPortfolio(@PathVariable Integer subPortfolioId) {
         try {
-            System.out.println("🗄️ [PeriodSnapshot] Ejecutando snapshot para subPortfolioId: " + subPortfolioId);
-
             SnapshotResult result = periodSnapshotService.executeSnapshotForSubPortfolio(subPortfolioId.longValue());
-
-            System.out.println("✅ [PeriodSnapshot] Snapshot completado: success=" + result.success()
-                + ", tablesArchived=" + result.tablesArchived());
 
             return ResponseEntity.ok(new SnapshotResultResponse(
                 result.success(),
@@ -100,8 +90,7 @@ public class PeriodSnapshotController {
                 result.executionTimeMs()
             ));
         } catch (Exception e) {
-            System.err.println("❌ [PeriodSnapshot] Error en executeSnapshotForSubPortfolio: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error en executeSnapshotForSubPortfolio para subcartera {}: {}", subPortfolioId, e.getMessage());
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
         }
     }
@@ -133,8 +122,7 @@ public class PeriodSnapshotController {
                 "hasArchivedData", lastArchived.isPresent()
             ));
         } catch (Exception e) {
-            System.err.println("❌ [PeriodSnapshot] Error en getLastArchivedPeriod: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error en getLastArchivedPeriod para subcartera {}: {}", subPortfolioId, e.getMessage());
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
         }
     }
@@ -146,10 +134,7 @@ public class PeriodSnapshotController {
     @GetMapping("/subportfolio/{subPortfolioId}/daily-status")
     public ResponseEntity<?> checkDailyStatus(@PathVariable Integer subPortfolioId) {
         try {
-            System.out.println("📊 [DailySnapshot] Verificando estado diario para subPortfolioId: " + subPortfolioId);
-
             DailyInfo info = periodSnapshotService.checkDailyStatus(subPortfolioId.longValue());
-            System.out.println("📊 [DailySnapshot] DailyInfo obtenido: " + info);
 
             DailyStatusResponse response = new DailyStatusResponse(
                 info.subPortfolioId(),
@@ -158,15 +143,12 @@ public class PeriodSnapshotController {
                 info.recordCount(),
                 info.lastLoadDate(),
                 info.lastArchivedDate(),
-                info.hasExistingData() // requiresConfirmation
+                info.hasExistingData()
             );
 
-            System.out.println("✅ [DailySnapshot] Respuesta: requiresConfirmation=" + response.requiresConfirmation()
-                + ", recordCount=" + response.recordCount());
             return ResponseEntity.ok(response);
         } catch (Exception e) {
-            System.err.println("❌ [DailySnapshot] Error en checkDailyStatus: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error en checkDailyStatus para subcartera {}: {}", subPortfolioId, e.getMessage());
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
         }
     }
@@ -186,8 +168,7 @@ public class PeriodSnapshotController {
                 "tableName", info.tableName()
             ));
         } catch (Exception e) {
-            System.err.println("❌ [DailySnapshot] Error en requiresDailyConfirmation: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error en requiresDailyConfirmation para subcartera {}: {}", subPortfolioId, e.getMessage());
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
         }
     }
@@ -197,12 +178,7 @@ public class PeriodSnapshotController {
     @PostMapping("/subportfolio/{subPortfolioId}/daily-execute")
     public ResponseEntity<?> executeDailySnapshotForSubPortfolio(@PathVariable Integer subPortfolioId) {
         try {
-            System.out.println("🗄️ [DailySnapshot] Ejecutando snapshot diario para subPortfolioId: " + subPortfolioId);
-
             SnapshotResult result = periodSnapshotService.executeDailySnapshotForSubPortfolio(subPortfolioId.longValue());
-
-            System.out.println("✅ [DailySnapshot] Snapshot diario completado: success=" + result.success()
-                + ", tablesArchived=" + result.tablesArchived());
 
             return ResponseEntity.ok(new SnapshotResultResponse(
                 result.success(),
@@ -212,8 +188,7 @@ public class PeriodSnapshotController {
                 result.executionTimeMs()
             ));
         } catch (Exception e) {
-            System.err.println("❌ [DailySnapshot] Error en executeDailySnapshotForSubPortfolio: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error en executeDailySnapshotForSubPortfolio para subcartera {}: {}", subPortfolioId, e.getMessage());
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
         }
     }
@@ -230,8 +205,7 @@ public class PeriodSnapshotController {
                 "hasArchivedData", lastArchived.isPresent()
             ));
         } catch (Exception e) {
-            System.err.println("❌ [DailySnapshot] Error en getLastArchivedDailyDate: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error en getLastArchivedDailyDate para subcartera {}: {}", subPortfolioId, e.getMessage());
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
         }
     }

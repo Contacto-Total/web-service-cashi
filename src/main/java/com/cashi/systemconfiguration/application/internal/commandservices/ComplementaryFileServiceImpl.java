@@ -96,10 +96,8 @@ public class ComplementaryFileServiceImpl implements ComplementaryFileService {
         String linkField = fileType.getLinkField();
         List<String> columnsToUpdate = parseColumnsToUpdate(fileType.getColumnsToUpdate());
 
-        logger.info("📦 Procesando archivo complementario '{}' para subcartera '{}'. " +
-                    "Tabla: {}, Campo vinculación: {}, Columnas a actualizar: {}",
-                fileType.getTypeName(), subPortfolio.getSubPortfolioName(),
-                tableName, linkField, columnsToUpdate);
+        logger.info("Procesando archivo complementario '{}' para subcartera '{}', tabla: {}",
+                fileType.getTypeName(), subPortfolio.getSubPortfolioName(), tableName);
 
         // Verificar que la tabla existe
         if (!dynamicTableExists(tableName)) {
@@ -175,7 +173,7 @@ public class ComplementaryFileServiceImpl implements ComplementaryFileService {
             }
         }
 
-        logger.info("✅ Importación complementaria '{}' completada: {} actualizados, {} no encontrados, {} errores",
+        logger.info("Importación complementaria '{}' completada: {} actualizados, {} no encontrados, {} errores",
                 fileType.getTypeName(), updatedRows, notFoundRows, errorRows);
 
         // Preparar resultado
@@ -246,7 +244,7 @@ public class ComplementaryFileServiceImpl implements ComplementaryFileService {
                 subPortfolio, typeName, filePattern, linkField, columnsJson, description);
 
         ComplementaryFileType saved = complementaryFileTypeRepository.save(fileType);
-        logger.info("✅ Tipo de archivo complementario creado: {} para subcartera {}",
+        logger.info("Tipo de archivo complementario creado: {} para subcartera {}",
                 typeName, subPortfolio.getSubPortfolioName());
 
         return saved;
@@ -373,7 +371,7 @@ public class ComplementaryFileServiceImpl implements ComplementaryFileService {
             Integer count = jdbcTemplate.queryForObject(sql, Integer.class, tableName);
             return count != null && count > 0;
         } catch (Exception e) {
-            logger.error("Error al verificar existencia de tabla {}: {}", tableName, e.getMessage());
+            logger.warn("Error al verificar existencia de tabla {}: {}", tableName, e.getMessage());
             return false;
         }
     }
