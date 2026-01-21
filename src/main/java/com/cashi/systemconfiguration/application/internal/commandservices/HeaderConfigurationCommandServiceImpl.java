@@ -43,12 +43,6 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     // Tamaño del batch para operaciones de carga de identificadores (previene problemas de memoria)
     private static final int BATCH_SIZE_FOR_IDENTIFIER_LOAD = 10000;
 
-    // Tamaño del batch para operaciones de UPDATE en carga diaria (optimización de rendimiento)
-    private static final int BATCH_SIZE_FOR_DAILY_UPDATE = 500;
-
-    // Tamaño del batch para operaciones de INSERT masivo
-    private static final int BATCH_SIZE_FOR_INSERT = 1000;
-
     public HeaderConfigurationCommandServiceImpl(
             HeaderConfigurationRepository headerConfigurationRepository,
             SubPortfolioRepository subPortfolioRepository,
@@ -300,6 +294,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         ddl.append("CREATE TABLE IF NOT EXISTS ").append(tableName).append(" (\n");
         ddl.append("  id INTEGER NOT NULL AUTO_INCREMENT,\n");
 
+        // Identificar columnas de identificación para crear índices
+        String identityColumnName = null;
+
         // Agregar columnas dinámicas basadas en las configuraciones
         for (HeaderConfiguration header : headers) {
             String columnName = sanitizeColumnName(header.getHeaderName());
@@ -308,6 +305,11 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             String sqlType = mapDataTypeToSQL(dataType, format);
 
             ddl.append("  ").append(columnName).append(" ").append(sqlType).append(",\n");
+
+            // Detectar columna de identificación para índice
+            if (identityColumnName == null && isIdentityColumn(header)) {
+                identityColumnName = columnName;
+            }
         }
 
         ddl.append("  PRIMARY KEY (id)\n");
@@ -315,10 +317,70 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         try {
             jdbcTemplate.execute(ddl.toString());
-            logger.info("Tabla {} creada exitosamente con {} columnas", tableName, headers.size());
+            logger.info("✅ Tabla {} creada exitosamente con {} columnas", tableName, headers.size());
+
+            // Crear índice en la columna de identificación si se encontró
+            if (identityColumnName != null) {
+                createIndexOnIdentityColumn(tableName, identityColumnName);
+            }
+
         } catch (Exception e) {
             logger.error("Error al crear tabla {}: {}", tableName, e.getMessage(), e);
             throw new RuntimeException("Error al crear tabla dinámica: " + tableName, e);
+        }
+    }
+
+    /**
+     * Verifica si una cabecera corresponde a un campo de identificación
+     */
+    private boolean isIdentityColumn(HeaderConfiguration header) {
+        // Lista de nombres de campos que son identificadores
+        List<String> identityFieldCodes = List.of(
+            "identity_code", "codigo_identificacion", "cod_cli",
+            "documento", "dni", "ruc", "num_documento", "customer_id", "id_cliente"
+        );
+
+        // Verificar por fieldCode del FieldDefinition
+        if (header.getFieldDefinition() != null && header.getFieldDefinition().getFieldCode() != null) {
+            String fieldCode = header.getFieldDefinition().getFieldCode().toLowerCase();
+            if (identityFieldCodes.contains(fieldCode)) {
+                return true;
+            }
+        }
+
+        // Verificar por nombre de cabecera
+        String headerName = normalizeHeaderName(header.getHeaderName());
+        for (String identityName : identityFieldCodes) {
+            if (headerName.contains(identityName.replace("_", ""))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Crea un índice en la columna de identificación para optimizar búsquedas y actualizaciones
+     */
+    private void createIndexOnIdentityColumn(String tableName, String columnName) {
+        String indexName = "idx_" + tableName.replace(".", "_") + "_" + columnName;
+        // Limitar nombre del índice a 64 caracteres (límite de MySQL)
+        if (indexName.length() > 64) {
+            indexName = indexName.substring(0, 64);
+        }
+
+        String createIndexSql = "CREATE INDEX " + indexName + " ON " + tableName + " (" + columnName + ")";
+
+        try {
+            jdbcTemplate.execute(createIndexSql);
+            logger.info("✅ Índice {} creado en columna {} de tabla {}", indexName, columnName, tableName);
+        } catch (Exception e) {
+            // El índice puede ya existir si la tabla fue recreada
+            if (e.getMessage() != null && e.getMessage().contains("Duplicate key name")) {
+                logger.info("ℹ️ El índice {} ya existe en tabla {}", indexName, tableName);
+            } else {
+                logger.warn("⚠️ No se pudo crear índice {} en tabla {}: {}", indexName, tableName, e.getMessage());
+            }
         }
     }
 
@@ -726,30 +788,80 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         int insertedRows = 0;
         int updatedRows = 0;
 
-        // ========== FASE 1: BATCH INSERT para registros nuevos ==========
-        if (!rowsToInsert.isEmpty()) {
-            try {
-                List<PreparedRowData> simpleRows = rowsToInsert.stream()
-                    .map(r -> new PreparedRowData(r.rowNumber, r.values))
-                    .collect(java.util.stream.Collectors.toList());
-                insertedRows = batchInsertRows(tableName, simpleRows, headers);
-                logger.info("✅ Batch INSERT completado: {} filas insertadas", insertedRows);
-            } catch (Exception e) {
-                logger.error("❌ Error en batch INSERT: {}", e.getMessage(), e);
-                throw new RuntimeException("Error al insertar datos: " + e.getMessage(), e);
+        // ========== PREPARAR SQL DE INSERT Y UPDATE (una sola vez) ==========
+        // SQL INSERT
+        StringBuilder insertColumns = new StringBuilder();
+        StringBuilder insertPlaceholders = new StringBuilder();
+        boolean firstCol = true;
+        for (HeaderConfiguration header : headers) {
+            String columnName = sanitizeColumnName(header.getHeaderName());
+            if (firstCol) {
+                insertColumns.append(columnName);
+                insertPlaceholders.append("?");
+                firstCol = false;
+            } else {
+                insertColumns.append(", ").append(columnName);
+                insertPlaceholders.append(", ?");
             }
         }
+        String insertSql = "INSERT INTO " + tableName + " (" + insertColumns + ") VALUES (" + insertPlaceholders + ")";
 
-        // ========== FASE 2: BATCH UPDATE para registros existentes ==========
-        if (!rowsToUpdate.isEmpty()) {
-            try {
-                updatedRows = batchUpdateRows(tableName, rowsToUpdate, headers);
-                logger.info("✅ Batch UPDATE completado: {} filas actualizadas", updatedRows);
-            } catch (Exception e) {
-                logger.error("❌ Error en batch UPDATE: {}", e.getMessage(), e);
-                // No lanzar excepción para no perder los inserts exitosos
-                errors.add("Error en actualización masiva: " + e.getMessage());
+        // SQL UPDATE (por ID)
+        StringBuilder updateSetClause = new StringBuilder();
+        firstCol = true;
+        for (HeaderConfiguration header : headers) {
+            String columnName = sanitizeColumnName(header.getHeaderName());
+            if (firstCol) {
+                updateSetClause.append(columnName).append(" = ?");
+                firstCol = false;
+            } else {
+                updateSetClause.append(", ").append(columnName).append(" = ?");
             }
+        }
+        String updateSql = "UPDATE " + tableName + " SET " + updateSetClause + " WHERE id = ?";
+
+        // ========== FASE 1: INSERT para registros nuevos (sin batches) ==========
+        if (!rowsToInsert.isEmpty()) {
+            logger.info("➕ Insertando {} registros nuevos...", rowsToInsert.size());
+            for (PreparedRowDataWithId rowData : rowsToInsert) {
+                try {
+                    Object[] args = rowData.getValues().toArray();
+                    int affected = jdbcTemplate.update(insertSql, args);
+                    if (affected > 0) {
+                        insertedRows++;
+                    }
+                } catch (Exception e) {
+                    failedRows++;
+                    errors.add("Fila " + rowData.getRowNumber() + " (INSERT): " + e.getMessage());
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Error en INSERT fila {}: {}", rowData.getRowNumber(), e.getMessage());
+                    }
+                }
+            }
+            logger.info("✅ INSERT completado: {} filas insertadas", insertedRows);
+        }
+
+        // ========== FASE 2: UPDATE para registros existentes (sin batches) ==========
+        if (!rowsToUpdate.isEmpty()) {
+            logger.info("🔄 Actualizando {} registros existentes...", rowsToUpdate.size());
+            for (PreparedRowDataWithId rowData : rowsToUpdate) {
+                try {
+                    List<Object> valuesList = new ArrayList<>(rowData.getValues());
+                    valuesList.add(rowData.getExistingId()); // WHERE id = ?
+                    Object[] args = valuesList.toArray();
+                    int affected = jdbcTemplate.update(updateSql, args);
+                    if (affected > 0) {
+                        updatedRows++;
+                    }
+                } catch (Exception e) {
+                    failedRows++;
+                    errors.add("Fila " + rowData.getRowNumber() + " (UPDATE): " + e.getMessage());
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Error en UPDATE fila {}: {}", rowData.getRowNumber(), e.getMessage());
+                    }
+                }
+            }
+            logger.info("✅ UPDATE completado: {} filas actualizadas", updatedRows);
         }
 
         // Preparar respuesta
@@ -913,63 +1025,6 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
-     * Ejecuta batch UPDATE para filas existentes.
-     * Procesa en batches de BATCH_SIZE_FOR_INSERT para mejor rendimiento.
-     */
-    private int batchUpdateRows(String tableName, List<PreparedRowDataWithId> rows, List<HeaderConfiguration> headers) {
-        if (rows.isEmpty()) return 0;
-
-        // Construir SQL de UPDATE
-        StringBuilder setClause = new StringBuilder();
-        boolean first = true;
-        for (HeaderConfiguration header : headers) {
-            String columnName = sanitizeColumnName(header.getHeaderName());
-            if (!first) setClause.append(", ");
-            setClause.append(columnName).append(" = ?");
-            first = false;
-        }
-
-        String sql = "UPDATE " + tableName + " SET " + setClause + " WHERE id = ?";
-
-        int totalUpdated = 0;
-        int totalBatches = (int) Math.ceil((double) rows.size() / BATCH_SIZE_FOR_INSERT);
-
-        logger.info("🔄 Ejecutando UPDATE de {} filas en {} batches en tabla {}", rows.size(), totalBatches, tableName);
-
-        // Procesar en batches
-        for (int batchStart = 0; batchStart < rows.size(); batchStart += BATCH_SIZE_FOR_INSERT) {
-            int batchEnd = Math.min(batchStart + BATCH_SIZE_FOR_INSERT, rows.size());
-            List<PreparedRowDataWithId> currentBatch = rows.subList(batchStart, batchEnd);
-
-            int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
-                @Override
-                public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
-                    PreparedRowDataWithId rowData = currentBatch.get(i);
-                    List<Object> values = rowData.getValues();
-
-                    // Setear valores de las columnas
-                    for (int j = 0; j < values.size(); j++) {
-                        ps.setObject(j + 1, values.get(j));
-                    }
-                    // Setear el ID en el WHERE
-                    ps.setInt(values.size() + 1, rowData.getExistingId());
-                }
-
-                @Override
-                public int getBatchSize() {
-                    return currentBatch.size();
-                }
-            });
-
-            for (int count : updateCounts) {
-                if (count > 0) totalUpdated += count;
-            }
-        }
-
-        return totalUpdated;
-    }
-
-    /**
      * Clase interna para almacenar datos de fila preparada
      */
     private static class PreparedRowData {
@@ -1058,601 +1113,16 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         return new PreparedRowData(rowNumber, values);
     }
 
-    /**
-     * Inserta o actualiza filas usando batch operations (UPSERT)
-     * Si un registro con el mismo identity_code ya existe, lo actualiza
-     * Si no existe, lo inserta
-     */
-    private int batchInsertRows(String tableName, List<PreparedRowData> rows, List<HeaderConfiguration> headers) {
-        if (rows.isEmpty()) {
-            return 0;
-        }
-
-        // 1. Encontrar el índice de la columna identity_code
-        int identityCodeIndex = -1;
-        String identityCodeColumn = null;
-        for (int i = 0; i < headers.size(); i++) {
-            HeaderConfiguration header = headers.get(i);
-            if (header.getFieldDefinition() != null &&
-                "codigo_identificacion".equals(header.getFieldDefinition().getFieldCode())) {
-                identityCodeIndex = i;
-                identityCodeColumn = sanitizeColumnName(header.getHeaderName());
-                logger.info("🔑 Columna identity_code encontrada: índice={}, columna={}", i, identityCodeColumn);
-                break;
-            }
-        }
-
-        // Si no encontramos identity_code, hacer INSERT normal (fallback al comportamiento anterior)
-        if (identityCodeIndex == -1) {
-            logger.warn("⚠️ No se encontró columna identity_code en headers, haciendo INSERT normal");
-            return batchInsertNewRows(tableName, rows, headers);
-        }
-
-        // 2. Extraer los identity_codes del batch
-        List<String> incomingCodes = new ArrayList<>();
-        for (PreparedRowData row : rows) {
-            Object value = row.getValues().get(identityCodeIndex);
-            if (value != null) {
-                incomingCodes.add(value.toString());
-            }
-        }
-
-        // 3. Consultar cuáles ya existen en la tabla
-        Set<String> existingCodes = queryExistingIdentityCodes(tableName, identityCodeColumn, incomingCodes);
-
-        logger.info("📊 Análisis de datos: {} totales, {} ya existen en BD, {} son nuevos",
-                   rows.size(), existingCodes.size(), rows.size() - existingCodes.size());
-
-        // 4. Separar en dos grupos: existentes (UPDATE) y nuevos (INSERT)
-        List<PreparedRowData> toInsert = new ArrayList<>();
-        List<PreparedRowData> toUpdate = new ArrayList<>();
-
-        for (PreparedRowData row : rows) {
-            Object value = row.getValues().get(identityCodeIndex);
-            String code = value != null ? value.toString() : null;
-
-            if (code != null && existingCodes.contains(code)) {
-                toUpdate.add(row);
-            } else {
-                toInsert.add(row);
-            }
-        }
-
-        int totalProcessed = 0;
-
-        // 5. UPDATE para registros existentes
-        if (!toUpdate.isEmpty()) {
-            logger.info("🔄 Actualizando {} registros existentes...", toUpdate.size());
-            int updated = batchUpdateRows(tableName, toUpdate, headers, identityCodeIndex, identityCodeColumn);
-            logger.info("✅ {} registros actualizados", updated);
-            totalProcessed += updated;
-        }
-
-        // 6. INSERT para registros nuevos
-        if (!toInsert.isEmpty()) {
-            logger.info("➕ Insertando {} registros nuevos...", toInsert.size());
-            int inserted = batchInsertNewRows(tableName, toInsert, headers);
-            logger.info("✅ {} registros insertados", inserted);
-            totalProcessed += inserted;
-        }
-
-        return totalProcessed;
-    }
-
-    /**
-     * Consulta qué identity_codes ya existen en la tabla.
-     * Procesa en batches para evitar IN clauses muy grandes (límite ~1000 elementos).
-     */
-    private Set<String> queryExistingIdentityCodes(String tableName, String identityCodeColumn, List<String> codes) {
-        if (codes.isEmpty()) {
-            return new HashSet<>();
-        }
-
-        Set<String> existingCodes = new HashSet<>();
-        int batchSize = 500; // Tamaño seguro para IN clause
-
-        // Procesar en batches para evitar IN clause muy grande
-        for (int i = 0; i < codes.size(); i += batchSize) {
-            int end = Math.min(i + batchSize, codes.size());
-            List<String> batch = codes.subList(i, end);
-
-            String placeholders = batch.stream().map(c -> "?").collect(java.util.stream.Collectors.joining(", "));
-            String sql = "SELECT " + identityCodeColumn + " FROM " + tableName +
-                         " WHERE " + identityCodeColumn + " IN (" + placeholders + ")";
-
-            try {
-                List<String> batchResult = jdbcTemplate.queryForList(sql, String.class, batch.toArray());
-                existingCodes.addAll(batchResult);
-            } catch (Exception e) {
-                logger.error("❌ Error al consultar identity_codes existentes (batch {}-{}): {}",
-                           i, end, e.getMessage());
-            }
-        }
-
-        return existingCodes;
-    }
-
-    /**
-     * Batch UPDATE para registros existentes.
-     * Procesa en batches de BATCH_SIZE_FOR_INSERT para mejor rendimiento.
-     */
-    private int batchUpdateRows(String tableName, List<PreparedRowData> rows,
-                                List<HeaderConfiguration> headers, int identityCodeIndex,
-                                String identityCodeColumn) {
-        if (rows.isEmpty()) {
-            return 0;
-        }
-
-        // Construir SQL: UPDATE tabla SET col1=?, col2=? WHERE identity_code=?
-        StringBuilder setClause = new StringBuilder();
-        boolean first = true;
-
-        for (int i = 0; i < headers.size(); i++) {
-            if (i == identityCodeIndex) continue; // No actualizar la columna identity_code
-
-            String columnName = sanitizeColumnName(headers.get(i).getHeaderName());
-            if (first) {
-                setClause.append(columnName).append(" = ?");
-                first = false;
-            } else {
-                setClause.append(", ").append(columnName).append(" = ?");
-            }
-        }
-
-        String sql = "UPDATE " + tableName + " SET " + setClause +
-                     " WHERE " + identityCodeColumn + " = ?";
-
-        final int idxCodeIndex = identityCodeIndex;
-        int totalUpdated = 0;
-        int totalBatches = (int) Math.ceil((double) rows.size() / BATCH_SIZE_FOR_INSERT);
-
-        logger.info("🔄 Ejecutando UPDATE de {} filas en {} batches", rows.size(), totalBatches);
-
-        // Procesar en batches
-        for (int batchStart = 0; batchStart < rows.size(); batchStart += BATCH_SIZE_FOR_INSERT) {
-            int batchEnd = Math.min(batchStart + BATCH_SIZE_FOR_INSERT, rows.size());
-            List<PreparedRowData> currentBatch = rows.subList(batchStart, batchEnd);
-
-            int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
-                @Override
-                public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
-                    PreparedRowData rowData = currentBatch.get(i);
-                    List<Object> values = rowData.getValues();
-
-                    int paramIndex = 1;
-                    // Setear valores de columnas (excepto identity_code)
-                    for (int j = 0; j < values.size(); j++) {
-                        if (j == idxCodeIndex) continue;
-                        ps.setObject(paramIndex++, values.get(j));
-                    }
-                    // Setear identity_code para el WHERE
-                    ps.setObject(paramIndex, values.get(idxCodeIndex));
-                }
-
-                @Override
-                public int getBatchSize() {
-                    return currentBatch.size();
-                }
-            });
-
-            for (int count : updateCounts) {
-                if (count > 0) {
-                    totalUpdated += count;
-                }
-            }
-        }
-
-        return totalUpdated;
-    }
-
-    /**
-     * Batch INSERT para registros nuevos
-     */
-    private int batchInsertNewRows(String tableName, List<PreparedRowData> rows, List<HeaderConfiguration> headers) {
-        if (rows.isEmpty()) {
-            return 0;
-        }
-
-        // Construir SQL una sola vez
-        StringBuilder columns = new StringBuilder();
-        StringBuilder placeholders = new StringBuilder();
-        boolean firstColumn = true;
-
-        for (HeaderConfiguration header : headers) {
-            String columnName = sanitizeColumnName(header.getHeaderName());
-
-            if (firstColumn) {
-                columns.append(columnName);
-                placeholders.append("?");
-                firstColumn = false;
-            } else {
-                columns.append(", ").append(columnName);
-                placeholders.append(", ?");
-            }
-        }
-
-        String sql = "INSERT INTO " + tableName + " (" + columns + ") VALUES (" + placeholders + ")";
-
-        int totalInserted = 0;
-        int totalBatches = (int) Math.ceil((double) rows.size() / BATCH_SIZE_FOR_INSERT);
-
-        logger.info("🚀 Ejecutando INSERT de {} filas en {} batches de máximo {} registros",
-                   rows.size(), totalBatches, BATCH_SIZE_FOR_INSERT);
-
-        // Procesar en batches para evitar problemas de memoria y mejorar rendimiento
-        for (int batchStart = 0; batchStart < rows.size(); batchStart += BATCH_SIZE_FOR_INSERT) {
-            int batchEnd = Math.min(batchStart + BATCH_SIZE_FOR_INSERT, rows.size());
-            List<PreparedRowData> currentBatch = rows.subList(batchStart, batchEnd);
-
-            int[] updateCounts = jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
-                @Override
-                public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
-                    PreparedRowData rowData = currentBatch.get(i);
-                    List<Object> values = rowData.getValues();
-
-                    for (int j = 0; j < values.size(); j++) {
-                        ps.setObject(j + 1, values.get(j));
-                    }
-                }
-
-                @Override
-                public int getBatchSize() {
-                    return currentBatch.size();
-                }
-            });
-
-            // Sumar registros insertados en este batch
-            for (int count : updateCounts) {
-                if (count > 0) {
-                    totalInserted += count;
-                }
-            }
-
-            // Log de progreso cada 5 batches o al final
-            int currentBatchNum = (batchStart / BATCH_SIZE_FOR_INSERT) + 1;
-            if (currentBatchNum % 5 == 0 || batchEnd == rows.size()) {
-                logger.info("📊 Progreso INSERT: {}/{} batches ({} registros)", currentBatchNum, totalBatches, batchEnd);
-            }
-        }
-
-        return totalInserted;
-    }
-
-    /**
-     * Inserta una fila en la tabla dinámica y crea el cliente si es necesario
-     * @deprecated Usar batchInsertRows para mejor rendimiento
-     */
-    @Deprecated
-    private void insertRowToTable(String tableName, Map<String, Object> rowData, List<HeaderConfiguration> headers, SubPortfolio subPortfolio) {
-        // Construir SQL dinámico
-        StringBuilder columns = new StringBuilder();
-        StringBuilder placeholders = new StringBuilder();
-        List<Object> values = new ArrayList<>();
-
-        boolean firstColumn = true;
-
-        logger.debug("🔍 Insertando fila. Cabeceras configuradas: {}, Keys en CSV: {}",
-            headers.stream().map(HeaderConfiguration::getHeaderName).collect(java.util.stream.Collectors.toList()),
-            rowData.keySet());
-
-        // Agregar columnas dinámicas
-        for (HeaderConfiguration header : headers) {
-            String columnName = sanitizeColumnName(header.getHeaderName());
-
-            // Obtener el valor: puede venir directo o por transformación
-            Object value;
-            if (header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
-                // Este campo se deriva de otro mediante transformación (case-insensitive)
-                Object sourceValue = getValueFromRowData(rowData, header.getSourceField());
-                if (sourceValue != null) {
-                    String sourceStr = sourceValue.toString();
-
-                    // Aplicar regex si está configurado
-                    if (header.getRegexPattern() != null && !header.getRegexPattern().trim().isEmpty()) {
-                        value = applyRegexTransformation(sourceStr, header.getRegexPattern(), header.getHeaderName());
-                    } else {
-                        // Sin regex, copiar el valor tal cual
-                        value = sourceStr;
-                    }
-                    logger.debug("Transformación: {} → {}", header.getSourceField(), header.getHeaderName());
-                } else {
-                    value = null;
-                }
-            } else {
-                // Campo normal: obtener directamente del CSV (case-insensitive)
-                value = getValueFromRowData(rowData, header.getHeaderName());
-            }
-
-            // ========== VALIDACIÓN DE CAMPOS OBLIGATORIOS ==========
-            boolean isEmpty = value == null ||
-                             (value instanceof String && ((String) value).trim().isEmpty());
-
-            // Validar que campos obligatorios tengan valor
-            if (header.getRequired() != null && header.getRequired() == 1) {
-                if (isEmpty) {
-                    throw new IllegalArgumentException(
-                        "El campo obligatorio '" + header.getHeaderName() + "' no puede estar vacío"
-                    );
-                }
-            }
-
-            // Si el campo NO es obligatorio y está vacío, convertir a NULL
-            if (isEmpty) {
-                value = null;
-            }
-
-            if (firstColumn) {
-                columns.append(columnName);
-                placeholders.append("?");
-                firstColumn = false;
-            } else {
-                columns.append(", ").append(columnName);
-                placeholders.append(", ?");
-            }
-
-            // Convertir el valor según el tipo de dato
-            if (value == null) {
-                values.add(null);
-            } else {
-                switch (header.getDataType().toUpperCase()) {
-                    case "NUMERICO":
-                        // Intentar convertir a número
-                        try {
-                            if (value instanceof Number) {
-                                values.add(value);
-                            } else {
-                                String numStr = value.toString().trim();
-
-                                // Manejar casos como ".10" o ".20" agregando "0" al inicio
-                                if (numStr.startsWith(".")) {
-                                    numStr = "0" + numStr;
-                                }
-
-                                values.add(Double.parseDouble(numStr));
-                            }
-                        } catch (NumberFormatException e) {
-                            throw new IllegalArgumentException("Valor no numérico para campo " + header.getHeaderName() + ": " + value);
-                        }
-                        break;
-                    case "FECHA":
-                        // Convertir a fecha usando parseo flexible
-                        // IMPORTANTE: Siempre se guarda como LocalDate en BD (sin hora)
-                        try {
-                            if (value instanceof LocalDate) {
-                                values.add(value);
-                            } else if (value instanceof java.time.LocalDateTime) {
-                                values.add(((java.time.LocalDateTime) value).toLocalDate());
-                            } else {
-                                String dateStr = value.toString().trim();
-                                LocalDate parsedDate = parseFlexibleDate(dateStr, header.getFormat());
-                                values.add(parsedDate);
-                            }
-                        } catch (Exception e) {
-                            throw new IllegalArgumentException("Valor no es fecha válida para campo " + header.getHeaderName() + ": " + value +
-                                " (formato esperado: " + (header.getFormat() != null ? header.getFormat() : "auto-detectado") + ")" +
-                                " - Error: " + e.getMessage());
-                        }
-                        break;
-                    case "BOOLEANO":
-                    case "BOOLEAN":
-                        // Convertir a booleano (1 o 0 para BIT en SQL Server)
-                        try {
-                            if (value instanceof Boolean) {
-                                values.add((Boolean) value ? 1 : 0);
-                            } else {
-                                String boolStr = value.toString().trim().toLowerCase();
-                                boolean boolValue = boolStr.equals("true") || boolStr.equals("1") ||
-                                    boolStr.equals("si") || boolStr.equals("sí") ||
-                                    boolStr.equals("yes") || boolStr.equals("verdadero") ||
-                                    boolStr.equals("v") || boolStr.equals("y") ||
-                                    boolStr.equals("activo") || boolStr.equals("habilitado");
-                                values.add(boolValue ? 1 : 0);
-                            }
-                        } catch (Exception e) {
-                            throw new IllegalArgumentException("Valor no es booleano válido para campo " + header.getHeaderName() + ": " + value);
-                        }
-                        break;
-                    case "TEXTO":
-                    default:
-                        values.add(value.toString());
-                        break;
-                }
-            }
-        }
-
-        // Ejecutar INSERT
-        String sql = "INSERT INTO " + tableName + " (" + columns + ") VALUES (" + placeholders + ")";
-
-        try {
-            jdbcTemplate.update(sql, values.toArray());
-
-            // Después de insertar exitosamente, crear el cliente si es necesario
-            createCustomerIfNeeded(rowData, headers, subPortfolio);
-        } catch (Exception e) {
-            logger.error("Error al ejecutar INSERT en {}: {}", tableName, e.getMessage());
-            throw new RuntimeException("Error al insertar datos: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Crea un cliente en la tabla clientes si no existe, usando los datos transformados
-     */
-    private void createCustomerIfNeeded(Map<String, Object> rowData, List<HeaderConfiguration> headers, SubPortfolio subPortfolio) {
-        try {
-            // Construir un mapa de valores transformados: fieldCode -> valor
-            Map<String, String> transformedData = new HashMap<>();
-
-            for (HeaderConfiguration header : headers) {
-                // Obtener el valor (puede ser transformado o directo)
-                String value;
-                if (header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
-                    // Campo transformado
-                    Object sourceValue = rowData.get(header.getSourceField());
-                    if (sourceValue != null) {
-                        String sourceStr = sourceValue.toString();
-                        if (header.getRegexPattern() != null && !header.getRegexPattern().trim().isEmpty()) {
-                            value = applyRegexTransformation(sourceStr, header.getRegexPattern(), header.getHeaderName());
-                        } else {
-                            value = sourceStr;
-                        }
-                    } else {
-                        value = null;
-                    }
-                } else {
-                    // Campo directo
-                    Object directValue = rowData.get(header.getHeaderName());
-                    value = directValue != null ? directValue.toString() : null;
-                }
-
-                // Guardar en el mapa usando el fieldCode de la definición
-                if (header.getFieldDefinition() != null && value != null) {
-                    String fieldCode = header.getFieldDefinition().getFieldCode();
-                    transformedData.put(fieldCode, value);
-
-                } else if (header.getFieldDefinition() == null) {
-                    logger.warn("⚠️ Header '{}' NO tiene FieldDefinition asociado", header.getHeaderName());
-                }
-            }
-
-            // Extraer campos necesarios para crear el cliente
-            String documento = transformedData.get("documento");
-            String identificationCode = transformedData.get("codigo_identificacion");
-            String nombreCompleto = transformedData.get("nombre_completo");
-
-            // Si no tenemos codigo_identificacion, no podemos crear el cliente
-            if (identificationCode == null || identificationCode.trim().isEmpty()) {
-                logger.debug("No se puede crear cliente: falta campo 'codigo_identificacion'");
-                return;
-            }
-
-            // Obtener tenantId
-            Long tenantId = subPortfolio.getPortfolio().getTenant().getId().longValue();
-
-            // Verificar si el cliente ya existe
-            Optional<Customer> existingCustomer = customerRepository.findByTenantIdAndIdentificationCode(tenantId, identificationCode);
-
-            if (existingCustomer.isEmpty()) {
-                // Crear nuevo cliente con campos básicos
-                Customer newCustomer = new Customer(
-                    tenantId,
-                    identificationCode,  // identificationCode (OBLIGATORIO)
-                    documento,           // document (opcional)
-                    nombreCompleto,      // fullName (opcional)
-                    null,               // birthDate (se setea después si existe)
-                    "ACTIVO"            // status
-                );
-
-                // Setear campos adicionales dinámicamente desde transformedData
-                String primerNombre = transformedData.get("primer_nombre");
-                if (primerNombre != null && !primerNombre.trim().isEmpty()) {
-                    newCustomer.setFirstName(primerNombre);
-                }
-
-                String segundoNombre = transformedData.get("segundo_nombre");
-                if (segundoNombre != null && !segundoNombre.trim().isEmpty()) {
-                    newCustomer.setSecondName(segundoNombre);
-                }
-
-                String primerApellido = transformedData.get("primer_apellido");
-                if (primerApellido != null && !primerApellido.trim().isEmpty()) {
-                    newCustomer.setFirstLastName(primerApellido);
-                }
-
-                String segundoApellido = transformedData.get("segundo_apellido");
-                if (segundoApellido != null && !segundoApellido.trim().isEmpty()) {
-                    newCustomer.setSecondLastName(segundoApellido);
-                }
-
-                String fechaNacimientoStr = transformedData.get("fecha_nacimiento");
-                if (fechaNacimientoStr != null && !fechaNacimientoStr.trim().isEmpty()) {
-                    try {
-                        LocalDate fechaNacimiento = LocalDate.parse(fechaNacimientoStr);
-                        newCustomer.setBirthDate(fechaNacimiento);
-                    } catch (Exception e) {
-                        logger.warn("Error parseando fecha_nacimiento: {}", fechaNacimientoStr);
-                    }
-                }
-
-                String edadStr = transformedData.get("edad");
-                if (edadStr != null && !edadStr.trim().isEmpty()) {
-                    try {
-                        newCustomer.setAge(Integer.parseInt(edadStr));
-                    } catch (NumberFormatException e) {
-                        logger.warn("Error parseando edad: {}", edadStr);
-                    }
-                }
-
-                String estadoCivil = transformedData.get("estado_civil");
-                if (estadoCivil != null && !estadoCivil.trim().isEmpty()) {
-                    newCustomer.setMaritalStatus(estadoCivil);
-                }
-
-                String ocupacion = transformedData.get("ocupacion");
-                if (ocupacion != null && !ocupacion.trim().isEmpty()) {
-                    newCustomer.setOccupation(ocupacion);
-                }
-
-                String tipoCliente = transformedData.get("tipo_cliente");
-                if (tipoCliente != null && !tipoCliente.trim().isEmpty()) {
-                    newCustomer.setCustomerType(tipoCliente);
-                }
-
-                String direccion = transformedData.get("direccion");
-                if (direccion != null && !direccion.trim().isEmpty()) {
-                    newCustomer.setAddress(direccion);
-                }
-
-                String distrito = transformedData.get("distrito");
-                if (distrito != null && !distrito.trim().isEmpty()) {
-                    newCustomer.setDistrict(distrito);
-                }
-
-                String provincia = transformedData.get("provincia");
-                if (provincia != null && !provincia.trim().isEmpty()) {
-                    newCustomer.setProvince(provincia);
-                }
-
-                String departamento = transformedData.get("departamento");
-                if (departamento != null && !departamento.trim().isEmpty()) {
-                    newCustomer.setDepartment(departamento);
-                }
-
-                String referenciaPersonal = transformedData.get("referencia_personal");
-                if (referenciaPersonal != null && !referenciaPersonal.trim().isEmpty()) {
-                    newCustomer.setPersonalReference(referenciaPersonal);
-                }
-
-                String numeroCuentaLineaPrestamo = transformedData.get("numero_cuenta_linea_prestamo");
-                if (numeroCuentaLineaPrestamo != null && !numeroCuentaLineaPrestamo.trim().isEmpty()) {
-                    newCustomer.setAccountNumber(numeroCuentaLineaPrestamo);
-                }
-
-                Customer savedCustomer = customerRepository.save(newCustomer);
-
-                // Crear métodos de contacto para el nuevo cliente
-                createContactMethodsForCustomer(savedCustomer, transformedData, headers);
-            } else {
-                logger.debug("Cliente ya existe con codigo_identificacion={}", identificationCode);
-
-                // Actualizar accountNumber si viene en los datos
-                Customer customer = existingCustomer.get();
-                String numeroCuentaLineaPrestamo = transformedData.get("numero_cuenta_linea_prestamo");
-                if (numeroCuentaLineaPrestamo != null && !numeroCuentaLineaPrestamo.trim().isEmpty()) {
-                    customer.setAccountNumber(numeroCuentaLineaPrestamo);
-                    customerRepository.save(customer);
-                    logger.debug("AccountNumber actualizado para cliente existente: {}", identificationCode);
-                }
-
-                // También crear métodos de contacto para clientes existentes
-                createContactMethodsForCustomer(customer, transformedData, headers);
-            }
-
-        } catch (Exception e) {
-            // No lanzar excepción para no interrumpir la importación
-            // Solo registrar el error
-            logger.error("Error al crear cliente (no crítico): {}", e.getMessage());
-        }
-    }
+    // ==================== MÉTODOS BATCH ELIMINADOS ====================
+    // Los siguientes métodos fueron eliminados como parte de la optimización sin batches:
+    // - batchInsertRows, batchUpdateRows (2 overloads), batchInsertNewRows
+    // - queryExistingIdentityCodes, insertRowToTable, createCustomerIfNeeded
+    //
+    // Las operaciones INSERT/UPDATE ahora se realizan fila por fila en:
+    // - importDataToTable() - con jdbcTemplate.update()
+    // - importDailyData() - con jdbcTemplate.update()
+    // La sincronización de clientes ahora usa CustomerSyncService
+    // ==================== FIN SECCIÓN BATCH ====================
 
     /**
      * Obtiene un valor del rowData de forma case-insensitive y flexible con espacios/guiones
@@ -1852,9 +1322,6 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
     // ==================== ACTUALIZACIÓN DE DATOS COMPLEMENTARIOS ====================
 
-    // Tamaño del batch para operaciones de UPDATE complementario
-    private static final int BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE = 1; // TODO: Cambiar a 500 después de pruebas
-
     @Override
     @Transactional
     public Map<String, Object> updateComplementaryDataInTable(Integer subPortfolioId, LoadType loadType,
@@ -1880,27 +1347,30 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             throw new IllegalArgumentException("No hay cabeceras configuradas para esta subcartera y tipo de carga.");
         }
 
-        // ========== OPTIMIZACIÓN 1: Cargar todas las columnas existentes en la tabla UNA SOLA VEZ ==========
+        // Buscar la columna de enlace
+        String linkColumnName = findLinkColumnName(linkField, headers);
+        logger.info("✅ Campo de enlace '{}' mapeado a columna '{}'", linkField, linkColumnName);
+
+        // NOTA: El índice debe existir en la columna de identificación (documento/identity_code)
+        // Se crea automáticamente al crear la tabla. Si el linkField es diferente,
+        // considerar crear el índice manualmente en la BD para optimizar rendimiento.
+
+        // ========== OPTIMIZACIÓN 2: Cargar columnas existentes UNA SOLA VEZ ==========
         Set<String> existingColumns = loadTableColumns(tableName);
         logger.info("📊 Columnas existentes en tabla: {}", existingColumns.size());
 
-        // ========== OPTIMIZACIÓN 2: Pre-computar mapeo de cabeceras ==========
+        // ========== OPTIMIZACIÓN 3: Pre-computar mapeo de cabeceras ==========
         Map<String, HeaderConfiguration> headerMap = new HashMap<>();
         for (HeaderConfiguration header : headers) {
             String normalizedName = normalizeHeaderName(header.getHeaderName());
             headerMap.put(normalizedName, header);
         }
 
-        // Buscar la columna de enlace
-        String linkColumnName = findLinkColumnName(linkField, headers);
-        logger.info("✅ Campo de enlace '{}' mapeado a columna '{}'", linkField, linkColumnName);
-
-        // ========== OPTIMIZACIÓN 3: Identificar columnas a actualizar (solo una vez) ==========
         if (data.isEmpty()) {
             return buildComplementaryResult(0, 0, 0, 0, tableName, new ArrayList<>(), startTime);
         }
 
-        // Obtener las columnas del primer registro para determinar estructura
+        // ========== OPTIMIZACIÓN 4: Identificar columnas a actualizar (solo una vez) ==========
         Map<String, Object> sampleRow = data.get(0);
         List<ColumnUpdateInfo> columnsToUpdate = new ArrayList<>();
 
@@ -1930,57 +1400,66 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         logger.info("📝 Columnas a actualizar: {}", columnsToUpdate.stream()
             .map(c -> c.sanitizedName).toList());
 
-        // ========== OPTIMIZACIÓN 4: Construir SQL una sola vez ==========
+        // ========== OPTIMIZACIÓN 5: Construir SQL una sola vez ==========
         String updateSql = buildComplementaryUpdateSql(tableName, columnsToUpdate, linkColumnName);
         logger.debug("SQL de actualización: {}", updateSql);
 
-        // ========== OPTIMIZACIÓN 5: Procesar en batches ==========
+        // ========== PROCESAR TODAS LAS FILAS ==========
         int updatedRows = 0;
         int notFoundRows = 0;
-        int failedRows = 0;
         List<String> errors = new ArrayList<>();
 
-        int totalBatches = (int) Math.ceil((double) data.size() / BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE);
-        logger.info("📦 Procesando {} registros en {} batches de hasta {} registros",
-                   data.size(), totalBatches, BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE);
+        int logInterval = Math.max(1, data.size() / 10); // Log cada 10%
 
-        for (int batchNum = 0; batchNum < totalBatches; batchNum++) {
-            int startIdx = batchNum * BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE;
-            int endIdx = Math.min(startIdx + BATCH_SIZE_FOR_COMPLEMENTARY_UPDATE, data.size());
-            List<Map<String, Object>> batch = data.subList(startIdx, endIdx);
+        for (int i = 0; i < data.size(); i++) {
+            Map<String, Object> row = data.get(i);
 
             try {
-                int[] results = executeBatchComplementaryUpdate(batch, updateSql, columnsToUpdate, linkField, errors, startIdx);
-
-                for (int i = 0; i < results.length; i++) {
-                    if (results[i] > 0) {
-                        updatedRows += results[i];
-                    } else if (results[i] == 0) {
-                        notFoundRows++;
-                    }
+                // Obtener valor del campo de enlace
+                Object linkValue = getValueFromRowData(row, linkField);
+                if (linkValue == null || linkValue.toString().trim().isEmpty()) {
+                    errors.add("Fila " + (i + 1) + ": Campo de enlace vacío");
+                    continue;
                 }
 
-                if ((batchNum + 1) % 10 == 0 || batchNum == totalBatches - 1) {
-                    logger.info("📊 Progreso: {}/{} batches ({} registros procesados)",
-                               batchNum + 1, totalBatches, endIdx);
+                // Preparar valores para el UPDATE
+                Object[] args = new Object[columnsToUpdate.size() + 1];
+                int idx = 0;
+
+                for (ColumnUpdateInfo col : columnsToUpdate) {
+                    Object value = getValueFromRowData(row, col.originalName);
+                    args[idx++] = convertValueForUpdate(value, col.header);
+                }
+
+                // Último parámetro: valor del campo de enlace para WHERE
+                args[idx] = linkValue.toString().trim();
+
+                // Ejecutar UPDATE
+                int rowsAffected = jdbcTemplate.update(updateSql, args);
+
+                if (rowsAffected > 0) {
+                    updatedRows += rowsAffected;
+                } else {
+                    notFoundRows++;
                 }
 
             } catch (Exception e) {
-                logger.error("Error en batch {}: {}", batchNum + 1, e.getMessage());
-                // Marcar todo el batch como fallido
-                failedRows += batch.size();
-                errors.add("Batch " + (batchNum + 1) + " falló: " + e.getMessage());
+                errors.add("Fila " + (i + 1) + ": " + e.getMessage());
+                logger.debug("Error en fila {}: {}", i + 1, e.getMessage());
+            }
+
+            // Log de progreso
+            if ((i + 1) % logInterval == 0 || i == data.size() - 1) {
+                logger.info("📊 Progreso: {}/{} registros procesados ({}%)",
+                           i + 1, data.size(), ((i + 1) * 100 / data.size()));
             }
         }
 
-        // Contar filas fallidas basado en errores individuales
-        failedRows = errors.size();
-
         long duration = System.currentTimeMillis() - startTime;
-        logger.info("✅ Actualización complementaria completada en {}ms: {} actualizados, {} no encontrados, {} fallidos",
-                   duration, updatedRows, notFoundRows, failedRows);
+        logger.info("✅ Actualización complementaria completada en {}ms: {} actualizados, {} no encontrados, {} errores",
+                   duration, updatedRows, notFoundRows, errors.size());
 
-        return buildComplementaryResult(data.size(), updatedRows, notFoundRows, failedRows, tableName, errors, startTime);
+        return buildComplementaryResult(data.size(), updatedRows, notFoundRows, errors.size(), tableName, errors, startTime);
     }
 
     /**
@@ -2040,52 +1519,6 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         sql.append(" WHERE ").append(linkColumnName).append(" = ?");
         return sql.toString();
-    }
-
-    /**
-     * Ejecuta un batch de actualizaciones complementarias
-     */
-    private int[] executeBatchComplementaryUpdate(List<Map<String, Object>> batch, String sql,
-                                                   List<ColumnUpdateInfo> columnsToUpdate, String linkField,
-                                                   List<String> errors, int startIdx) {
-        List<Object[]> batchArgs = new ArrayList<>();
-
-        for (int i = 0; i < batch.size(); i++) {
-            Map<String, Object> row = batch.get(i);
-            int rowNum = startIdx + i + 1;
-
-            try {
-                // Obtener valor del campo de enlace
-                Object linkValue = getValueFromRowData(row, linkField);
-                if (linkValue == null || linkValue.toString().trim().isEmpty()) {
-                    errors.add("Fila " + rowNum + ": Campo de enlace vacío");
-                    continue;
-                }
-
-                // Preparar valores para el UPDATE
-                Object[] args = new Object[columnsToUpdate.size() + 1];
-                int idx = 0;
-
-                for (ColumnUpdateInfo col : columnsToUpdate) {
-                    Object value = getValueFromRowData(row, col.originalName);
-                    args[idx++] = convertValueForUpdate(value, col.header);
-                }
-
-                // Último parámetro: valor del campo de enlace para WHERE
-                args[idx] = linkValue.toString().trim();
-                batchArgs.add(args);
-
-            } catch (Exception e) {
-                errors.add("Fila " + rowNum + ": " + e.getMessage());
-            }
-        }
-
-        if (batchArgs.isEmpty()) {
-            return new int[0];
-        }
-
-        // Ejecutar batch update
-        return jdbcTemplate.batchUpdate(sql, batchArgs);
     }
 
     /**
@@ -2303,7 +1736,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             logger.warn("⚠️ No hay columnas comunes entre los datos y la tabla INICIAL");
             result.put("inicial", Map.of("updatedRows", 0, "notFoundRows", data.size(), "failedRows", 0));
         } else {
-            // Paso 2: Construir SQL template para batch update
+            // Paso 2: Construir SQL template (una sola vez)
             List<String> columnsList = new ArrayList<>(columnsToUpdateSet);
             StringBuilder setClause = new StringBuilder();
             for (int i = 0; i < columnsList.size(); i++) {
@@ -2315,13 +1748,11 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             String updateSql = "UPDATE " + tableInicial + " SET " + setClause +
                               " WHERE " + sanitizedLinkField + " = ?";
 
-            logger.info("📝 SQL de actualización batch: {} columnas, procesando en batches de {}",
-                       columnsList.size(), BATCH_SIZE_FOR_DAILY_UPDATE);
+            logger.info("📝 SQL de actualización: {} columnas, procesando {} registros (sin batches)",
+                       columnsList.size(), data.size());
 
-            // Paso 3: Preparar datos para batch update
-            List<Object[]> batchArgs = new ArrayList<>();
-            List<Integer> rowIndices = new ArrayList<>(); // Para tracking de errores
-            List<String> linkValuesInOrder = new ArrayList<>(); // Para rastrear qué registros se actualizaron
+            // Paso 3: Procesar cada fila individualmente (sin batches)
+            Set<String> updatedIdentificationCodes = new HashSet<>();
 
             for (int i = 0; i < data.size(); i++) {
                 Map<String, Object> row = data.get(i);
@@ -2362,56 +1793,22 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     }
                     args[columnsList.size()] = linkValue; // WHERE clause
 
-                    batchArgs.add(args);
-                    rowIndices.add(i);
-                    linkValuesInOrder.add(linkValue); // Guardar el linkValue en orden
+                    // Ejecutar UPDATE individual
+                    int rowsAffected = jdbcTemplate.update(updateSql, args);
+
+                    if (rowsAffected > 0) {
+                        updatedInInicial++;
+                        updatedIdentificationCodes.add(linkValue);
+                    } else {
+                        notFoundInInicial++;
+                    }
 
                 } catch (Exception e) {
                     failedInInicial++;
-                    errors.add("Fila " + (i + 1) + " (preparación): " + e.getMessage());
-                }
-            }
-
-            // Paso 4: Ejecutar batch updates y recolectar IDs actualizados
-            logger.info("🚀 Ejecutando {} actualizaciones en batches de {}...",
-                       batchArgs.size(), BATCH_SIZE_FOR_DAILY_UPDATE);
-
-            int totalBatches = (int) Math.ceil((double) batchArgs.size() / BATCH_SIZE_FOR_DAILY_UPDATE);
-            int processedBatches = 0;
-            Set<String> updatedIdentificationCodes = new HashSet<>(); // Códigos de identificación actualizados
-
-            for (int batchStart = 0; batchStart < batchArgs.size(); batchStart += BATCH_SIZE_FOR_DAILY_UPDATE) {
-                int batchEnd = Math.min(batchStart + BATCH_SIZE_FOR_DAILY_UPDATE, batchArgs.size());
-                List<Object[]> currentBatch = batchArgs.subList(batchStart, batchEnd);
-
-                try {
-                    int[] results = jdbcTemplate.batchUpdate(updateSql, currentBatch);
-
-                    // Contar resultados y recolectar IDs actualizados
-                    for (int k = 0; k < results.length; k++) {
-                        if (results[k] > 0) {
-                            updatedInInicial += results[k];
-                            // Agregar el linkValue del registro actualizado exitosamente
-                            int globalIndex = batchStart + k;
-                            if (globalIndex < linkValuesInOrder.size()) {
-                                updatedIdentificationCodes.add(linkValuesInOrder.get(globalIndex));
-                            }
-                        } else if (results[k] == 0) {
-                            notFoundInInicial++;
-                        }
+                    errors.add("Fila " + (i + 1) + ": " + e.getMessage());
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Error en UPDATE fila {}: {}", i + 1, e.getMessage());
                     }
-
-                    processedBatches++;
-                    if (processedBatches % 10 == 0 || processedBatches == totalBatches) {
-                        logger.info("📊 Progreso: {}/{} batches procesados ({} registros)",
-                                   processedBatches, totalBatches, batchEnd);
-                    }
-
-                } catch (Exception e) {
-                    logger.error("❌ Error en batch {}-{}: {}", batchStart, batchEnd, e.getMessage());
-                    // En caso de error de batch, marcar todas las filas como fallidas
-                    failedInInicial += currentBatch.size();
-                    errors.add("Error en batch " + (processedBatches + 1) + ": " + e.getMessage());
                 }
             }
 
