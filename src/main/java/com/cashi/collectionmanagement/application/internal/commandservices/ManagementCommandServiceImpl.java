@@ -6,7 +6,6 @@ import com.cashi.collectionmanagement.domain.services.ManagementCommandService;
 import com.cashi.collectionmanagement.infrastructure.persistence.jpa.repositories.ManagementRepository;
 import com.cashi.paymentprocessing.domain.model.aggregates.PaymentSchedule;
 import com.cashi.paymentprocessing.domain.model.entities.Installment;
-import com.cashi.paymentprocessing.domain.services.InstallmentStatusCommandService;
 import com.cashi.paymentprocessing.infrastructure.persistence.jpa.repositories.PaymentScheduleRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.TenantRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.PortfolioRepository;
@@ -24,7 +23,6 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
 
     private final ManagementRepository repository;
     private final PaymentScheduleRepository paymentScheduleRepository;
-    private final InstallmentStatusCommandService installmentStatusService;
     private final ObjectMapper objectMapper;
     private final TenantRepository tenantRepository;
     private final PortfolioRepository portfolioRepository;
@@ -32,14 +30,12 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
 
     public ManagementCommandServiceImpl(ManagementRepository repository,
                                        PaymentScheduleRepository paymentScheduleRepository,
-                                       InstallmentStatusCommandService installmentStatusService,
                                        ObjectMapper objectMapper,
                                        TenantRepository tenantRepository,
                                        PortfolioRepository portfolioRepository,
                                        SubPortfolioRepository subPortfolioRepository) {
         this.repository = repository;
         this.paymentScheduleRepository = paymentScheduleRepository;
-        this.installmentStatusService = installmentStatusService;
         this.objectMapper = objectMapper;
         this.tenantRepository = tenantRepository;
         this.portfolioRepository = portfolioRepository;
@@ -267,20 +263,6 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
                     System.out.println("      💰 Cuota #" + installment.getInstallmentNumber() + " PAGADA COMPLETA");
                     System.out.println("         - Monto cuota: S/ " + installmentAmount);
                     System.out.println("         - Pago restante: S/ " + remainingPayment);
-
-                    // Registrar en historial de estados
-                    try {
-                        installmentStatusService.registerPayment(
-                            installment.getId(),
-                            managementId,
-                            java.time.LocalDateTime.now(),
-                            installmentAmount,
-                            "Pago aplicado automáticamente desde gestión",
-                            "SYSTEM"
-                        );
-                    } catch (Exception e) {
-                        System.err.println("         ⚠️  Error registrando historial de cuota: " + e.getMessage());
-                    }
                 } else {
                     // Pago parcial de la cuota (por ahora solo registramos en logs)
                     System.out.println("      ⚠️  Cuota #" + installment.getInstallmentNumber() + " - Pago PARCIAL");
@@ -402,18 +384,6 @@ public class ManagementCommandServiceImpl implements ManagementCommandService {
             System.out.println("   - Monto Total: S/ " + totalAmount);
             System.out.println("   - Número de Cuotas: " + installmentDataList.size());
             System.out.println("   - Las cuotas se crearon con MONTOS PERSONALIZADOS del cronograma frontend");
-
-            // Crear registros de historial inicial (PENDIENTE) para cada cuota
-            System.out.println("\n📋 Creando registros de historial inicial para cada cuota:");
-            List<Installment> installments = savedSchedule.getInstallments();
-            for (Installment installment : installments) {
-                installmentStatusService.registerInitialStatus(
-                    installment.getId(),
-                    management.getId().toString(),
-                    "SYSTEM" // Por ahora usamos SYSTEM, luego puede ser el usuario actual
-                );
-            }
-            System.out.println("✅ Historial inicial creado para " + installments.size() + " cuotas");
 
         } catch (Exception e) {
             System.err.println("❌ Error guardando cronograma de pagos: " + e.getMessage());
