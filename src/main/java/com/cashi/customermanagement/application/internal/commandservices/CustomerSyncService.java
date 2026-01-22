@@ -104,6 +104,11 @@ public class CustomerSyncService {
                         continue;
                     }
 
+                    // Fallback: Si no hay codigo_identificacion, usar documento para búsqueda
+                    if (identificationCode == null || identificationCode.isEmpty()) {
+                        identificationCode = document;
+                    }
+
                     // Buscar en Map en lugar de query a BD
                     Customer existingCustomer = existingCustomersMap.get(identificationCode);
 
@@ -207,6 +212,11 @@ public class CustomerSyncService {
                     if (document == null || document.isEmpty()) {
                         errors.add("Documento vacío en registro");
                         continue;
+                    }
+
+                    // Fallback: Si no hay codigo_identificacion, usar documento para búsqueda
+                    if (identificationCode == null || identificationCode.isEmpty()) {
+                        identificationCode = document;
                     }
 
                     // Buscar en Map en lugar de query a BD (O(1) vs O(n))
@@ -344,6 +354,11 @@ public class CustomerSyncService {
                     if (document == null || document.isEmpty()) {
                         errors.add("Documento vacío en registro");
                         continue;
+                    }
+
+                    // Fallback: Si no hay codigo_identificacion, usar documento para búsqueda
+                    if (identificationCode == null || identificationCode.isEmpty()) {
+                        identificationCode = document;
                     }
 
                     Customer existingCustomer = existingCustomersMap.get(identificationCode);
@@ -540,6 +555,11 @@ public class CustomerSyncService {
         String identificationCode = getStringValue(row, "codigo_identificacion");
         String document = getStringValue(row, "documento");
 
+        // Fallback: Si no hay codigo_identificacion, usar documento
+        if (identificationCode == null || identificationCode.isEmpty()) {
+            identificationCode = document;
+        }
+
         customer.setCustomerId(document);  // id_cliente = documento
         customer.setIdentificationCode(identificationCode);
         customer.setDocument(document);
@@ -599,6 +619,11 @@ public class CustomerSyncService {
         // Identificación
         String identificationCode = getStringValue(row, "codigo_identificacion");
         String document = getStringValue(row, "documento");
+
+        // Fallback: Si no hay codigo_identificacion, usar documento
+        if (identificationCode == null || identificationCode.isEmpty()) {
+            identificationCode = document;
+        }
 
         customer.setCustomerId(document);  // id_cliente = documento
         customer.setIdentificationCode(identificationCode);
