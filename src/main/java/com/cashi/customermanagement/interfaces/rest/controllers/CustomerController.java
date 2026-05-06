@@ -18,6 +18,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.List;
@@ -28,6 +30,8 @@ import java.util.Map;
 @Tag(name = "Customer Management", description = "Gestión de clientes, cuentas y deudas")
 @CrossOrigin(origins = "*")
 public class CustomerController {
+
+    private static final Logger logger = LoggerFactory.getLogger(CustomerController.class);
 
     private final CustomerQueryServiceImpl queryService;
     // private final CustomerDetailQueryService customerDetailQueryService;
@@ -204,7 +208,7 @@ public class CustomerController {
         return switch (searchBy.toLowerCase()) {
             case "codigo_identificacion" -> {
                 var customers = customerRepository.findAllByTenantIdAndIdentificationCodeWithContactMethods(tenantId, value);
-                System.out.println("✅ Encontrados " + customers.size() + " clientes por codigo_identificacion");
+                logger.debug("Encontrados {} clientes por documento", customers.size());
                 var resources = customers.stream()
                         .map(assembler::toResourceFromEntity)
                         .toList();
@@ -213,7 +217,7 @@ public class CustomerController {
 
             case "documento" -> {
                 var customers = customerRepository.findAllByTenantIdAndDocumentWithContactMethods(tenantId, value);
-                System.out.println("✅ Encontrados " + customers.size() + " clientes por documento");
+                logger.debug("Encontrados {} clientes por documento", customers.size());
                 var resources = customers.stream()
                         .map(assembler::toResourceFromEntity)
                         .toList();
@@ -269,7 +273,7 @@ public class CustomerController {
                        required = true, example = "documento") @RequestParam String searchBy,
             @Parameter(description = "Valor a buscar", required = true, example = "12345678") @RequestParam String value) {
 
-        System.out.println("🔍 Búsqueda multi-tenant GLOBAL: searchBy=" + searchBy + ", value=" + value);
+        logger.debug("Búsqueda GLOBAL: searchBy={}, value={}", searchBy, value);
 
         // Buscar según el criterio especificado SIN filtro de tenantId
         return switch (searchBy.toLowerCase()) {
