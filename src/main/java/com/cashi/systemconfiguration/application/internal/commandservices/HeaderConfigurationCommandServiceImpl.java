@@ -23,6 +23,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.time.LocalDate;
 import java.util.*;
 
@@ -706,11 +710,47 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             throw new IllegalArgumentException("La tabla dinámica no existe para esta subcartera y tipo de carga. Debe configurar las cabeceras primero.");
         }
 
-        // Obtener las configuraciones de cabeceras filtradas por tipo de carga
-        List<HeaderConfiguration> headers = headerConfigurationRepository.findBySubPortfolioAndLoadType(subPortfolio, loadType);
-        if (headers.isEmpty()) {
+	// Obtener las configuraciones de cabeceras filtradas por tipo de carga
+        List<HeaderConfiguration> allHeaders = headerConfigurationRepository.findBySubPortfolioAndLoadType(subPortfolio, loadType);
+        if (allHeaders.isEmpty()) {
             throw new IllegalArgumentException("No hay cabeceras configuradas para esta subcartera y tipo de carga.");
         }
+
+        Set<String> excelColumns = data.stream()
+        .filter(Objects::nonNull)
+        .flatMap(row -> row.keySet().stream())
+        .filter(Objects::nonNull)
+        .map(this::normalizeHeaderName)
+        .collect(Collectors.toSet());
+
+
+        List<HeaderConfiguration> headers = allHeaders.stream()
+            .filter( h -> {
+                if (h.getSourceField() != null && !h.getSourceField().isBlank()) {
+                    return excelColumns.contains(normalizeHeaderName(h.getSourceField()));
+                } 
+                if (excelColumns.contains(normalizeHeaderName(h.getHeaderName()))){
+                    return true;
+                }
+
+                if (h.getAliases() != null){
+                    for (var alias : h.getAliases()) {
+                        if (excelColumns.contains(normalizeHeaderName(alias.getAlias()))) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            })
+            .collect(Collectors.toList());
+        
+        if (headers.isEmpty()) {
+            throw new IllegalArgumentException("Ninguna de las cabeceras configuradas coincide con las columnas del archivo. Verifique los nombres de las columnas y las configuraciones de cabecera.");
+        }
+
+        logger.info("Caberas a importar: {} de {} configuradas. Columnas en Excel: {}",
+                    headers.size(), allHeaders.size(), excelColumns.size());
+	
 
         // ========== BUSCAR CAMPO DE IDENTIFICACIÓN PARA UPSERT ==========
         // Buscar columnas de identificación: identity_code o nombre_cliente
