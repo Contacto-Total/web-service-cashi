@@ -36,6 +36,7 @@ import java.util.*;
 public class CustomerSyncService {
 
     private static final Logger logger = LoggerFactory.getLogger(CustomerSyncService.class);
+    private static final String AGENT_ADDED_LABEL = "Agregado por agente";
 
     @PersistenceContext
     private final EntityManager entityManager;
@@ -984,8 +985,12 @@ public class CustomerSyncService {
     private int syncCustomerContactsWithUpsert(Long clientId, Map<String, Object> row) {
         int contactsCreated = 0;
 
-        // Primero eliminar contactos existentes para este cliente
-        jdbcTemplate.update("DELETE FROM metodos_contacto WHERE id_cliente = ?", clientId);
+        // Primero eliminar contactos existentes para este cliente, preservando los agregados manualmente por agente
+        jdbcTemplate.update(
+                "DELETE FROM metodos_contacto WHERE id_cliente = ? AND (etiqueta IS NULL OR TRIM(LOWER(etiqueta)) <> TRIM(LOWER(?)))",
+                clientId,
+                AGENT_ADDED_LABEL
+        );
 
         // Insertar nuevos contactos
         String insertSql = "INSERT INTO metodos_contacto " +
@@ -1042,9 +1047,17 @@ public class CustomerSyncService {
             List<Long> batch = clientIdList.subList(i, end);
 
             String placeholders = String.join(",", Collections.nCopies(batch.size(), "?"));
-            String deleteSql = "DELETE FROM " + tableName + " WHERE id_cliente IN (" + placeholders + ")";
+            String deleteSql = "DELETE FROM " + tableName +
+                    " WHERE id_cliente IN (" + placeholders + ")" +
+                    " AND (etiqueta IS NULL OR TRIM(LOWER(etiqueta)) <> TRIM(LOWER(?)))";
 
-            int deleted = jdbcTemplate.update(deleteSql, batch.toArray());
+            Object[] deleteArgs = new Object[batch.size() + 1];
+            for (int j = 0; j < batch.size(); j++) {
+                deleteArgs[j] = batch.get(j);
+            }
+            deleteArgs[batch.size()] = AGENT_ADDED_LABEL;
+
+            int deleted = jdbcTemplate.update(deleteSql, deleteArgs);
             totalDeleted += deleted;
         }
         logger.debug("Eliminados {} contactos existentes", totalDeleted);
