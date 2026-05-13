@@ -11,11 +11,15 @@ import org.springframework.web.client.RestTemplate;
 import java.util.Map;
 
 /**
- * HealthIndicator que consulta GET /healthz del worker Node.js.
+ * HealthIndicator que consulta GET /healthz del worker (legacy push-based).
  *
- * Se expone en /actuator/health/osiptelWorker.
- * Si el worker está caído, el indicator marca DOWN sin afectar al health global
- * (a menos que management.endpoint.health.group.* lo incluya explícitamente).
+ * NOTA post-pivot: en el modelo pull-based actual (Electron app), no hay un
+ * "worker remoto" al cual hacer ping desde el backend - es el Electron el que
+ * inicia la conexión. Este indicator queda como infraestructura disponible
+ * por si se requiere monitorear algún otro endpoint HTTP en el futuro.
+ *
+ * Si configuras `cashi.osiptel.worker-url` apuntando a un workspace de
+ * validación HTTP cualquiera, este indicator lo monitorea.
  */
 @Component("osiptelWorker")
 public class OsiptelWorkerHealthIndicator implements HealthIndicator {

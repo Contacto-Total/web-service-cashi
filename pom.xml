@@ -111,6 +111,18 @@
             <version>1.16.0</version>
         </dependency>
 
+        <!-- Spring Boot Actuator + Micrometer (Prometheus) -->
+        <!-- Usado por el módulo Osiptel: HealthIndicator (OsiptelWorkerHealthIndicator)
+             y métricas (OsiptelAuditService con MeterRegistry/Counter/Timer). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
         <!-- Tests -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
