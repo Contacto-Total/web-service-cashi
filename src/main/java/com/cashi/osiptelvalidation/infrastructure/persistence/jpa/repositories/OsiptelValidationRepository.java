@@ -2,12 +2,8 @@ package com.cashi.osiptelvalidation.infrastructure.persistence.jpa.repositories;
 
 import com.cashi.osiptelvalidation.domain.model.aggregates.OsiptelValidation;
 import com.cashi.osiptelvalidation.domain.model.valueobjects.ValidationStatus;
-import jakarta.persistence.LockModeType;
-import jakarta.persistence.QueryHint;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
@@ -26,10 +22,13 @@ public interface OsiptelValidationRepository extends JpaRepository<OsiptelValida
     /**
      * Reclama N filas PENDING con SKIP LOCKED para que múltiples instancias
      * del dispatcher no se peleen por el mismo trabajo.
-     * MySQL 8.0.1+ soporta SKIP LOCKED en SELECT FOR UPDATE.
+     *
+     * NOTA: NO se usa @Lock(PESSIMISTIC_WRITE) porque JPA prohíbe combinarlo
+     * con nativeQuery=true ("Illegal attempt to set lock mode for a native
+     * query"). El `FOR UPDATE SKIP LOCKED` literal en el SQL hace el mismo
+     * trabajo a nivel BD; Hibernate solo pasa el SQL tal cual.
+     * Requiere MySQL 8.0.1+ que soporta SKIP LOCKED.
      */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0")})
     @Query(value = "SELECT * FROM osiptel_validation_log " +
                    "WHERE status = 'PENDING' " +
                    "  AND (cooldown_until IS NULL OR cooldown_until <= NOW()) " +
