@@ -8,14 +8,15 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 /**
- * Hash determinístico del DNI con sal por tenant.
+ * Hash determinístico del DNI con sal GLOBAL.
  * El DNI plaintext nunca toca el almacenamiento; solo se usa para:
  *  - calcular el hash (aquí)
  *  - enviar al worker en el request (no se persiste tras la respuesta)
  *
- * Si el tenantSalt llegara a fugarse, un atacante con la BD podría
- * fuerza-brutar (~10⁸ DNIs peruanos posibles). Por eso la sal debe ser por tenant
- * y rotarse periódicamente.
+ * La sal es global (no por tenant) porque el candidate selector necesita
+ * comparar dni_hash en SQL contra la tabla osiptel_validation_log via SHA2(),
+ * cosa que no funciona con sal variable por fila. La sal global mantiene la
+ * propiedad de "el hash sin la sal no es útil para fuerza bruta inversa".
  */
 @Component
 public class DniHashService {
@@ -26,12 +27,20 @@ public class DniHashService {
         this.properties = properties;
     }
 
+    /**
+     * SHA-256(dni + ':' + globalSalt). El parámetro tenantId se ignora
+     * (legado de un diseño previo con sal per-tenant) - se conserva por
+     * compatibilidad de la firma con callers existentes.
+     */
     public String hash(String dni, Long tenantId) {
+        return hash(dni);
+    }
+
+    public String hash(String dni) {
         if (dni == null || dni.isBlank()) {
             return null;
         }
-        // TODO: cuando exista TenantSaltRepository, derivar sal por tenant; por ahora global.
-        String salt = properties.getDniHashSalt() + ":" + (tenantId == null ? "0" : tenantId);
+        String salt = properties.getDniHashSalt();
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] digest = md.digest((dni + ":" + salt).getBytes(StandardCharsets.UTF_8));

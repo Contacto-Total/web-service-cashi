@@ -3,6 +3,7 @@ package com.cashi.osiptelvalidation.interfaces.rest.controllers;
 import com.cashi.osiptelvalidation.domain.model.commands.EnqueueOsiptelBatchCommand;
 import com.cashi.osiptelvalidation.domain.model.queries.GetValidationByPhoneQuery;
 import com.cashi.osiptelvalidation.domain.model.queries.GetValidationMetricsByPortfolioQuery;
+import com.cashi.osiptelvalidation.domain.model.valueobjects.DocumentType;
 import com.cashi.osiptelvalidation.domain.services.OsiptelValidationCommandService;
 import com.cashi.osiptelvalidation.domain.services.OsiptelValidationQueryService;
 import com.cashi.osiptelvalidation.infrastructure.config.OsiptelProperties;
@@ -29,8 +30,7 @@ import java.util.Map;
  * Endpoints públicos del módulo Osiptel.
  *
  * Bloqueo legal: si profile=prod y legal-review.signed-off=false, todos los endpoints
- * retornan HTTP 423 (Locked) con un mensaje explicativo. Esto cierra la puerta a
- * uso accidental en producción antes de la aprobación de Legal.
+ * retornan HTTP 423 (Locked) con un mensaje explicativo.
  */
 @RestController
 @RequestMapping("/api/v1/osiptel")
@@ -58,14 +58,18 @@ public class OsiptelValidationController {
     }
 
     @PostMapping("/batches")
-    @Operation(summary = "Encolar lote de números para validación Osiptel")
+    @Operation(summary = "Encolar lote de DOCUMENTOS para validación Osiptel")
     public ResponseEntity<?> enqueueBatch(@Valid @RequestBody EnqueueBatchRequest request) {
         ResponseEntity<?> blocked = blockIfNotSignedOff();
         if (blocked != null) return blocked;
 
-        List<EnqueueOsiptelBatchCommand.PhoneEntry> entries = request.phones().stream()
-                .map(p -> new EnqueueOsiptelBatchCommand.PhoneEntry(
-                        p.phone(), p.dni(), p.subPortfolioId(), p.contactMethodId(), p.tenantId()))
+        List<EnqueueOsiptelBatchCommand.DocumentEntry> entries = request.documents().stream()
+                .map(d -> new EnqueueOsiptelBatchCommand.DocumentEntry(
+                        d.dni(),
+                        d.dniType() == null ? DocumentType.DNI : d.dniType(),
+                        d.customerId(),
+                        d.subPortfolioId(),
+                        d.tenantId()))
                 .toList();
 
         var result = commandService.enqueueBatch(new EnqueueOsiptelBatchCommand(entries));
@@ -74,13 +78,13 @@ public class OsiptelValidationController {
     }
 
     @GetMapping("/validations/{phone}")
-    @Operation(summary = "Obtener última validación conocida para un número")
+    @Operation(summary = "Obtener última validación Osiptel conocida para un teléfono")
     public ResponseEntity<?> getValidation(@PathVariable String phone) {
         ResponseEntity<?> blocked = blockIfNotSignedOff();
         if (blocked != null) return blocked;
 
         return queryService.findLatestByPhone(new GetValidationByPhoneQuery(phone))
-                .map(assembler::toResourceFromEntity)
+                .map(assembler::toResource)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.ok(emptyResource(phone)));
     }
@@ -100,10 +104,6 @@ public class OsiptelValidationController {
         return ResponseEntity.ok(metrics);
     }
 
-    /**
-     * Devuelve 423 (Locked) si el environment es prod y Legal no ha firmado.
-     * En perfiles dev/test el bloqueo se omite para permitir desarrollo y E2E.
-     */
     private ResponseEntity<?> blockIfNotSignedOff() {
         if (properties.isLegalReviewSignedOff()) {
             return null;
@@ -121,6 +121,6 @@ public class OsiptelValidationController {
     }
 
     private ValidationStatusResource emptyResource(String phone) {
-        return new ValidationStatusResource(phone, "NOT_CHECKED", null, null, null, null, 0);
+        return new ValidationStatusResource(phone, "NOT_CHECKED", null, null, null, null, null, 0);
     }
 }

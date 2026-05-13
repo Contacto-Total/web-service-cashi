@@ -4,7 +4,7 @@
 -- finished_at < NOW() - INTERVAL p_retention_days DAY.
 --
 -- Uso: CALL sp_osiptel_archive(180, @archived, @msg);
--- Ejecutar mensualmente vía @Scheduled o evento MySQL.
+-- Ejecutar mensualmente via @Scheduled o evento MySQL.
 -- ========================================
 
 DELIMITER //
@@ -28,39 +28,38 @@ BEGIN
         ROLLBACK;
     END;
 
-    -- Validación de input
     IF p_retention_days IS NULL OR p_retention_days < 30 THEN
         SET p_records_archived = 0;
-        SET p_message = 'p_retention_days inválido (mínimo 30 días)';
+        SET p_message = 'p_retention_days invalido (minimo 30 dias)';
     ELSE
         SET v_cutoff = DATE_SUB(NOW(), INTERVAL p_retention_days DAY);
 
         START TRANSACTION;
 
-        -- Conteo antes
         SELECT COUNT(*) INTO v_count_before
         FROM osiptel_validation_log
         WHERE status IN ('OK', 'NOT_FOUND', 'FAILED', 'EXPIRED')
           AND finished_at IS NOT NULL
           AND finished_at < v_cutoff;
 
-        -- Mover a archive (los intentos hijos caen por ON DELETE CASCADE
-        -- al borrar de osiptel_validation_log)
+        -- Mover a archive (osiptel_phone_match y osiptel_validation_attempt caen
+        -- por ON DELETE CASCADE de la FK)
         INSERT INTO osiptel_validation_archive (
-            id, phone, dni_hash, dni_match, operator, status, attempts,
-            enqueued_at, started_at, finished_at, source_subportfolio_id,
+            id, dni_hash, dni_type, lines_count, status, attempts,
+            enqueued_at, started_at, finished_at,
+            source_customer_id, source_subportfolio_id,
             worker_id, fecha_creacion, fecha_archivado
         )
         SELECT
-            id, phone, dni_hash, dni_match, operator, status, attempts,
-            enqueued_at, started_at, finished_at, source_subportfolio_id,
+            id, dni_hash, dni_type, lines_count, status, attempts,
+            enqueued_at, started_at, finished_at,
+            source_customer_id, source_subportfolio_id,
             worker_id, fecha_creacion, NOW()
         FROM osiptel_validation_log
         WHERE status IN ('OK', 'NOT_FOUND', 'FAILED', 'EXPIRED')
           AND finished_at IS NOT NULL
           AND finished_at < v_cutoff;
 
-        -- Eliminar del log principal (CASCADE limpia osiptel_validation_attempt)
         DELETE FROM osiptel_validation_log
         WHERE status IN ('OK', 'NOT_FOUND', 'FAILED', 'EXPIRED')
           AND finished_at IS NOT NULL

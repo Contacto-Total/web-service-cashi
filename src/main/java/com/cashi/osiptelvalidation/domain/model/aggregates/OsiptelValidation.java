@@ -1,6 +1,6 @@
 package com.cashi.osiptelvalidation.domain.model.aggregates;
 
-import com.cashi.osiptelvalidation.domain.model.valueobjects.OperatorCode;
+import com.cashi.osiptelvalidation.domain.model.valueobjects.DocumentType;
 import com.cashi.osiptelvalidation.domain.model.valueobjects.ValidationStatus;
 import com.cashi.shared.domain.AggregateRoot;
 import jakarta.persistence.*;
@@ -10,16 +10,20 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 
 /**
- * Aggregate Root de la validación Osiptel para un número.
+ * Aggregate Root de la validación Osiptel para un DOCUMENTO (no para un teléfono).
  *
- * Encapsula la máquina de estados (PENDING -> IN_PROGRESS -> OK|NOT_FOUND|FAILED|EXPIRED)
- * y las transiciones permitidas. Las mutaciones se hacen a través de los métodos de dominio,
- * no por setters libres.
+ * El portal Osiptel funciona por documento: una consulta devuelve la lista de
+ * líneas asociadas al documento, con el teléfono parcialmente enmascarado.
+ *
+ * Modelo:
+ *  - Identidad: dni_hash (SHA-256 con sal global) + dni_type
+ *  - Resultado: lines_json (lista de líneas devueltas por el portal)
+ *  - El cross-matching contra metodos_contacto del cliente vive en
+ *    `osiptel_phone_match` (entity separada, gestionada por el command service).
  *
  * Privacidad (Ley 29733):
- *  - dni_hash: SHA-256(dni + tenant_salt). NUNCA DNI plaintext.
- *  - dni_match: boolean tri-estado (1=titular, 0=no titular, NULL=indeterminado).
- *  - NO se persiste nombre del titular bajo ninguna circunstancia.
+ *  - NUNCA se persiste el nombre del titular ni el DNI plaintext.
+ *  - Solo se guarda dni_hash y la lista de líneas (operador + prefijo + modalidad).
  */
 @Entity
 @Table(name = "osiptel_validation_log")
@@ -27,18 +31,18 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 public class OsiptelValidation extends AggregateRoot {
 
-    @Column(name = "phone", length = 15, nullable = false)
-    private String phone;
-
-    @Column(name = "dni_hash", length = 64)
+    @Column(name = "dni_hash", length = 64, nullable = false)
     private String dniHash;
 
-    @Column(name = "dni_match")
-    private Boolean dniMatch;
-
     @Enumerated(EnumType.STRING)
-    @Column(name = "operator", length = 20)
-    private OperatorCode operator;
+    @Column(name = "dni_type", length = 20, nullable = false)
+    private DocumentType dniType;
+
+    @Column(name = "lines_json", columnDefinition = "TEXT")
+    private String linesJson;
+
+    @Column(name = "lines_count", nullable = false)
+    private Short linesCount;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 20, nullable = false)
@@ -62,11 +66,11 @@ public class OsiptelValidation extends AggregateRoot {
     @Column(name = "cooldown_until")
     private LocalDateTime cooldownUntil;
 
+    @Column(name = "source_customer_id")
+    private Long sourceCustomerId;
+
     @Column(name = "source_subportfolio_id")
     private Long sourceSubPortfolioId;
-
-    @Column(name = "source_contact_method_id")
-    private Long sourceContactMethodId;
 
     @Column(name = "worker_id", length = 40)
     private String workerId;
@@ -74,15 +78,16 @@ public class OsiptelValidation extends AggregateRoot {
     /**
      * Constructor de encolado. Estado inicial: PENDING.
      */
-    public OsiptelValidation(String phone, String dniHash,
-                             Long sourceSubPortfolioId, Long sourceContactMethodId) {
+    public OsiptelValidation(String dniHash, DocumentType dniType,
+                             Long sourceCustomerId, Long sourceSubPortfolioId) {
         super();
-        this.phone = phone;
         this.dniHash = dniHash;
+        this.dniType = dniType != null ? dniType : DocumentType.DNI;
+        this.sourceCustomerId = sourceCustomerId;
         this.sourceSubPortfolioId = sourceSubPortfolioId;
-        this.sourceContactMethodId = sourceContactMethodId;
         this.status = ValidationStatus.PENDING;
         this.attempts = 0;
+        this.linesCount = 0;
         this.enqueuedAt = LocalDateTime.now();
     }
 
@@ -90,7 +95,7 @@ public class OsiptelValidation extends AggregateRoot {
     // Transiciones de estado
     // ============================
 
-    /** PENDING -> IN_PROGRESS. Reclamo por el dispatcher antes de llamar al worker. */
+    /** PENDING -> IN_PROGRESS. Reclamo del dispatcher antes de llamar al worker. */
     public void markInProgress(String workerId) {
         requireStatus(ValidationStatus.PENDING);
         this.status = ValidationStatus.IN_PROGRESS;
@@ -100,22 +105,27 @@ public class OsiptelValidation extends AggregateRoot {
         updateTimestamp();
     }
 
-    /** IN_PROGRESS -> OK. Resultado positivo del worker (dniMatch puede ser true o false). */
-    public void recordOk(OperatorCode operator, Boolean dniMatch, LocalDateTime cooldownUntil) {
+    /**
+     * IN_PROGRESS -> OK. Persiste la lista de líneas devueltas por el portal
+     * y limpia errores previos.
+     */
+    public void recordOk(String linesJson, int linesCount, LocalDateTime cooldownUntil) {
         requireStatus(ValidationStatus.IN_PROGRESS);
         this.status = ValidationStatus.OK;
-        this.operator = operator;
-        this.dniMatch = dniMatch;
+        this.linesJson = linesJson;
+        this.linesCount = (short) linesCount;
         this.finishedAt = LocalDateTime.now();
         this.cooldownUntil = cooldownUntil;
         this.lastError = null;
         updateTimestamp();
     }
 
-    /** IN_PROGRESS -> NOT_FOUND. El portal no encontró el número. */
+    /** IN_PROGRESS -> NOT_FOUND. El portal devolvió respuesta sin líneas. */
     public void recordNotFound(LocalDateTime cooldownUntil) {
         requireStatus(ValidationStatus.IN_PROGRESS);
         this.status = ValidationStatus.NOT_FOUND;
+        this.linesCount = 0;
+        this.linesJson = "[]";
         this.finishedAt = LocalDateTime.now();
         this.cooldownUntil = cooldownUntil;
         updateTimestamp();
@@ -131,7 +141,7 @@ public class OsiptelValidation extends AggregateRoot {
         updateTimestamp();
     }
 
-    /** FAILED -> PENDING. Permite re-encolar tras cooldown. */
+    /** FAILED -> PENDING. Re-encolar tras cooldown. */
     public void requeueAfterFailure() {
         requireStatus(ValidationStatus.FAILED);
         this.status = ValidationStatus.PENDING;
@@ -150,7 +160,7 @@ public class OsiptelValidation extends AggregateRoot {
         updateTimestamp();
     }
 
-    /** Estado terminal por fatiga. No se reintenta. */
+    /** Estado terminal por fatiga. */
     public void markExpired(String reason) {
         if (this.status == ValidationStatus.EXPIRED) {
             return;
@@ -160,10 +170,6 @@ public class OsiptelValidation extends AggregateRoot {
         this.lastError = truncate(reason);
         updateTimestamp();
     }
-
-    // ============================
-    // Helpers
-    // ============================
 
     public boolean isInCooldown(LocalDateTime now) {
         return cooldownUntil != null && cooldownUntil.isAfter(now);

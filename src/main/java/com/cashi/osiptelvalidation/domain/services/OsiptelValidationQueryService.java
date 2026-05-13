@@ -1,21 +1,36 @@
 package com.cashi.osiptelvalidation.domain.services;
 
-import com.cashi.osiptelvalidation.domain.model.aggregates.OsiptelValidation;
 import com.cashi.osiptelvalidation.domain.model.queries.GetValidationByPhoneQuery;
 import com.cashi.osiptelvalidation.domain.model.queries.GetValidationMetricsByPortfolioQuery;
+import com.cashi.osiptelvalidation.domain.model.valueobjects.OperatorCode;
 
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Optional;
 
 public interface OsiptelValidationQueryService {
 
-    /** Última validación finalizada (o pendiente si no hay finalizada) para un número. */
-    Optional<OsiptelValidation> findLatestByPhone(GetValidationByPhoneQuery query);
+    /**
+     * Última validación conocida que tocó este teléfono (vía osiptel_phone_match).
+     * Combina datos del match (dni_match, operador) con datos del aggregate
+     * padre (status, cooldown).
+     */
+    Optional<PhoneValidationView> findLatestByPhone(GetValidationByPhoneQuery query);
+
+    Map<String, Object> getMetrics(GetValidationMetricsByPortfolioQuery query);
 
     /**
-     * Agregados por subcartera y rango.
-     * Keys del map: total, ok, notFound, failed, expired, pending, inProgress,
-     *               dniMatchTrue, dniMatchFalse, byOperator (Map<String,Long>).
+     * Vista denormalizada: lo que el frontend necesita renderizar el badge.
+     * Safe para exponer (no incluye DNI plaintext ni nombre).
      */
-    Map<String, Object> getMetrics(GetValidationMetricsByPortfolioQuery query);
+    record PhoneValidationView(
+            String phone,
+            String status,
+            Boolean dniMatch,
+            OperatorCode operator,
+            String modality,
+            LocalDateTime checkedAt,
+            LocalDateTime cooldownUntil,
+            Integer attempts
+    ) {}
 }

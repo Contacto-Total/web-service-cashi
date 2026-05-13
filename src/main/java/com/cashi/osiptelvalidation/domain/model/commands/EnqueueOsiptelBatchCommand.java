@@ -1,27 +1,29 @@
 package com.cashi.osiptelvalidation.domain.model.commands;
 
+import com.cashi.osiptelvalidation.domain.model.valueobjects.DocumentType;
+
 import java.util.List;
 
 /**
- * Comando: encolar un lote de números para validación Osiptel.
+ * Comando: encolar un lote de DOCUMENTOS para validación Osiptel.
  *
- * Cada PhoneEntry es procesado independientemente. Idempotencia por
- * UNIQUE(phone, status PENDING/IN_PROGRESS) de la tabla.
+ * Cada DocumentEntry produce 1 fila en osiptel_validation_log.
+ * Idempotencia por UNIQUE(dni_hash, status PENDING/IN_PROGRESS).
  */
-public record EnqueueOsiptelBatchCommand(List<PhoneEntry> entries) {
+public record EnqueueOsiptelBatchCommand(List<DocumentEntry> entries) {
 
     /**
-     * @param phone número crudo (se valida y normaliza al construir).
-     * @param dni DNI plaintext del cliente. NO se persiste; se hashea con sal de tenant.
-     * @param subPortfolioId origen del candidato (opcional, para reportería).
-     * @param contactMethodId FK opcional a metodos_contacto.id.
-     * @param tenantId requerido para derivar la sal del hash de DNI.
+     * @param dni Número de documento plaintext. Se hashea internamente; NO se persiste.
+     * @param dniType DNI | CE | PASAPORTE | RUC.
+     * @param customerId FK opcional a clientes.id - permite matching automático de teléfonos.
+     * @param subPortfolioId FK opcional a subcarteras.id - para reportería.
+     * @param tenantId opcional - legado del hash con sal por tenant; hoy sal es global.
      */
-    public record PhoneEntry(
-            String phone,
+    public record DocumentEntry(
             String dni,
+            DocumentType dniType,
+            Long customerId,
             Long subPortfolioId,
-            Long contactMethodId,
             Long tenantId
     ) {}
 }

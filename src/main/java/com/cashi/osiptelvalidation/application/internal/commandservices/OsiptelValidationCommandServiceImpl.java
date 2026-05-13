@@ -1,16 +1,24 @@
 package com.cashi.osiptelvalidation.application.internal.commandservices;
 
+import com.cashi.customermanagement.domain.model.entities.ContactMethod;
+import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.ContactMethodRepository;
 import com.cashi.osiptelvalidation.domain.model.aggregates.OsiptelValidation;
 import com.cashi.osiptelvalidation.domain.model.commands.EnqueueOsiptelBatchCommand;
 import com.cashi.osiptelvalidation.domain.model.commands.RecordValidationResultCommand;
+import com.cashi.osiptelvalidation.domain.model.entities.OsiptelPhoneMatch;
 import com.cashi.osiptelvalidation.domain.model.entities.OsiptelValidationAttempt;
 import com.cashi.osiptelvalidation.domain.model.valueobjects.CooldownPolicy;
+import com.cashi.osiptelvalidation.domain.model.valueobjects.OperatorCode;
+import com.cashi.osiptelvalidation.domain.model.valueobjects.OsiptelLine;
 import com.cashi.osiptelvalidation.domain.model.valueobjects.PhoneNumber;
 import com.cashi.osiptelvalidation.domain.model.valueobjects.ValidationStatus;
 import com.cashi.osiptelvalidation.domain.services.OsiptelValidationCommandService;
 import com.cashi.osiptelvalidation.infrastructure.config.OsiptelProperties;
+import com.cashi.osiptelvalidation.infrastructure.persistence.jpa.repositories.OsiptelPhoneMatchRepository;
 import com.cashi.osiptelvalidation.infrastructure.persistence.jpa.repositories.OsiptelValidationAttemptRepository;
 import com.cashi.osiptelvalidation.infrastructure.persistence.jpa.repositories.OsiptelValidationRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -19,25 +27,35 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
 public class OsiptelValidationCommandServiceImpl implements OsiptelValidationCommandService {
 
     private static final Logger log = LoggerFactory.getLogger(OsiptelValidationCommandServiceImpl.class);
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final OsiptelValidationRepository validationRepository;
     private final OsiptelValidationAttemptRepository attemptRepository;
+    private final OsiptelPhoneMatchRepository phoneMatchRepository;
+    private final ContactMethodRepository contactMethodRepository;
     private final DniHashService dniHashService;
     private final OsiptelProperties properties;
 
     public OsiptelValidationCommandServiceImpl(OsiptelValidationRepository validationRepository,
                                                OsiptelValidationAttemptRepository attemptRepository,
+                                               OsiptelPhoneMatchRepository phoneMatchRepository,
+                                               ContactMethodRepository contactMethodRepository,
                                                DniHashService dniHashService,
                                                OsiptelProperties properties) {
         this.validationRepository = validationRepository;
         this.attemptRepository = attemptRepository;
+        this.phoneMatchRepository = phoneMatchRepository;
+        this.contactMethodRepository = contactMethodRepository;
         this.dniHashService = dniHashService;
         this.properties = properties;
     }
@@ -49,32 +67,34 @@ public class OsiptelValidationCommandServiceImpl implements OsiptelValidationCom
         int enqueued = 0;
         int skipped = 0;
 
-        for (EnqueueOsiptelBatchCommand.PhoneEntry entry : command.entries()) {
+        for (EnqueueOsiptelBatchCommand.DocumentEntry entry : command.entries()) {
             try {
-                PhoneNumber phone = PhoneNumber.of(entry.phone());
+                if (entry.dni() == null || entry.dni().isBlank()) {
+                    skipped++;
+                    continue;
+                }
+                String dniHash = dniHashService.hash(entry.dni());
 
-                // Idempotencia: si ya hay PENDING o IN_PROGRESS, saltar.
-                if (validationRepository.existsByPhoneAndStatusIn(
-                        phone.value(),
+                if (validationRepository.existsByDniHashAndStatusIn(
+                        dniHash,
                         List.of(ValidationStatus.PENDING, ValidationStatus.IN_PROGRESS))) {
                     skipped++;
                     continue;
                 }
 
-                String dniHash = dniHashService.hash(entry.dni(), entry.tenantId());
                 OsiptelValidation validation = new OsiptelValidation(
-                        phone.value(),
                         dniHash,
-                        entry.subPortfolioId(),
-                        entry.contactMethodId()
+                        entry.dniType(),
+                        entry.customerId(),
+                        entry.subPortfolioId()
                 );
                 validationRepository.save(validation);
                 enqueued++;
-            } catch (IllegalArgumentException e) {
-                log.warn("Skip phone inválido en batch {}: {}", batchId, e.getMessage());
-                skipped++;
             } catch (DataIntegrityViolationException e) {
-                // Carrera contra UNIQUE KEY uk_osiptel_phone_status: otro proceso encoló al mismo tiempo.
+                // Carrera contra UNIQUE KEY: otro proceso encoló al mismo tiempo
+                skipped++;
+            } catch (Exception e) {
+                log.warn("Skip entry inválido en batch {}: {}", batchId, e.getMessage());
                 skipped++;
             }
         }
@@ -103,15 +123,9 @@ public class OsiptelValidationCommandServiceImpl implements OsiptelValidationCom
                 Duration.ofDays(properties.getCooldownFailedDays())
         );
 
-        // El worker devuelve resultStatus en su propio vocabulario.
-        // Lo traducimos a transición del aggregate.
         switch (cmd.resultStatus()) {
-            case "OK" -> validation.recordOk(
-                    cmd.operator(),
-                    cmd.dniMatch(),
-                    policy.nextCooldownFor(ValidationStatus.OK, now));
-            case "NOT_FOUND" -> validation.recordNotFound(
-                    policy.nextCooldownFor(ValidationStatus.NOT_FOUND, now));
+            case "OK" -> handleOk(validation, cmd.lines(), policy.nextCooldownFor(ValidationStatus.OK, now));
+            case "NOT_FOUND" -> validation.recordNotFound(policy.nextCooldownFor(ValidationStatus.NOT_FOUND, now));
             case "CAPTCHA_FAIL", "BANNED", "ERROR" -> {
                 LocalDateTime cooldown = policy.nextCooldownFor(ValidationStatus.FAILED, now);
                 validation.recordFailed(cmd.resultStatus() + ":" + nullable(cmd.errorDetail()), cooldown);
@@ -125,10 +139,9 @@ public class OsiptelValidationCommandServiceImpl implements OsiptelValidationCom
                         policy.nextCooldownFor(ValidationStatus.FAILED, now));
             }
         }
-
         validationRepository.save(validation);
 
-        // Persistir intento detallado (best-effort, fuera de la transición)
+        // Persistir intento (best-effort, no rompe el flujo si falla)
         try {
             attemptRepository.save(new OsiptelValidationAttempt(
                     validation.getId(),
@@ -143,6 +156,56 @@ public class OsiptelValidationCommandServiceImpl implements OsiptelValidationCom
         } catch (Exception e) {
             log.warn("No se pudo persistir attempt para validation {}: {}",
                     validation.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * Resultado OK: persiste lines_json en el aggregate, y cruza con
+     * metodos_contacto del cliente (si sourceCustomerId está presente)
+     * para crear las filas en osiptel_phone_match.
+     */
+    private void handleOk(OsiptelValidation validation, List<OsiptelLine> lines, LocalDateTime cooldownUntil) {
+        if (lines == null) lines = List.of();
+        String linesJson;
+        try {
+            linesJson = JSON.writeValueAsString(lines);
+        } catch (JsonProcessingException e) {
+            log.warn("No se pudo serializar lines_json, persistiendo lista vacía: {}", e.getMessage());
+            linesJson = "[]";
+        }
+        validation.recordOk(linesJson, lines.size(), cooldownUntil);
+
+        if (validation.getSourceCustomerId() == null || lines.isEmpty()) {
+            return;
+        }
+
+        // Cruzar contra teléfonos del cliente
+        Map<String, OsiptelLine> prefixIndex = new HashMap<>();
+        for (OsiptelLine line : lines) {
+            // Si el prefijo es < 5 dígitos, paddear o saltar; aquí asumimos 5
+            String p = line.phonePrefix();
+            if (p.length() >= 5) prefixIndex.put(p.substring(0, 5), line);
+        }
+
+        List<ContactMethod> phones = contactMethodRepository.findByCustomerIdAndContactType(
+                validation.getSourceCustomerId(), "telefono");
+
+        for (ContactMethod cm : phones) {
+            String value = cm.getValue();
+            if (!PhoneNumber.isValid(value)) continue;
+            PhoneNumber pn = PhoneNumber.of(value);
+            String prefix = pn.value().substring(0, 5);
+            OsiptelLine matched = prefixIndex.get(prefix);
+
+            OsiptelPhoneMatch match = new OsiptelPhoneMatch(
+                    validation.getId(),
+                    pn.value(),
+                    prefix,
+                    matched != null,
+                    matched == null ? null : matched.operator(),
+                    matched == null ? null : matched.modality()
+            );
+            phoneMatchRepository.save(match);
         }
     }
 

@@ -1,9 +1,10 @@
 package com.cashi.osiptelvalidation.application.services;
 
+import com.cashi.customermanagement.domain.model.aggregates.Customer;
+import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.CustomerRepository;
 import com.cashi.osiptelvalidation.application.internal.outboundservices.OsiptelWorkerClient;
 import com.cashi.osiptelvalidation.domain.model.aggregates.OsiptelValidation;
 import com.cashi.osiptelvalidation.domain.model.commands.RecordValidationResultCommand;
-import com.cashi.osiptelvalidation.domain.model.valueobjects.OperatorCode;
 import com.cashi.osiptelvalidation.domain.services.OsiptelValidationCommandService;
 import com.cashi.osiptelvalidation.infrastructure.config.OsiptelProperties;
 import com.cashi.osiptelvalidation.infrastructure.persistence.jpa.repositories.OsiptelValidationRepository;
@@ -21,13 +22,16 @@ import java.util.UUID;
  * Dispatcher que mueve filas PENDING → IN_PROGRESS y las envía al worker.
  *
  * Flujo por ciclo:
- *  1. claimBatch() (transacción corta): SELECT FOR UPDATE SKIP LOCKED, marcar IN_PROGRESS, commit.
- *  2. Por cada fila claimed: dispatchOne() (transacción propia): llamar al worker, persistir resultado.
+ *  1. claimBatch() (transacción corta): SELECT FOR UPDATE SKIP LOCKED + IN_PROGRESS.
+ *  2. Por cada fila claimed: dispatchOne() async: lookup DNI plaintext desde
+ *     clientes.documento (via source_customer_id), llamar al worker,
+ *     persistir resultado.
  *
- * El @Scheduled no entra si la app no es la "owner" del cron (feature flag) o
- * si Legal no ha firmado. Ambos defaults son false → el dispatcher arranca apagado.
+ * Privacidad: el DNI plaintext sólo existe en memoria durante la llamada al
+ * worker; nunca se persiste en osiptel_validation_log.
  *
- * Multi-instancia: SKIP LOCKED + UNIQUE(phone, status) protegen contra trabajo duplicado.
+ * Si una validation no tiene source_customer_id (encolado manual sin link),
+ * la rechaza con FAILED y motivo "no-customer-link".
  */
 @Service
 public class OsiptelDispatcherService {
@@ -37,6 +41,7 @@ public class OsiptelDispatcherService {
     private final OsiptelValidationRepository validationRepository;
     private final OsiptelValidationCommandService commandService;
     private final OsiptelWorkerClient workerClient;
+    private final CustomerRepository customerRepository;
     private final OsiptelAuditService audit;
     private final OsiptelProperties properties;
     private final String workerId;
@@ -44,47 +49,39 @@ public class OsiptelDispatcherService {
     public OsiptelDispatcherService(OsiptelValidationRepository validationRepository,
                                     OsiptelValidationCommandService commandService,
                                     OsiptelWorkerClient workerClient,
+                                    CustomerRepository customerRepository,
                                     OsiptelAuditService audit,
                                     OsiptelProperties properties) {
         this.validationRepository = validationRepository;
         this.commandService = commandService;
         this.workerClient = workerClient;
+        this.customerRepository = customerRepository;
         this.audit = audit;
         this.properties = properties;
         this.workerId = "dispatcher-" + UUID.randomUUID().toString().substring(0, 8);
     }
 
-    /**
-     * Ciclo principal. Default 30s.
-     * Si el flag está apagado, no hace nada (no genera carga en BD ni en red).
-     */
     @Scheduled(fixedDelayString = "${cashi.osiptel.dispatcher-interval-ms:30000}")
     public void dispatchCycle() {
         if (!properties.isDispatcherEnabled() || !properties.isLegalReviewSignedOff()) {
             return;
         }
 
-        // 1. Reclamo de filas huérfanas IN_PROGRESS
         int reclaimed = commandService.reclaimStuckInProgress(properties.getStuckThresholdMinutes());
         if (reclaimed > 0) {
             audit.recordReclaim(reclaimed);
         }
 
-        // 2. Claim de lote PENDING
         List<OsiptelValidation> claimed = claimBatch();
         if (claimed.isEmpty()) {
             return;
         }
 
-        // 3. Dispatch async por fila (cada uno con su propia transacción + llamada HTTP)
         for (OsiptelValidation v : claimed) {
             dispatchOneAsync(v.getId());
         }
     }
 
-    /**
-     * Reclama un lote en una transacción corta para liberar locks antes de las llamadas HTTP largas.
-     */
     @Transactional
     protected List<OsiptelValidation> claimBatch() {
         List<OsiptelValidation> rows = validationRepository.claimPendingForUpdate(
@@ -99,10 +96,6 @@ public class OsiptelDispatcherService {
         return rows;
     }
 
-    /**
-     * Llama al worker y registra resultado.
-     * @Async para que el @Scheduled siga reclamando lotes sin esperar al worker.
-     */
     @Async("osiptelExecutor")
     public void dispatchOneAsync(Long validationId) {
         OsiptelValidation v = validationRepository.findById(validationId).orElse(null);
@@ -111,37 +104,41 @@ public class OsiptelDispatcherService {
             return;
         }
 
-        // El DNI plaintext no está en BD - el worker recibe solo el phone.
-        // En este flujo standalone (Fase 1), si no se conoce el DNI no se puede calcular dni_match;
-        // el worker igual valida operador y existencia. dni_match queda NULL.
-        // En Fase 3, al integrar con clientes, se pasará el DNI desde el caller.
-        String dni = null;  // En el path de selector nocturno el DNI viaja en memoria; aquí se rehidratará en Fase 3.
+        // Resolver DNI plaintext desde clientes.documento
+        if (v.getSourceCustomerId() == null) {
+            commandService.recordResult(noCustomerLinkResult(v));
+            return;
+        }
+        Customer customer = customerRepository.findById(v.getSourceCustomerId()).orElse(null);
+        if (customer == null || customer.getDocument() == null || customer.getDocument().isBlank()) {
+            commandService.recordResult(noCustomerLinkResult(v));
+            return;
+        }
 
         String requestId = "v" + v.getId() + "-a" + v.getAttempts();
         OsiptelWorkerClient.WorkerCheckResult result =
-                workerClient.check(requestId, v.getPhone(), dni);
-
-        OperatorCode operatorCode = result.operator() == null ? null
-                : OperatorCode.fromPortalText(result.operator());
+                workerClient.check(requestId, customer.getDocument(), v.getDniType());
 
         commandService.recordResult(new RecordValidationResultCommand(
                 v.getId(),
                 workerId,
                 result.status(),
-                operatorCode,
-                result.dniMatch(),
+                result.lines(),
                 (int) result.latencyMs(),
                 result.captchaAttempts(),
                 result.httpStatus(),
                 result.errorDetail()
         ));
 
-        audit.recordValidation(result.status(),
-                operatorCode == null ? null : operatorCode.name(),
-                result.latencyMs());
+        audit.recordValidation(result.status(), null, result.latencyMs());
         if (result.captchaAttempts() != null && result.captchaAttempts() > 0) {
             audit.recordCaptchaOutcome("OK".equals(result.status()) || "NOT_FOUND".equals(result.status())
                     ? "solved" : "failed");
         }
+    }
+
+    private RecordValidationResultCommand noCustomerLinkResult(OsiptelValidation v) {
+        return new RecordValidationResultCommand(
+                v.getId(), workerId, "ERROR", null, 0, 0, 0, "no-customer-link");
     }
 }

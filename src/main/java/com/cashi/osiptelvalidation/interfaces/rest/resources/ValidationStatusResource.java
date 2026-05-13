@@ -12,6 +12,7 @@ public record ValidationStatusResource(
         String status,
         Boolean dniMatch,
         String operator,
+        String modality,
         LocalDateTime checkedAt,
         LocalDateTime cooldownUntil,
         Integer attempts

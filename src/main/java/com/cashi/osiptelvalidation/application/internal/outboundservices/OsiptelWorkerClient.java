@@ -1,5 +1,8 @@
 package com.cashi.osiptelvalidation.application.internal.outboundservices;
 
+import com.cashi.osiptelvalidation.domain.model.valueobjects.DocumentType;
+import com.cashi.osiptelvalidation.domain.model.valueobjects.OperatorCode;
+import com.cashi.osiptelvalidation.domain.model.valueobjects.OsiptelLine;
 import com.cashi.osiptelvalidation.infrastructure.config.OsiptelProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,19 +16,15 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Cliente HTTP outbound al worker Node.js.
  *
- * Encapsula:
- *  - Serialización del request al contrato del worker.
- *  - Header de autenticación X-Worker-Token.
- *  - Manejo de timeouts (configurado en OsiptelAsyncConfig.osiptelWorkerRestTemplate).
- *  - Deserialización defensiva (si el worker devuelve estructura inesperada, marca ERROR).
- *
- * NO persiste nada - es solo el outbound. La persistencia ocurre en el dispatcher.
+ * Post-pivot: envía DOCUMENTO y recibe LISTA DE LÍNEAS (no envía teléfono).
  */
 @Component
 public class OsiptelWorkerClient {
@@ -42,16 +41,15 @@ public class OsiptelWorkerClient {
     }
 
     /**
-     * Llama a POST {workerUrl}/check.
-     * El dni se envía solo para que el worker compute dniMatch; el worker NO retorna el nombre.
-     *
-     * @return resultado normalizado. Si el worker falla, status = "ERROR" con error_detail.
+     * POST {workerUrl}/check con el documento del cliente.
+     * El DNI se envía plaintext (el worker lo usa solo para llenar el form);
+     * el backend NO persiste el plaintext.
      */
-    public WorkerCheckResult check(String requestId, String phone, String dni) {
+    public WorkerCheckResult check(String requestId, String dni, DocumentType dniType) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("requestId", requestId);
-        body.put("phone", phone);
         body.put("dni", dni);
+        body.put("dniType", dniType == null ? "DNI" : dniType.name());
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -66,27 +64,19 @@ public class OsiptelWorkerClient {
         try {
             ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, request, Map.class);
             long latency = System.currentTimeMillis() - t0;
-            Map<String, Object> payload = response.getBody();
-            return WorkerCheckResult.fromPayload(response.getStatusCode().value(), latency, payload);
+            return WorkerCheckResult.fromPayload(response.getStatusCode().value(), latency, response.getBody());
         } catch (RestClientException e) {
             long latency = System.currentTimeMillis() - t0;
-            log.warn("Osiptel worker error tel=*** rid={} : {}", requestId, e.getMessage());
+            log.warn("Osiptel worker error rid={}: {}", requestId, e.getMessage());
             return WorkerCheckResult.networkError(latency, e.getMessage());
         }
     }
 
-    /**
-     * Resultado normalizado del worker. Inmutable.
-     *
-     * status posible: OK | NOT_FOUND | CAPTCHA_FAIL | BANNED | ERROR.
-     * operator/dniMatch solo presentes si status=OK.
-     */
     public record WorkerCheckResult(
             int httpStatus,
             long latencyMs,
-            String status,
-            String operator,
-            Boolean dniMatch,
+            String status,            // OK | NOT_FOUND | CAPTCHA_FAIL | BANNED | ERROR
+            List<OsiptelLine> lines,  // null si status != OK
             Integer captchaAttempts,
             String errorDetail
     ) {
@@ -94,19 +84,36 @@ public class OsiptelWorkerClient {
         @SuppressWarnings("unchecked")
         public static WorkerCheckResult fromPayload(int httpStatus, long latencyMs, Map<String, Object> payload) {
             if (payload == null) {
-                return new WorkerCheckResult(httpStatus, latencyMs, "ERROR", null, null, 0, "empty-payload");
+                return new WorkerCheckResult(httpStatus, latencyMs, "ERROR", null, 0, "empty-payload");
             }
             String status = (String) payload.getOrDefault("status", "ERROR");
-            String operator = (String) payload.get("operator");
-            Object dniMatchRaw = payload.get("dniMatch");
-            Boolean dniMatch = dniMatchRaw instanceof Boolean ? (Boolean) dniMatchRaw : null;
             Integer captcha = toInt(payload.get("captchaAttempts"));
             String error = (String) payload.get("error");
-            return new WorkerCheckResult(httpStatus, latencyMs, status, operator, dniMatch, captcha, error);
+
+            List<OsiptelLine> lines = null;
+            Object rawLines = payload.get("lines");
+            if (rawLines instanceof List<?> list) {
+                lines = new ArrayList<>();
+                for (Object item : list) {
+                    if (item instanceof Map<?, ?> m) {
+                        try {
+                            String prefix = (String) m.get("phonePrefix");
+                            String opRaw = (String) m.get("operator");
+                            String modality = (String) m.get("modality");
+                            if (prefix == null || opRaw == null) continue;
+                            lines.add(new OsiptelLine(prefix, OperatorCode.valueOf(opRaw), modality));
+                        } catch (Exception e) {
+                            // Skip línea malformada
+                        }
+                    }
+                }
+            }
+
+            return new WorkerCheckResult(httpStatus, latencyMs, status, lines, captcha, error);
         }
 
         public static WorkerCheckResult networkError(long latencyMs, String error) {
-            return new WorkerCheckResult(0, latencyMs, "ERROR", null, null, 0, error);
+            return new WorkerCheckResult(0, latencyMs, "ERROR", null, 0, error);
         }
 
         private static Integer toInt(Object o) {

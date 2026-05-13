@@ -1,6 +1,6 @@
 package com.cashi.osiptelvalidation.domain.model.aggregates;
 
-import com.cashi.osiptelvalidation.domain.model.valueobjects.OperatorCode;
+import com.cashi.osiptelvalidation.domain.model.valueobjects.DocumentType;
 import com.cashi.osiptelvalidation.domain.model.valueobjects.ValidationStatus;
 import org.junit.jupiter.api.Test;
 
@@ -9,17 +9,18 @@ import java.time.LocalDateTime;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Tests de la máquina de estados del aggregate.
- * Garantiza que las transiciones son las únicas permitidas.
+ * Tests de la máquina de estados del aggregate (post-pivot).
  */
 class OsiptelValidationTest {
 
     @Test
-    void recienCreadoEstaPendingConCeroIntentos() {
-        OsiptelValidation v = new OsiptelValidation("987654321", "hash-123", 1L, 100L);
+    void recienCreadoEstaPendingConCeroIntentosYLineas() {
+        OsiptelValidation v = new OsiptelValidation("hash-123", DocumentType.DNI, 100L, 200L);
 
         assertEquals(ValidationStatus.PENDING, v.getStatus());
+        assertEquals(DocumentType.DNI, v.getDniType());
         assertEquals(0, v.getAttempts().intValue());
+        assertEquals(0, v.getLinesCount().intValue());
         assertNotNull(v.getEnqueuedAt());
         assertNull(v.getStartedAt());
         assertNull(v.getFinishedAt());
@@ -27,7 +28,7 @@ class OsiptelValidationTest {
 
     @Test
     void markInProgressIncrementaAttempts() {
-        OsiptelValidation v = new OsiptelValidation("987654321", "hash-123", 1L, 100L);
+        OsiptelValidation v = new OsiptelValidation("hash-123", DocumentType.DNI, 100L, 200L);
 
         v.markInProgress("worker-1");
 
@@ -38,31 +39,44 @@ class OsiptelValidationTest {
     }
 
     @Test
-    void recordOkSetOperatorYDniMatch() {
-        OsiptelValidation v = new OsiptelValidation("987654321", "hash-123", 1L, 100L);
+    void recordOkSetLinesJsonYCount() {
+        OsiptelValidation v = new OsiptelValidation("hash-123", DocumentType.DNI, 100L, 200L);
         v.markInProgress("worker-1");
 
         LocalDateTime cooldown = LocalDateTime.now().plusDays(90);
-        v.recordOk(OperatorCode.CLARO, true, cooldown);
+        String json = "[{\"phonePrefix\":\"97851\",\"operator\":\"MOVISTAR\",\"modality\":\"CONTROL\"}]";
+        v.recordOk(json, 1, cooldown);
 
         assertEquals(ValidationStatus.OK, v.getStatus());
-        assertEquals(OperatorCode.CLARO, v.getOperator());
-        assertEquals(Boolean.TRUE, v.getDniMatch());
+        assertEquals(json, v.getLinesJson());
+        assertEquals(1, v.getLinesCount().intValue());
         assertEquals(cooldown, v.getCooldownUntil());
         assertNotNull(v.getFinishedAt());
     }
 
     @Test
     void noPermiteTransicionDePendingDirectoAOk() {
-        OsiptelValidation v = new OsiptelValidation("987654321", "hash-123", 1L, 100L);
+        OsiptelValidation v = new OsiptelValidation("hash-123", DocumentType.DNI, 100L, 200L);
 
         assertThrows(IllegalStateException.class,
-                () -> v.recordOk(OperatorCode.CLARO, true, LocalDateTime.now()));
+                () -> v.recordOk("[]", 0, LocalDateTime.now()));
+    }
+
+    @Test
+    void recordNotFoundLimpiaLineasYMarcaFinishedAt() {
+        OsiptelValidation v = new OsiptelValidation("hash-123", DocumentType.DNI, 100L, 200L);
+        v.markInProgress("worker-1");
+        v.recordNotFound(LocalDateTime.now().plusDays(30));
+
+        assertEquals(ValidationStatus.NOT_FOUND, v.getStatus());
+        assertEquals(0, v.getLinesCount().intValue());
+        assertEquals("[]", v.getLinesJson());
+        assertNotNull(v.getFinishedAt());
     }
 
     @Test
     void requeueAfterFailureVuelveAPending() {
-        OsiptelValidation v = new OsiptelValidation("987654321", "hash-123", 1L, 100L);
+        OsiptelValidation v = new OsiptelValidation("hash-123", DocumentType.DNI, 100L, 200L);
         v.markInProgress("worker-1");
         v.recordFailed("CAPTCHA_FAIL", LocalDateTime.now().plusDays(1));
         assertEquals(ValidationStatus.FAILED, v.getStatus());
@@ -73,13 +87,12 @@ class OsiptelValidationTest {
         assertNull(v.getStartedAt());
         assertNull(v.getFinishedAt());
         assertNull(v.getWorkerId());
-        // attempts NO se resetea - sigue siendo 1
         assertEquals(1, v.getAttempts().intValue());
     }
 
     @Test
     void reclaimStuckDevuelveInProgressAPending() {
-        OsiptelValidation v = new OsiptelValidation("987654321", "hash-123", 1L, 100L);
+        OsiptelValidation v = new OsiptelValidation("hash-123", DocumentType.DNI, 100L, 200L);
         v.markInProgress("worker-dead");
 
         v.reclaimStuck();
@@ -87,17 +100,15 @@ class OsiptelValidationTest {
         assertEquals(ValidationStatus.PENDING, v.getStatus());
         assertNull(v.getStartedAt());
         assertNull(v.getWorkerId());
-        // attempts ya se incrementó en markInProgress
         assertEquals(1, v.getAttempts().intValue());
     }
 
     @Test
     void markExpiredEsIdempotente() {
-        OsiptelValidation v = new OsiptelValidation("987654321", "hash-123", 1L, 100L);
+        OsiptelValidation v = new OsiptelValidation("hash-123", DocumentType.DNI, 100L, 200L);
         v.markExpired("max-attempts");
         LocalDateTime firstFinish = v.getFinishedAt();
 
-        // Segunda llamada no debe cambiar el timestamp
         v.markExpired("repeat");
 
         assertEquals(ValidationStatus.EXPIRED, v.getStatus());
@@ -106,9 +117,9 @@ class OsiptelValidationTest {
 
     @Test
     void isInCooldownConsideraFechaActual() {
-        OsiptelValidation v = new OsiptelValidation("987654321", "hash-123", 1L, 100L);
+        OsiptelValidation v = new OsiptelValidation("hash-123", DocumentType.DNI, 100L, 200L);
         v.markInProgress("worker-1");
-        v.recordOk(OperatorCode.CLARO, true, LocalDateTime.now().plusDays(90));
+        v.recordOk("[]", 0, LocalDateTime.now().plusDays(90));
 
         assertTrue(v.isInCooldown(LocalDateTime.now()));
         assertFalse(v.isInCooldown(LocalDateTime.now().plusDays(91)));
@@ -116,9 +127,8 @@ class OsiptelValidationTest {
 
     @Test
     void canBeRetriedRespetaMaxAttempts() {
-        OsiptelValidation v = new OsiptelValidation("987654321", "hash-123", 1L, 100L);
+        OsiptelValidation v = new OsiptelValidation("hash-123", DocumentType.DNI, 100L, 200L);
         v.markInProgress("worker-1");
-        // attempts=1
         assertTrue(v.canBeRetried(3));
 
         v.markExpired("max-attempts");
