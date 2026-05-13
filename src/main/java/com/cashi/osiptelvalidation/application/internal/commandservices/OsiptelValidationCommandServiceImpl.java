@@ -1,7 +1,9 @@
 package com.cashi.osiptelvalidation.application.internal.commandservices;
 
+import com.cashi.customermanagement.domain.model.aggregates.Customer;
 import com.cashi.customermanagement.domain.model.entities.ContactMethod;
 import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.ContactMethodRepository;
+import com.cashi.customermanagement.infrastructure.persistence.jpa.repositories.CustomerRepository;
 import com.cashi.osiptelvalidation.domain.model.aggregates.OsiptelValidation;
 import com.cashi.osiptelvalidation.domain.model.commands.EnqueueOsiptelBatchCommand;
 import com.cashi.osiptelvalidation.domain.model.commands.RecordValidationResultCommand;
@@ -27,10 +29,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -43,6 +45,7 @@ public class OsiptelValidationCommandServiceImpl implements OsiptelValidationCom
     private final OsiptelValidationAttemptRepository attemptRepository;
     private final OsiptelPhoneMatchRepository phoneMatchRepository;
     private final ContactMethodRepository contactMethodRepository;
+    private final CustomerRepository customerRepository;
     private final DniHashService dniHashService;
     private final OsiptelProperties properties;
 
@@ -50,12 +53,14 @@ public class OsiptelValidationCommandServiceImpl implements OsiptelValidationCom
                                                OsiptelValidationAttemptRepository attemptRepository,
                                                OsiptelPhoneMatchRepository phoneMatchRepository,
                                                ContactMethodRepository contactMethodRepository,
+                                               CustomerRepository customerRepository,
                                                DniHashService dniHashService,
                                                OsiptelProperties properties) {
         this.validationRepository = validationRepository;
         this.attemptRepository = attemptRepository;
         this.phoneMatchRepository = phoneMatchRepository;
         this.contactMethodRepository = contactMethodRepository;
+        this.customerRepository = customerRepository;
         this.dniHashService = dniHashService;
         this.properties = properties;
     }
@@ -207,6 +212,48 @@ public class OsiptelValidationCommandServiceImpl implements OsiptelValidationCom
             );
             phoneMatchRepository.save(match);
         }
+    }
+
+    @Override
+    @Transactional
+    public List<ClaimedJob> claimJobs(String workerId, int limit) {
+        if (limit <= 0) return List.of();
+        if (limit > 20) limit = 20;
+
+        List<OsiptelValidation> claimed = validationRepository.claimPendingForUpdate(limit);
+        List<ClaimedJob> jobs = new ArrayList<>(claimed.size());
+        List<OsiptelValidation> toSave = new ArrayList<>(claimed.size());
+
+        for (OsiptelValidation v : claimed) {
+            // Resolver DNI plaintext desde clientes.documento
+            if (v.getSourceCustomerId() == null) {
+                v.markInProgress(workerId);
+                toSave.add(v);
+                // Sin customer link no podemos enviar DNI: fallar inmediato
+                recordResult(new RecordValidationResultCommand(
+                        v.getId(), workerId, "ERROR", null, 0, 0, 0, "no-customer-link"));
+                continue;
+            }
+            Customer customer = customerRepository.findById(v.getSourceCustomerId()).orElse(null);
+            if (customer == null || customer.getDocument() == null || customer.getDocument().isBlank()) {
+                v.markInProgress(workerId);
+                toSave.add(v);
+                recordResult(new RecordValidationResultCommand(
+                        v.getId(), workerId, "ERROR", null, 0, 0, 0, "no-customer-link"));
+                continue;
+            }
+            v.markInProgress(workerId);
+            toSave.add(v);
+            jobs.add(new ClaimedJob(v.getId(), customer.getDocument(), v.getDniType()));
+        }
+
+        if (!toSave.isEmpty()) {
+            validationRepository.saveAll(toSave);
+        }
+        if (!jobs.isEmpty()) {
+            log.info("Osiptel claim por workerId={}: {} jobs servidos", workerId, jobs.size());
+        }
+        return jobs;
     }
 
     @Override

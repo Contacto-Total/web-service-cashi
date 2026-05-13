@@ -1,14 +1,21 @@
 package com.cashi.osiptelvalidation.interfaces.rest.controllers;
 
 import com.cashi.osiptelvalidation.domain.model.commands.EnqueueOsiptelBatchCommand;
+import com.cashi.osiptelvalidation.domain.model.commands.RecordValidationResultCommand;
 import com.cashi.osiptelvalidation.domain.model.queries.GetValidationByPhoneQuery;
 import com.cashi.osiptelvalidation.domain.model.queries.GetValidationMetricsByPortfolioQuery;
 import com.cashi.osiptelvalidation.domain.model.valueobjects.DocumentType;
+import com.cashi.osiptelvalidation.domain.model.valueobjects.OperatorCode;
+import com.cashi.osiptelvalidation.domain.model.valueobjects.OsiptelLine;
 import com.cashi.osiptelvalidation.domain.services.OsiptelValidationCommandService;
 import com.cashi.osiptelvalidation.domain.services.OsiptelValidationQueryService;
 import com.cashi.osiptelvalidation.infrastructure.config.OsiptelProperties;
+import com.cashi.osiptelvalidation.interfaces.rest.resources.CallbackRequest;
+import com.cashi.osiptelvalidation.interfaces.rest.resources.ClaimJobsRequest;
+import com.cashi.osiptelvalidation.interfaces.rest.resources.ClaimJobsResponse;
 import com.cashi.osiptelvalidation.interfaces.rest.resources.EnqueueBatchRequest;
 import com.cashi.osiptelvalidation.interfaces.rest.resources.EnqueueBatchResource;
+import com.cashi.osiptelvalidation.interfaces.rest.resources.OsiptelJobResource;
 import com.cashi.osiptelvalidation.interfaces.rest.resources.ValidationStatusResource;
 import com.cashi.osiptelvalidation.interfaces.rest.transform.OsiptelValidationResourceAssembler;
 import io.swagger.v3.oas.annotations.Operation;
@@ -23,6 +30,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -102,6 +110,83 @@ public class OsiptelValidationController {
         var metrics = queryService.getMetrics(
                 new GetValidationMetricsByPortfolioQuery(subPortfolioId, fromTs, toTs));
         return ResponseEntity.ok(metrics);
+    }
+
+    // ============================
+    // Endpoints consumidos por el Electron app (cashi-desktop-scraper)
+    // ============================
+
+    @PostMapping("/jobs/claim")
+    @Operation(summary = "El desktop scraper reclama N jobs PENDING")
+    public ResponseEntity<?> claimJobs(@Valid @RequestBody ClaimJobsRequest request,
+                                       @RequestHeader(value = "X-Worker-Token", required = false) String token) {
+        ResponseEntity<?> blocked = blockIfNotSignedOff();
+        if (blocked != null) return blocked;
+        if (!validWorkerToken(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "invalid-worker-token"));
+        }
+        var jobs = commandService.claimJobs(request.workerId(), request.limit());
+        List<OsiptelJobResource> jobResources = jobs.stream()
+                .map(j -> new OsiptelJobResource(j.validationId(), j.dni(), j.dniType().name()))
+                .toList();
+        return ResponseEntity.ok(new ClaimJobsResponse(jobResources));
+    }
+
+    @PostMapping("/internal/callback")
+    @Operation(summary = "El desktop scraper reporta el resultado de un job procesado")
+    public ResponseEntity<?> callback(@Valid @RequestBody CallbackRequest request,
+                                      @RequestHeader(value = "X-Worker-Token", required = false) String token) {
+        ResponseEntity<?> blocked = blockIfNotSignedOff();
+        if (blocked != null) return blocked;
+        if (!validWorkerToken(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "invalid-worker-token"));
+        }
+
+        List<OsiptelLine> lines = request.lines() == null ? Collections.emptyList()
+                : request.lines().stream()
+                    .filter(l -> l.phonePrefix() != null && l.operator() != null)
+                    .map(l -> {
+                        try {
+                            return new OsiptelLine(l.phonePrefix(), OperatorCode.valueOf(l.operator()), l.modality());
+                        } catch (Exception e) {
+                            return null;
+                        }
+                    })
+                    .filter(l -> l != null)
+                    .toList();
+
+        commandService.recordResult(new RecordValidationResultCommand(
+                request.validationId(),
+                request.workerId(),
+                request.resultStatus(),
+                lines,
+                request.latencyMs(),
+                request.captchaAttempts(),
+                request.httpStatus(),
+                request.errorDetail()
+        ));
+        return ResponseEntity.ok(Map.of("ok", true));
+    }
+
+    @GetMapping("/jobs/ping")
+    @Operation(summary = "Liveness para que el desktop scraper compruebe credenciales y disponibilidad")
+    public ResponseEntity<?> ping(@RequestHeader(value = "X-Worker-Token", required = false) String token) {
+        ResponseEntity<?> blocked = blockIfNotSignedOff();
+        if (blocked != null) return blocked;
+        if (!validWorkerToken(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "invalid-worker-token"));
+        }
+        return ResponseEntity.ok(Map.of("ok", true, "time", LocalDateTime.now().toString()));
+    }
+
+    /**
+     * Valida el header X-Worker-Token contra el shared secret en config.
+     * Si no hay secret configurado, acepta cualquier valor (modo dev).
+     */
+    private boolean validWorkerToken(String header) {
+        String expected = properties.getWorkerToken();
+        if (expected == null || expected.isBlank()) return true;
+        return expected.equals(header);
     }
 
     private ResponseEntity<?> blockIfNotSignedOff() {
