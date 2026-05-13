@@ -66,13 +66,10 @@ CREATE TABLE IF NOT EXISTS osiptel_validation_log (
     -- Lookup del historico de un cliente
     KEY idx_osiptel_customer_finished (source_customer_id, finished_at),
 
-    -- Metricas por subcartera
+    -- Metricas por subcartera (referencia logica - sin FK porque
+    -- subcarteras.id es INT mientras que clientes.id_subcartera ya es
+    -- BIGINT sin enforcement; replicamos ese patron del proyecto)
     KEY idx_osiptel_subportfolio_status (source_subportfolio_id, status),
-
-    CONSTRAINT fk_osiptel_subportfolio
-        FOREIGN KEY (source_subportfolio_id)
-        REFERENCES subcarteras(id)
-        ON DELETE SET NULL,
 
     CONSTRAINT fk_osiptel_customer
         FOREIGN KEY (source_customer_id)
