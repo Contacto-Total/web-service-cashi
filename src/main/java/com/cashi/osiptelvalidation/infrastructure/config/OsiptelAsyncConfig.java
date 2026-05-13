@@ -1,7 +1,6 @@
 package com.cashi.osiptelvalidation.infrastructure.config;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -10,7 +9,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.client.RestTemplate;
 
-import java.time.Duration;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -42,16 +40,16 @@ public class OsiptelAsyncConfig {
     }
 
     /**
-     * RestTemplate dedicado para hablar con el worker.
-     * Timeouts más generosos que el default porque el worker puede tardar hasta 90s
-     * (captcha + Playwright).
+     * RestTemplate dedicado para chequear el worker (HealthIndicator).
+     * Construido con SimpleClientHttpRequestFactory para evitar dependencias
+     * de la API fluent de RestTemplateBuilder que ha cambiado entre versiones
+     * de Spring Boot.
      */
     @Bean(name = "osiptelWorkerRestTemplate")
-    public RestTemplate osiptelWorkerRestTemplate(RestTemplateBuilder builder,
-                                                  OsiptelProperties properties) {
-        return builder
-                .connectTimeout(Duration.ofSeconds(10))
-                .readTimeout(Duration.ofMillis(properties.getWorkerTimeoutMs()))
-                .build();
+    public RestTemplate osiptelWorkerRestTemplate(OsiptelProperties properties) {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(10_000);                          // ms
+        factory.setReadTimeout(properties.getWorkerTimeoutMs());    // ms
+        return new RestTemplate(factory);
     }
 }

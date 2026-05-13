@@ -5,13 +5,11 @@ import com.cashi.osiptelvalidation.domain.model.valueobjects.OperatorCode;
 import com.cashi.osiptelvalidation.infrastructure.config.OsiptelProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
-
-import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.*;
@@ -30,10 +28,10 @@ class OsiptelWorkerClientContractTest {
 
     @BeforeEach
     void setUp() {
-        RestTemplate restTemplate = new RestTemplateBuilder()
-                .connectTimeout(Duration.ofSeconds(2))
-                .readTimeout(Duration.ofSeconds(2))
-                .build();
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(2_000);
+        factory.setReadTimeout(2_000);
+        RestTemplate restTemplate = new RestTemplate(factory);
         mockServer = MockRestServiceServer.createServer(restTemplate);
 
         OsiptelProperties props = new OsiptelProperties();
