@@ -2,6 +2,7 @@ package com.cashi.customermanagement.infrastructure.persistence.jpa.repositories
 
 import com.cashi.customermanagement.domain.model.entities.ContactMethod;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.query.Procedure;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -104,4 +105,15 @@ public interface ContactMethodRepository extends JpaRepository<ContactMethod, Lo
      * Elimina todos los métodos de contacto de un cliente
      */
     void deleteByCustomerId(Long customerId);
+
+    /**
+     * Reaplica la regla operativa que inactiva telefonos tipificados como
+     * fallecido o equivocado durante gestiones previas.
+     */
+    @Procedure(procedureName = "sp_limpiar_contactos_invalidos")
+    void inactivateTipifiedInvalidPhoneContacts(
+        @Param("p_tenant_id") Integer tenantId,
+        @Param("p_portfolio_id") Integer portfolioId,
+        @Param("p_sub_portfolio_id") Integer subPortfolioId
+    );
 }

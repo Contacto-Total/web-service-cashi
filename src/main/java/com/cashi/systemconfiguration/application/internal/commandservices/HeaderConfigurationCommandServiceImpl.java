@@ -932,6 +932,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 logger.info("✅ Sincronización completada: {} clientes creados, {} actualizados",
                         syncResult.getCustomersCreated(), syncResult.getCustomersUpdated());
 
+                reapplyInvalidPhoneContactInactivation(subPortfolio);
+
                 result.put("syncCustomersCreated", syncResult.getCustomersCreated());
                 result.put("syncCustomersUpdated", syncResult.getCustomersUpdated());
                 if (syncResult.hasErrors()) {
@@ -1887,6 +1889,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 logger.info("✅ Sincronización selectiva completada: {} clientes creados, {} actualizados",
                         syncResult.getCustomersCreated(), syncResult.getCustomersUpdated());
 
+                reapplyInvalidPhoneContactInactivation(subPortfolio);
+
                 result.put("syncCustomersCreated", syncResult.getCustomersCreated());
                 result.put("syncCustomersUpdated", syncResult.getCustomersUpdated());
                 if (syncResult.hasErrors()) {
@@ -1917,6 +1921,25 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         logger.info("📅 Carga diaria completada para SubPortfolio ID: {}", subPortfolioId);
         return result;
+    }
+
+    private void reapplyInvalidPhoneContactInactivation(SubPortfolio subPortfolio) {
+        Integer tenantId = subPortfolio.getTenant() != null ? subPortfolio.getTenant().getId() : null;
+        Integer portfolioId = subPortfolio.getPortfolio() != null ? subPortfolio.getPortfolio().getId() : null;
+        Integer subPortfolioId = subPortfolio.getId();
+
+        if (tenantId == null || portfolioId == null || subPortfolioId == null) {
+            logger.warn("No se pudo reaplicar la inactivación de contactos inválidos por jerarquía incompleta de subcartera");
+            return;
+        }
+
+        logger.info(
+            "Reaplicando inactivación de telefonos tipificados como fallecido/equivocado para tenant={}, cartera={}, subcartera={}",
+            tenantId,
+            portfolioId,
+            subPortfolioId
+        );
+        contactMethodRepository.inactivateTipifiedInvalidPhoneContacts(tenantId, portfolioId, subPortfolioId);
     }
 
     /**
