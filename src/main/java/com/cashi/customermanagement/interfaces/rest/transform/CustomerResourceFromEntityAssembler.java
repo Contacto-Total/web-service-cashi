@@ -29,7 +29,10 @@ public class CustomerResourceFromEntityAssembler {
                         cm.getValue(),
                         cm.getLabel(),
                         cm.getImportDate(),
-                        cm.getStatus()
+                        cm.getStatus(),
+                        cm.getEstadoOsiptel(),
+                        cm.getEstadoWhatsapp(),
+                        cm.getEstadoContacto()
                 ))
                 .collect(Collectors.toList());
 

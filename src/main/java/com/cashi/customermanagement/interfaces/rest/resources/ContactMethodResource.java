@@ -9,6 +9,10 @@ public record ContactMethodResource(
         String value,
         String label,
         LocalDate importDate,
-        String status
+        String status,
+        // V17+: campos del modelo NO-ortogonal
+        String estadoOsiptel,
+        String estadoWhatsapp,
+        String estadoContacto
 ) {
 }

@@ -60,4 +60,25 @@ public class ContactMethod {
      */
     @Column(name = "estado", length = 50)
     private String status;
+
+    /**
+     * Estado de validacion Osiptel (modelo NO-ortogonal V17+).
+     * Valores: SIN_VALIDAR | VALIDADO | NO_VALIDADO.
+     */
+    @Column(name = "estado_osiptel", length = 20, nullable = false)
+    private String estadoOsiptel = "SIN_VALIDAR";
+
+    /**
+     * Estado de validacion WhatsApp (modelo NO-ortogonal V17+).
+     * Valores: SIN_VALIDAR | VALIDADO | NO_VALIDADO.
+     */
+    @Column(name = "estado_whatsapp", length = 20, nullable = false)
+    private String estadoWhatsapp = "SIN_VALIDAR";
+
+    /**
+     * Estado unificado del contacto, derivado de la ultima tipificacion.
+     * Valores: NUEVO | CONTACTO_TITULAR | NO_CONTACTADO | CONTACTO_TERCERO | INVALIDO | INVALIDO_CONFIRMADO.
+     */
+    @Column(name = "estado_contacto", length = 30, nullable = false)
+    private String estadoContacto = "NUEVO";
 }
