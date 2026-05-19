@@ -994,8 +994,8 @@ public class CustomerSyncService {
 
         // Insertar nuevos contactos
         String insertSql = "INSERT INTO metodos_contacto " +
-            "(id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado) " +
-            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE')";
+            "(id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado, estado_osiptel, estado_whatsapp, estado_contacto) " +
+            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE', 'SIN_VALIDAR', 'SIN_VALIDAR', 'NUEVO')";
 
         // Crear contactos desde los datos mapeados
         contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_principal", "telefono", row);
@@ -1097,8 +1097,8 @@ public class CustomerSyncService {
         }
 
         String insertSql = "INSERT INTO " + tableName +
-            " (id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado) " +
-            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE')";
+            " (id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado, estado_osiptel, estado_whatsapp, estado_contacto) " +
+            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE', 'SIN_VALIDAR', 'SIN_VALIDAR', 'NUEVO')";
 
         int insertBatchSize = 1000;
         int totalInserted = 0;
