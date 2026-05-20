@@ -75,10 +75,4 @@ public class ContactMethod {
     @Column(name = "estado_whatsapp", length = 20, nullable = false)
     private String estadoWhatsapp = "SIN_VALIDAR";
 
-    /**
-     * Estado unificado del contacto, derivado de la ultima tipificacion.
-     * Valores: NUEVO | CONTACTO_TITULAR | NO_CONTACTADO | CONTACTO_TERCERO | INVALIDO | INVALIDO_CONFIRMADO.
-     */
-    @Column(name = "estado_contacto", length = 30, nullable = false)
-    private String estadoContacto = "NUEVO";
 }

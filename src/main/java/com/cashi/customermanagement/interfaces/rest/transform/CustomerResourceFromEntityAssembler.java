@@ -31,8 +31,7 @@ public class CustomerResourceFromEntityAssembler {
                         cm.getImportDate(),
                         cm.getStatus(),
                         cm.getEstadoOsiptel(),
-                        cm.getEstadoWhatsapp(),
-                        cm.getEstadoContacto()
+                        cm.getEstadoWhatsapp()
                 ))
                 .collect(Collectors.toList());
 
