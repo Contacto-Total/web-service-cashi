@@ -12,7 +12,6 @@ public record ContactMethodResource(
         String status,
         // V17+: campos del modelo NO-ortogonal
         String estadoOsiptel,
-        String estadoWhatsapp,
-        String estadoContacto
+        String estadoWhatsapp
 ) {
 }
