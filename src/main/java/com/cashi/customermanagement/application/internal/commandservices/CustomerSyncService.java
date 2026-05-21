@@ -992,18 +992,23 @@ public class CustomerSyncService {
                 AGENT_ADDED_LABEL
         );
 
+        Set<String> preservedManualContacts = loadPreservedManualContactKeys(
+                Collections.singletonList(clientId),
+                "metodos_contacto"
+        );
+
         // Insertar nuevos contactos
         String insertSql = "INSERT INTO metodos_contacto " +
-            "(id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado) " +
-            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE')";
+            "(id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado, estado_osiptel, estado_whatsapp, estado_contacto) " +
+            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE', 'SIN_VALIDAR', 'SIN_VALIDAR', 'NUEVO')";
 
         // Crear contactos desde los datos mapeados
-        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_principal", "telefono", row);
-        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_secundario", "telefono", row);
-        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_trabajo", "telefono", row);
-        contactsCreated += insertContactToProduction(insertSql, clientId, "email", "email", row);
-        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_referencia_1", "telefono", row);
-        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_referencia_2", "telefono", row);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_principal", "telefono", row, preservedManualContacts);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_secundario", "telefono", row, preservedManualContacts);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_trabajo", "telefono", row, preservedManualContacts);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "email", "email", row, preservedManualContacts);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_referencia_1", "telefono", row, preservedManualContacts);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_referencia_2", "telefono", row, preservedManualContacts);
 
         return contactsCreated;
     }
@@ -1062,6 +1067,8 @@ public class CustomerSyncService {
         }
         logger.debug("Eliminados {} contactos existentes", totalDeleted);
 
+        Set<String> preservedManualContacts = loadPreservedManualContactKeys(clientIdList, tableName);
+
         // 3. Recopilar todos los contactos a insertar
         List<Object[]> contactsToInsert = new ArrayList<>();
         String[] contactSubtypes = {"telefono_principal", "telefono_secundario", "telefono_trabajo",
@@ -1082,9 +1089,11 @@ public class CustomerSyncService {
                     String contactValue = getStringValue(row, subtype);
                     if (contactValue != null && !contactValue.isEmpty()) {
                         String contactType = subtype.equals("email") ? "email" : "telefono";
-                        contactsToInsert.add(new Object[]{
-                            clientId, contactType, subtype, contactValue, subtype
-                        });
+                        if (!preservedManualContacts.contains(buildContactKey(clientId, contactType, contactValue))) {
+                            contactsToInsert.add(new Object[]{
+                                clientId, contactType, subtype, contactValue, subtype
+                            });
+                        }
                     }
                 }
             }
@@ -1097,8 +1106,8 @@ public class CustomerSyncService {
         }
 
         String insertSql = "INSERT INTO " + tableName +
-            " (id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado) " +
-            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE')";
+            " (id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado, estado_osiptel, estado_whatsapp, estado_contacto) " +
+            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE', 'SIN_VALIDAR', 'SIN_VALIDAR', 'NUEVO')";
 
         int insertBatchSize = 1000;
         int totalInserted = 0;
@@ -1120,13 +1129,53 @@ public class CustomerSyncService {
     /**
      * Inserta un contacto en la tabla de producción si el valor está presente
      */
-    private int insertContactToProduction(String insertSql, Long clientId, String subtype, String contactType, Map<String, Object> row) {
+    private int insertContactToProduction(String insertSql, Long clientId, String subtype, String contactType,
+                                          Map<String, Object> row, Set<String> preservedManualContacts) {
         String contactValue = getStringValue(row, subtype);
         if (contactValue != null && !contactValue.isEmpty()) {
+            if (preservedManualContacts.contains(buildContactKey(clientId, contactType, contactValue))) {
+                return 0;
+            }
             jdbcTemplate.update(insertSql, clientId, contactType, subtype, contactValue, subtype);
             return 1;
         }
         return 0;
+    }
+
+    private Set<String> loadPreservedManualContactKeys(List<Long> clientIds, String tableName) {
+        if (clientIds.isEmpty()) {
+            return Collections.emptySet();
+        }
+
+        String placeholders = String.join(",", Collections.nCopies(clientIds.size(), "?"));
+        String sql = "SELECT id_cliente, tipo_contacto, valor FROM " + tableName +
+                " WHERE id_cliente IN (" + placeholders + ")" +
+                " AND TRIM(LOWER(etiqueta)) = TRIM(LOWER(?))";
+
+        Object[] args = new Object[clientIds.size() + 1];
+        for (int i = 0; i < clientIds.size(); i++) {
+            args[i] = clientIds.get(i);
+        }
+        args[clientIds.size()] = AGENT_ADDED_LABEL;
+
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, args);
+        Set<String> preservedKeys = new HashSet<>();
+        for (Map<String, Object> manualContact : rows) {
+            Long clientId = ((Number) manualContact.get("id_cliente")).longValue();
+            String contactType = Objects.toString(manualContact.get("tipo_contacto"), "");
+            String value = Objects.toString(manualContact.get("valor"), "");
+            preservedKeys.add(buildContactKey(clientId, contactType, value));
+        }
+
+        return preservedKeys;
+    }
+
+    private String buildContactKey(Long clientId, String contactType, String value) {
+        return clientId + "|" + normalizeContactValue(contactType) + "|" + normalizeContactValue(value);
+    }
+
+    private String normalizeContactValue(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 
     /**
