@@ -4,6 +4,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * API REST para el Angular del inbox compartido.
@@ -94,6 +96,44 @@ public class WspInboxController {
             .stream()
             .map(MensajeDto::from)
             .toList();
+        return ResponseEntity.ok(result);
+    }
+
+    // ------------------------------------------------------------------ //
+    //  Hidratación para el Go service: estado completo de una instancia  //
+    //  El Go pierde su estado en RAM al reiniciar; aquí lo reconstruye.  //
+    // ------------------------------------------------------------------ //
+
+    public record HydrateConversacionDto(
+        String              chatJid,
+        String              chatTitulo,
+        String              instanciaId,
+        long                ultimaActividad,
+        List<MensajeDto>    mensajes
+    ) {}
+
+    @GetMapping("/hydrate")
+    public ResponseEntity<List<HydrateConversacionDto>> hydrate(
+            @RequestParam(name = "instanciaId", defaultValue = "1") String instanciaId) {
+
+        Map<String, List<MensajeDto>> mensajesPorJid = service.listarMensajesPorInstancia(instanciaId)
+            .stream()
+            .collect(Collectors.groupingBy(
+                m -> m.getConversacion().getChatJid(),
+                Collectors.mapping(MensajeDto::from, Collectors.toList())));
+
+        List<HydrateConversacionDto> result = service.listarConversacionesPorInstancia(instanciaId)
+            .stream()
+            .map(c -> new HydrateConversacionDto(
+                c.getChatJid(),
+                c.getChatTitulo(),
+                c.getInstanciaId(),
+                c.getUltimaActividad()
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .toInstant().toEpochMilli(),
+                mensajesPorJid.getOrDefault(c.getChatJid(), List.of())))
+            .toList();
+
         return ResponseEntity.ok(result);
     }
 }

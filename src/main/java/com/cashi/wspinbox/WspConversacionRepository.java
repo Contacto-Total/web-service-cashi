@@ -15,6 +15,8 @@ public interface WspConversacionRepository extends JpaRepository<WspConversacion
 
     List<WspConversacion> findAllByOrderByUltimaActividadDesc();
 
+    List<WspConversacion> findByInstanciaIdOrderByUltimaActividadDesc(String instanciaId);
+
     /**
      * INSERT IGNORE evita el duplicate-key cuando múltiples mensajes llegan
      * concurrentemente para el mismo JID (p.ej. en el history sync inicial).

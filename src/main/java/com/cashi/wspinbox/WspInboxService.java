@@ -111,6 +111,16 @@ public class WspInboxService {
         return msgRepo.findByConversacionIdOrderByTimestampWspAsc(conversacionId);
     }
 
+    @Transactional(readOnly = true)
+    public List<WspConversacion> listarConversacionesPorInstancia(String instanciaId) {
+        return convRepo.findByInstanciaIdOrderByUltimaActividadDesc(instanciaId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<WspMensaje> listarMensajesPorInstancia(String instanciaId) {
+        return msgRepo.findByInstanciaWithRelations(instanciaId);
+    }
+
     // ------------------------------------------------------------------ //
     //  Helpers                                                             //
     // ------------------------------------------------------------------ //
