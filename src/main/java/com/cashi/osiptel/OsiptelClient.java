@@ -32,8 +32,8 @@ import java.util.UUID;
  * Este cliente:
  *  - Manda el documento al worker (NO el telefono).
  *  - Cuando llega la respuesta, hace MATCHING LOCAL: el telefono del cliente
- *    se compara contra los phonePrefix devueltos. Si matchea -> VALIDADO,
- *    sino NO_VALIDADO. Otros status del worker -> ERROR.
+ *    se compara contra los phonePrefix devueltos. Si matchea -> PERTENECE,
+ *    sino NO_PERTENECE. Otros status del worker -> ERROR.
  */
 @Configuration
 @EnableConfigurationProperties(OsiptelProperties.class)
@@ -54,8 +54,8 @@ public class OsiptelClient {
 
     /**
      * Resultado consolidado (post-matching local).
-     *  - status: VALIDADO | NO_VALIDADO | ERROR
-     *  - operator: operador del portal de la linea que matcheo (null si NO_VALIDADO/ERROR)
+     *  - status: PERTENECE | NO_PERTENECE | ERROR
+     *  - operator: operador del portal de la linea que matcheo (null si NO_PERTENECE/ERROR)
      *  - errorDetail: mensaje legible si status=ERROR
      */
     public record CheckResult(String status, String operator, String errorDetail, long latencyMs) {}
@@ -105,7 +105,7 @@ public class OsiptelClient {
             }
             case "NOT_FOUND":
                 // DNI no figura en el portal -> no es titular de ninguna linea
-                return new CheckResult("NO_VALIDADO", null, null, elapsed);
+                return new CheckResult("NO_PERTENECE", null, null, elapsed);
             default:
                 // CAPTCHA_FAIL, BANNED, ERROR
                 Object errObj = data.get("error");
@@ -121,7 +121,7 @@ public class OsiptelClient {
      */
     private CheckResult matchPhoneAgainstLines(String phone, List<Map<String, Object>> lines, long elapsed) {
         if (lines == null || lines.isEmpty()) {
-            return new CheckResult("NO_VALIDADO", null, null, elapsed);
+            return new CheckResult("NO_PERTENECE", null, null, elapsed);
         }
 
         String prefix = mobilePrefix5(phone);
@@ -133,10 +133,10 @@ public class OsiptelClient {
             String linePrefix = (String) line.get("phonePrefix");
             if (linePrefix != null && linePrefix.equals(prefix)) {
                 String operator = (String) line.get("operator");
-                return new CheckResult("VALIDADO", operator, null, elapsed);
+                return new CheckResult("PERTENECE", operator, null, elapsed);
             }
         }
-        return new CheckResult("NO_VALIDADO", null, null, elapsed);
+        return new CheckResult("NO_PERTENECE", null, null, elapsed);
     }
 
     /**
