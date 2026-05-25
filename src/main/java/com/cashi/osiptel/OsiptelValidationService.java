@@ -55,10 +55,10 @@ public class OsiptelValidationService {
     }
 
     public void applyResult(Long id, String status, String operator) {
-        if ("VALIDADO".equals(status) || "NO_VALIDADO".equals(status)) {
+        if ("PERTENECE".equals(status) || "NO_PERTENECE".equals(status)) {
             jdbcTemplate.update(
-                "UPDATE cashi_db.metodos_contacto SET estado_osiptel = ? WHERE id = ?",
-                status, id);
+                "UPDATE cashi_db.metodos_contacto SET estado_osiptel = ?, operador = ? WHERE id = ?",
+                status, operator, id);
             log.info("applyResult: id={} -> {} operator={}", id, status, operator);
         } else {
             log.warn("applyResult: id={} status={} (sin update, queda SIN_VALIDAR para reintento)", id, status);
@@ -88,10 +88,10 @@ public class OsiptelValidationService {
 
         OsiptelClient.CheckResult result = client.check(phone, dni);
 
-        if ("VALIDADO".equals(result.status()) || "NO_VALIDADO".equals(result.status())) {
+        if ("PERTENECE".equals(result.status()) || "NO_PERTENECE".equals(result.status())) {
             jdbcTemplate.update(
-                    "UPDATE cashi_db.metodos_contacto SET estado_osiptel = ? WHERE id = ?",
-                    result.status(), idMetodoContacto);
+                    "UPDATE cashi_db.metodos_contacto SET estado_osiptel = ?, operador = ? WHERE id = ?",
+                    result.status(), result.operator(), idMetodoContacto);
             log.info("estado_osiptel actualizado: id={} -> {} (operator={}, latencyMs={})",
                     idMetodoContacto, result.status(), result.operator(), result.latencyMs());
         } else {

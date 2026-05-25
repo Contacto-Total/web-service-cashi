@@ -43,7 +43,7 @@ public class WhatsappValidationService {
     }
 
     public void applyResult(Long id, String status) {
-        if ("VALIDADO".equals(status) || "NO_VALIDADO".equals(status)) {
+        if ("TIENE".equals(status) || "NO_TIENE".equals(status)) {
             jdbcTemplate.update(
                 "UPDATE cashi_db.metodos_contacto SET estado_whatsapp = ? WHERE id = ?",
                 status, id);
