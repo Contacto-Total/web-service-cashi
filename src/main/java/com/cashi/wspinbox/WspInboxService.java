@@ -116,11 +116,9 @@ public class WspInboxService {
     // ------------------------------------------------------------------ //
 
     private WspConversacion crearConversacion(String jid, String titulo, String instanciaId) {
-        WspConversacion c = new WspConversacion();
-        c.setChatJid(jid);
-        c.setChatTitulo(titulo);
-        c.setInstanciaId(instanciaId);
-        return convRepo.save(c);
+        // INSERT IGNORE handles concurrent inserts for the same JID (history sync race)
+        convRepo.insertIgnore(jid, titulo != null ? titulo : jid, instanciaId);
+        return convRepo.findByChatJid(jid).orElseThrow();
     }
 
     private java.util.Map<String, Object> buildWsEvent(
