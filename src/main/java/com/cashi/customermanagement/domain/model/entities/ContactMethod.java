@@ -15,6 +15,29 @@ import java.time.LocalDate;
 @Builder
 public class ContactMethod {
 
+    // Homologado con com.callcenter.model.MetodoContacto (cashi-discador-backend).
+    public enum EstadoContactabilidad {
+        NUEVO,
+        NO_CONTACTADO,
+        INVALIDO,
+        CONTACTADO,
+        CONTACTO_TERCERO,
+        CONTACTO_TITULAR,
+        INVALIDO_CONFIRMADO
+    }
+
+    public enum EstadoOsiptel {
+        SIN_VALIDAR,
+        PERTENECE,
+        NO_PERTENECE
+    }
+
+    public enum EstadoWhatsapp {
+        SIN_VALIDAR,
+        TIENE,
+        NO_TIENE
+    }
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -62,17 +85,30 @@ public class ContactMethod {
     private String status;
 
     /**
-     * Estado de validacion Osiptel (modelo NO-ortogonal V17+).
-     * Valores: SIN_VALIDAR | VALIDADO | NO_VALIDADO.
+     * Estado de contactabilidad unificado, derivado de la ultima tipificacion.
+     * Valores: NUEVO | NO_CONTACTADO | INVALIDO | CONTACTADO | CONTACTO_TERCERO | CONTACTO_TITULAR | INVALIDO_CONFIRMADO.
      */
-    @Column(name = "estado_osiptel", length = 20, nullable = false)
-    private String estadoOsiptel = "SIN_VALIDAR";
+    @Column(name = "estado_contactabilidad", length = 30)
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private EstadoContactabilidad estadoContactabilidad = EstadoContactabilidad.NUEVO;
 
     /**
-     * Estado de validacion WhatsApp (modelo NO-ortogonal V17+).
-     * Valores: SIN_VALIDAR | VALIDADO | NO_VALIDADO.
+     * Estado de validacion vs portal Osiptel.
+     * Valores: SIN_VALIDAR | PERTENECE | NO_PERTENECE.
+     */
+    @Column(name = "estado_osiptel", length = 20, nullable = false)
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private EstadoOsiptel estadoOsiptel = EstadoOsiptel.SIN_VALIDAR;
+
+    /**
+     * Estado de validacion WhatsApp.
+     * Valores: SIN_VALIDAR | TIENE | NO_TIENE.
      */
     @Column(name = "estado_whatsapp", length = 20, nullable = false)
-    private String estadoWhatsapp = "SIN_VALIDAR";
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private EstadoWhatsapp estadoWhatsapp = EstadoWhatsapp.SIN_VALIDAR;
 
 }
