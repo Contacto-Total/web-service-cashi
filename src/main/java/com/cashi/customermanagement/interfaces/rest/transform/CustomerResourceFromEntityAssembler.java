@@ -30,8 +30,8 @@ public class CustomerResourceFromEntityAssembler {
                         cm.getLabel(),
                         cm.getImportDate(),
                         cm.getStatus(),
-                        cm.getEstadoOsiptel(),
-                        cm.getEstadoWhatsapp()
+                        cm.getEstadoOsiptel() != null ? cm.getEstadoOsiptel().name() : null,
+                        cm.getEstadoWhatsapp() != null ? cm.getEstadoWhatsapp().name() : null
                 ))
                 .collect(Collectors.toList());
 
