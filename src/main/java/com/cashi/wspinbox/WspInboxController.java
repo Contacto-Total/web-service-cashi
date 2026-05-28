@@ -112,15 +112,11 @@ public class WspInboxController {
         List<MensajeDto>    mensajes
     ) {}
 
+    // Hydrate: solo metadatos de conversaciones (sin mensajes).
+    // Los mensajes se cargan on-demand desde /messages/{jid}.
     @GetMapping("/hydrate")
     public ResponseEntity<List<HydrateConversacionDto>> hydrate(
             @RequestParam(name = "instanciaId", defaultValue = "1") String instanciaId) {
-
-        Map<String, List<MensajeDto>> mensajesPorJid = service.listarMensajesPorInstancia(instanciaId)
-            .stream()
-            .collect(Collectors.groupingBy(
-                m -> m.getConversacion().getChatJid(),
-                Collectors.mapping(MensajeDto::from, Collectors.toList())));
 
         List<HydrateConversacionDto> result = service.listarConversacionesPorInstancia(instanciaId)
             .stream()
@@ -131,9 +127,24 @@ public class WspInboxController {
                 c.getUltimaActividad()
                     .atZone(java.time.ZoneId.systemDefault())
                     .toInstant().toEpochMilli(),
-                mensajesPorJid.getOrDefault(c.getChatJid(), List.of())))
+                List.of()))  // mensajes vacíos: se cargan on-demand
             .toList();
 
+        return ResponseEntity.ok(result);
+    }
+
+    // Mensajes de un chat por JID con paginación.
+    // El Go service llama esto on-demand cuando no tiene mensajes en RAM.
+    @GetMapping("/messages/{jid}")
+    public ResponseEntity<List<MensajeDto>> messagesByJid(
+            @PathVariable String jid,
+            @RequestParam(name = "limit",  defaultValue = "60")  int limit,
+            @RequestParam(name = "before", defaultValue = "0")   long before) {
+
+        List<MensajeDto> result = service.listarMensajesPorJid(jid, limit, before)
+            .stream()
+            .map(MensajeDto::from)
+            .toList();
         return ResponseEntity.ok(result);
     }
 }
