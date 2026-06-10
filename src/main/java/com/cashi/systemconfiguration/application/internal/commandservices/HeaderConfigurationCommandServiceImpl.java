@@ -18,12 +18,14 @@ import com.cashi.shared.util.SqlSanitizer;
 import com.cashi.systemconfiguration.domain.services.HeaderConfigurationCommandService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-
+import java.sql.CallableStatement;
+import java.sql.Types;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -46,6 +48,11 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
     // Tamaño del batch para operaciones de carga de identificadores (previene problemas de memoria)
     private static final int BATCH_SIZE_FOR_IDENTIFIER_LOAD = 10000;
+
+    // Motor de importación: "legacy" (fila por fila, por defecto) | "sp" (staging + stored procedure set-based).
+    // Permite conmutar y hacer rollback inmediato sin redeploy.
+    @Value("${app.import.engine:legacy}")
+    private String importEngine;
 
     public HeaderConfigurationCommandServiceImpl(
             HeaderConfigurationRepository headerConfigurationRepository,
@@ -699,6 +706,11 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     @Override
     @Transactional
     public Map<String, Object> importDataToTable(Integer subPortfolioId, LoadType loadType, List<Map<String, Object>> data) {
+        // Motor SP (set-based) detrás del flag. El camino legacy (abajo) queda intacto.
+        if ("sp".equalsIgnoreCase(importEngine)) {
+            return importDataToTableViaSp(subPortfolioId, loadType, data);
+        }
+
         // Validar que la subcartera existe
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada con ID: " + subPortfolioId));
@@ -948,6 +960,380 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         }
 
         return result;
+    }
+
+    /**
+     * Variante de importDataToTable que escribe vía tabla staging + stored procedure
+     * sp_import_upsert (set-based) en lugar del bucle fila-por-fila.
+     *
+     * Java conserva TODA la preparación (resolución de cabeceras, regex, conversión/validación
+     * de tipos, obligatorios y el matching identity->nombre que produce __existing_id). El SP
+     * solo ejecuta el UPDATE/INSERT masivo. Las filas inválidas se cuentan en failedRows y NO
+     * llegan al SP. Activado por app.import.engine=sp.
+     *
+     * NOTA atomicidad: CREATE/DROP de la tabla staging son DDL → provocan commit implícito,
+     * por lo que este camino no es transaccional como el legacy. Pendiente de endurecer antes
+     * de habilitar en producción (ver doc de migración).
+     */
+    private Map<String, Object> importDataToTableViaSp(Integer subPortfolioId, LoadType loadType, List<Map<String, Object>> data) {
+        SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
+                .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada con ID: " + subPortfolioId));
+
+        String tableName = buildTableName(subPortfolio, loadType);
+
+        if (!dynamicTableExists(tableName)) {
+            throw new IllegalArgumentException("La tabla dinámica no existe para esta subcartera y tipo de carga. Debe configurar las cabeceras primero.");
+        }
+
+        List<HeaderConfiguration> allHeaders = headerConfigurationRepository.findBySubPortfolioAndLoadType(subPortfolio, loadType);
+        if (allHeaders.isEmpty()) {
+            throw new IllegalArgumentException("No hay cabeceras configuradas para esta subcartera y tipo de carga.");
+        }
+
+        Set<String> excelColumns = data.stream()
+                .filter(Objects::nonNull)
+                .flatMap(row -> row.keySet().stream())
+                .filter(Objects::nonNull)
+                .map(this::normalizeHeaderName)
+                .collect(Collectors.toSet());
+
+        List<HeaderConfiguration> headers = allHeaders.stream()
+                .filter(h -> {
+                    if (h.getSourceField() != null && !h.getSourceField().isBlank()) {
+                        return excelColumns.contains(normalizeHeaderName(h.getSourceField()));
+                    }
+                    if (excelColumns.contains(normalizeHeaderName(h.getHeaderName()))) {
+                        return true;
+                    }
+                    if (h.getAliases() != null) {
+                        for (var alias : h.getAliases()) {
+                            if (excelColumns.contains(normalizeHeaderName(alias.getAlias()))) {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                })
+                .collect(Collectors.toList());
+
+        if (headers.isEmpty()) {
+            throw new IllegalArgumentException("Ninguna de las cabeceras configuradas coincide con las columnas del archivo. Verifique los nombres de las columnas y las configuraciones de cabecera.");
+        }
+
+        // Matching identity->nombre (idéntico al legacy): Java decide insert vs update.
+        String identityColumnName = findIdentityColumn(headers, "identity_code", "codigo_identificacion", "cod_cli");
+        String nameColumnName = findIdentityColumn(headers, "nombre_cliente", "nombre_completo", "full_name");
+
+        Map<String, Integer> existingIdentityCodes = new HashMap<>();
+        Map<String, Integer> existingNames = new HashMap<>();
+        if (identityColumnName != null && columnExists(tableName, identityColumnName)) {
+            existingIdentityCodes = loadExistingIdentifiers(tableName, identityColumnName);
+        }
+        if (nameColumnName != null && columnExists(tableName, nameColumnName)) {
+            existingNames = loadExistingIdentifiers(tableName, nameColumnName);
+        }
+
+        List<PreparedRowDataWithId> preparedRows = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        int failedRows = 0;
+
+        for (int i = 0; i < data.size(); i++) {
+            Map<String, Object> row = data.get(i);
+            try {
+                PreparedRowData preparedRow = prepareRowData(row, headers, i + 1);
+                String identityValue = extractIdentityValue(row, headers, identityColumnName);
+                String nameValue = extractIdentityValue(row, headers, nameColumnName);
+
+                Integer existingId = null;
+                if (identityValue != null && !identityValue.trim().isEmpty()) {
+                    existingId = existingIdentityCodes.get(identityValue.toLowerCase().trim());
+                }
+                if (existingId == null && nameValue != null && !nameValue.trim().isEmpty()) {
+                    existingId = existingNames.get(nameValue.toLowerCase().trim());
+                }
+
+                preparedRows.add(new PreparedRowDataWithId(
+                        preparedRow.rowNumber, preparedRow.values, existingId, identityValue, nameValue));
+            } catch (Exception e) {
+                failedRows++;
+                errors.add("Fila " + (i + 1) + ": " + e.getMessage());
+            }
+        }
+
+        int insertedRows = 0;
+        int updatedRows = 0;
+
+        if (!preparedRows.isEmpty()) {
+            final String staging = "stg_" + tableName + "_"
+                    + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+            try {
+                // Colación y tipos REALES del destino: la staging los hereda para que el JOIN del SP
+                // no choque por mezcla de colaciones (unicode_ci vs 0900_ai_ci).
+                String collation = jdbcTemplate.queryForObject(
+                        "SELECT table_collation FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?",
+                        String.class, tableName);
+                if (collation == null) collation = "utf8mb4_unicode_ci";
+                String charset = collation.contains("_") ? collation.substring(0, collation.indexOf('_')) : "utf8mb4";
+
+                Map<String, String> destColTypes = new HashMap<>();
+                jdbcTemplate.query(
+                        "SELECT LOWER(column_name) cn, column_type ct FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?",
+                        rs -> { destColTypes.put(rs.getString("cn"), rs.getString("ct")); }, tableName);
+
+                StringBuilder ddl = new StringBuilder("CREATE TABLE `").append(staging)
+                        .append("` (__row INT NOT NULL, __existing_id BIGINT NULL");
+                StringBuilder insertCols = new StringBuilder("__row, __existing_id");
+                StringBuilder insertPh = new StringBuilder("?, ?");
+                for (HeaderConfiguration h : headers) {
+                    String col = sanitizeColumnName(h.getHeaderName());
+                    String type = destColTypes.getOrDefault(col.toLowerCase(), mapDataTypeToSQL(h.getDataType(), h.getFormat()));
+                    ddl.append(", `").append(col).append("` ").append(type);
+                    insertCols.append(", `").append(col).append("`");
+                    insertPh.append(", ?");
+                }
+                ddl.append(", KEY idx_eid (__existing_id)) ENGINE=InnoDB DEFAULT CHARSET=")
+                        .append(charset).append(" COLLATE=").append(collation);
+                jdbcTemplate.execute(ddl.toString());
+
+                // Poblar staging con batchUpdate (1 round-trip por lote en vez de por fila)
+                String stgInsertSql = "INSERT INTO `" + staging + "` (" + insertCols + ") VALUES (" + insertPh + ")";
+                List<Object[]> batchArgs = new ArrayList<>(preparedRows.size());
+                for (PreparedRowDataWithId r : preparedRows) {
+                    List<Object> vals = r.getValues();
+                    Object[] args = new Object[vals.size() + 2];
+                    args[0] = r.getRowNumber();
+                    args[1] = r.getExistingId(); // null -> INSERT ; no-null -> UPDATE
+                    for (int k = 0; k < vals.size(); k++) {
+                        args[k + 2] = vals.get(k);
+                    }
+                    batchArgs.add(args);
+                }
+                jdbcTemplate.batchUpdate(stgInsertSql, batchArgs);
+
+                // CALL sp_import_upsert(staging, dest, OUT inserted, OUT updated)
+                Map<String, Integer> spOut = jdbcTemplate.execute(connection -> {
+                    CallableStatement cs = connection.prepareCall("{CALL sp_import_upsert(?, ?, ?, ?)}");
+                    cs.setString(1, staging);
+                    cs.setString(2, tableName);
+                    cs.registerOutParameter(3, Types.INTEGER);
+                    cs.registerOutParameter(4, Types.INTEGER);
+                    return cs;
+                }, (CallableStatement cs) -> {
+                    cs.execute();
+                    Map<String, Integer> m = new HashMap<>();
+                    m.put("inserted", cs.getInt(3));
+                    m.put("updated", cs.getInt(4));
+                    return m;
+                });
+                insertedRows = spOut.get("inserted");
+                updatedRows = spOut.get("updated");
+            } finally {
+                try {
+                    jdbcTemplate.execute("DROP TABLE IF EXISTS `" + staging + "`");
+                } catch (Exception e) {
+                    logger.warn("No se pudo eliminar la tabla staging {}: {}", staging, e.getMessage());
+                }
+            }
+        }
+
+        logger.info("📊 [SP] Importación completada: {} insertadas, {} actualizadas, {} fallidas",
+                insertedRows, updatedRows, failedRows);
+
+        // Resultado: MISMAS claves que el motor legacy (lo consume el frontend).
+        Map<String, Object> result = new HashMap<>();
+        result.put("totalRows", data.size());
+        result.put("insertedRows", insertedRows);
+        result.put("updatedRows", updatedRows);
+        result.put("failedRows", failedRows);
+        result.put("tableName", tableName);
+        if (!errors.isEmpty()) {
+            result.put("errors", errors.size() > 20 ? errors.subList(0, 20) : errors);
+            if (errors.size() > 20) {
+                result.put("totalErrors", errors.size());
+            }
+        }
+
+        // Sincronización de clientes: idéntica al legacy (solo INICIAL).
+        if ((insertedRows > 0 || updatedRows > 0) && loadType == LoadType.INICIAL) {
+            try {
+                CustomerSyncService.SyncResult syncResult =
+                        customerSyncService.syncCustomersFromSubPortfolio(subPortfolioId.longValue(), loadType);
+                reapplyInvalidPhoneContactInactivation(subPortfolio);
+                result.put("syncCustomersCreated", syncResult.getCustomersCreated());
+                result.put("syncCustomersUpdated", syncResult.getCustomersUpdated());
+                if (syncResult.hasErrors()) {
+                    result.put("syncErrors", syncResult.getErrors());
+                }
+            } catch (Exception e) {
+                logger.error("❌ [SP] Error en sincronización de clientes: {}", e.getMessage(), e);
+                result.put("syncError", "Error al sincronizar clientes: " + e.getMessage());
+            }
+        }
+
+        return result;
+    }
+
+    private record SpUpdateResult(int updated, int notFound, Set<String> matchedLinks) {}
+
+    /**
+     * Ejecuta una actualización masiva por link field vía staging + sp_import_update (set-based).
+     * stagingRows: cada fila = [__row(Integer), __link(String), val_col1, val_col2, ...] alineado a dataColumns.
+     * Devuelve {actualizados, no_encontrados, conjunto de __link que matchearon} — los matched sirven
+     * para la sincronización selectiva de la carga diaria.
+     *
+     * NOTA: el conteo de no_encontrados usa un LEFT JOIN real (link ausente en destino), a diferencia
+     * del legacy que contaba ROW_COUNT()==0 (incluía filas sin cambios). El SP es deliberadamente más
+     * correcto; no se fuerza paridad con legacy.
+     */
+    private SpUpdateResult runImportUpdateViaSp(String tableName, String linkColumnName, boolean useCoalesce,
+                                                List<String> dataColumns, List<Object[]> stagingRows) {
+        if (stagingRows.isEmpty()) {
+            return new SpUpdateResult(0, 0, new HashSet<>());
+        }
+        final String staging = "stg_" + tableName + "_"
+                + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        try {
+            String collation = jdbcTemplate.queryForObject(
+                    "SELECT table_collation FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?",
+                    String.class, tableName);
+            if (collation == null) collation = "utf8mb4_unicode_ci";
+            String charset = collation.contains("_") ? collation.substring(0, collation.indexOf('_')) : "utf8mb4";
+
+            Map<String, String> destColTypes = new HashMap<>();
+            jdbcTemplate.query(
+                    "SELECT LOWER(column_name) cn, column_type ct FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?",
+                    rs -> { destColTypes.put(rs.getString("cn"), rs.getString("ct")); }, tableName);
+
+            // __link hereda la colación del destino (vía COLLATE de la tabla) -> el JOIN no choca.
+            StringBuilder ddl = new StringBuilder("CREATE TABLE `").append(staging)
+                    .append("` (__row INT NOT NULL, __link VARCHAR(255) NULL");
+            StringBuilder insertCols = new StringBuilder("__row, __link");
+            StringBuilder insertPh = new StringBuilder("?, ?");
+            for (String col : dataColumns) {
+                String type = destColTypes.getOrDefault(col.toLowerCase(), "VARCHAR(255)");
+                ddl.append(", `").append(col).append("` ").append(type);
+                insertCols.append(", `").append(col).append("`");
+                insertPh.append(", ?");
+            }
+            ddl.append(", KEY idx_link (__link)) ENGINE=InnoDB DEFAULT CHARSET=")
+                    .append(charset).append(" COLLATE=").append(collation);
+            jdbcTemplate.execute(ddl.toString());
+
+            jdbcTemplate.batchUpdate("INSERT INTO `" + staging + "` (" + insertCols + ") VALUES (" + insertPh + ")", stagingRows);
+
+            final int coalesceFlag = useCoalesce ? 1 : 0;
+            Map<String, Integer> spOut = jdbcTemplate.execute(connection -> {
+                CallableStatement cs = connection.prepareCall("{CALL sp_import_update(?, ?, ?, ?, ?, ?)}");
+                cs.setString(1, staging);
+                cs.setString(2, tableName);
+                cs.setString(3, linkColumnName);
+                cs.setInt(4, coalesceFlag);
+                cs.registerOutParameter(5, Types.INTEGER);
+                cs.registerOutParameter(6, Types.INTEGER);
+                return cs;
+            }, (CallableStatement cs) -> {
+                cs.execute();
+                Map<String, Integer> m = new HashMap<>();
+                m.put("updated", cs.getInt(5));
+                m.put("notFound", cs.getInt(6));
+                return m;
+            });
+
+            // Links que matchearon (para sync selectivo de la carga diaria)
+            Set<String> matched = new HashSet<>();
+            jdbcTemplate.query("SELECT DISTINCT s.__link AS l FROM `" + staging + "` s JOIN `" + tableName
+                            + "` d ON d.`" + linkColumnName + "` = s.__link WHERE s.__link IS NOT NULL",
+                    rs -> { String l = rs.getString("l"); if (l != null) matched.add(l); });
+
+            return new SpUpdateResult(spOut.get("updated"), spOut.get("notFound"), matched);
+        } finally {
+            try {
+                jdbcTemplate.execute("DROP TABLE IF EXISTS `" + staging + "`");
+            } catch (Exception e) {
+                logger.warn("No se pudo eliminar la tabla staging {}: {}", staging, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Variante SP de updateComplementaryDataInTable: staging + sp_import_update (sin COALESCE).
+     * Java conserva la preparación (resolución de columnas, conversión de tipos). Activado por app.import.engine=sp.
+     */
+    private Map<String, Object> updateComplementaryDataInTableViaSp(Integer subPortfolioId, LoadType loadType,
+                                                                    List<Map<String, Object>> data, String linkField) {
+        long startTime = System.currentTimeMillis();
+        SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
+                .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada con ID: " + subPortfolioId));
+
+        String tableName = buildTableName(subPortfolio, loadType);
+        if (!dynamicTableExists(tableName)) {
+            throw new IllegalArgumentException("La tabla dinámica no existe. Debe cargar primero el archivo principal con los datos iniciales.");
+        }
+
+        List<HeaderConfiguration> headers = headerConfigurationRepository.findBySubPortfolioAndLoadType(subPortfolio, loadType);
+        if (headers.isEmpty()) {
+            throw new IllegalArgumentException("No hay cabeceras configuradas para esta subcartera y tipo de carga.");
+        }
+
+        String linkColumnName = findLinkColumnName(linkField, headers);
+        Set<String> existingColumns = loadTableColumns(tableName);
+
+        Map<String, HeaderConfiguration> headerMap = new HashMap<>();
+        for (HeaderConfiguration header : headers) {
+            headerMap.put(normalizeHeaderName(header.getHeaderName()), header);
+        }
+
+        if (data.isEmpty()) {
+            return buildComplementaryResult(0, 0, 0, 0, tableName, new ArrayList<>(), startTime);
+        }
+
+        Map<String, Object> sampleRow = data.get(0);
+        List<ColumnUpdateInfo> columnsToUpdate = new ArrayList<>();
+        for (String columnKey : sampleRow.keySet()) {
+            if (normalizeHeaderName(columnKey).equals(normalizeHeaderName(linkField))) {
+                continue;
+            }
+            String sanitizedColumn = sanitizeColumnName(columnKey);
+            if (existingColumns.contains(sanitizedColumn.toLowerCase())) {
+                HeaderConfiguration matchingHeader = headerMap.get(normalizeHeaderName(columnKey));
+                columnsToUpdate.add(new ColumnUpdateInfo(columnKey, sanitizedColumn, matchingHeader));
+            }
+        }
+
+        if (columnsToUpdate.isEmpty()) {
+            return buildComplementaryResult(data.size(), 0, 0, data.size(), tableName,
+                    List.of("No se encontraron columnas válidas para actualizar"), startTime);
+        }
+
+        List<String> dataColumns = new ArrayList<>();
+        for (ColumnUpdateInfo c : columnsToUpdate) {
+            dataColumns.add(c.sanitizedName());
+        }
+
+        List<String> errors = new ArrayList<>();
+        List<Object[]> stagingRows = new ArrayList<>();
+        for (int i = 0; i < data.size(); i++) {
+            Map<String, Object> row = data.get(i);
+            Object linkValue = getValueFromRowData(row, linkField);
+            if (linkValue == null || linkValue.toString().trim().isEmpty()) {
+                errors.add("Fila " + (i + 1) + ": Campo de enlace vacío");
+                continue;
+            }
+            Object[] sArgs = new Object[columnsToUpdate.size() + 2];
+            sArgs[0] = i + 1;
+            sArgs[1] = linkValue.toString().trim();
+            for (int j = 0; j < columnsToUpdate.size(); j++) {
+                ColumnUpdateInfo col = columnsToUpdate.get(j);
+                Object value = getValueFromRowData(row, col.originalName());
+                sArgs[j + 2] = convertValueForUpdate(value, col.header());
+            }
+            stagingRows.add(sArgs);
+        }
+
+        SpUpdateResult sp = runImportUpdateViaSp(tableName, linkColumnName, false, dataColumns, stagingRows);
+        logger.info("✅ [SP] Actualización complementaria: {} actualizados, {} no encontrados, {} con error",
+                sp.updated(), sp.notFound(), errors.size());
+        return buildComplementaryResult(data.size(), sp.updated(), sp.notFound(), errors.size(), tableName, errors, startTime);
     }
 
     /**
@@ -1368,6 +1754,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     @Transactional
     public Map<String, Object> updateComplementaryDataInTable(Integer subPortfolioId, LoadType loadType,
                                                                List<Map<String, Object>> data, String linkField) {
+        if ("sp".equalsIgnoreCase(importEngine)) {
+            return updateComplementaryDataInTableViaSp(subPortfolioId, loadType, data, linkField);
+        }
         long startTime = System.currentTimeMillis();
         logger.info("📦 Actualizando datos complementarios: subPortfolioId={}, loadType={}, linkField={}, rows={}",
                    subPortfolioId, loadType, linkField, data.size());
@@ -1778,8 +2167,54 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             logger.warn("⚠️ No hay columnas comunes entre los datos y la tabla INICIAL");
             result.put("inicial", Map.of("updatedRows", 0, "notFoundRows", data.size(), "failedRows", 0));
         } else {
-            // Paso 2: Construir SQL template (una sola vez)
             List<String> columnsList = new ArrayList<>(columnsToUpdateSet);
+
+            if ("sp".equalsIgnoreCase(importEngine)) {
+                // ===== Motor SP: staging + sp_import_update con COALESCE =====
+                List<Object[]> stagingRows = new ArrayList<>();
+                for (int i = 0; i < data.size(); i++) {
+                    Map<String, Object> row = data.get(i);
+                    String linkValue = extractLinkValue(row, linkField, headersActualizacion);
+                    if (linkValue == null || linkValue.trim().isEmpty()) {
+                        failedInInicial++;
+                        errors.add("Fila " + (i + 1) + ": Campo de enlace vacío");
+                        continue;
+                    }
+                    Object[] sArgs = new Object[columnsList.size() + 2];
+                    sArgs[0] = i + 1;
+                    sArgs[1] = linkValue.trim();
+                    for (int j = 0; j < columnsList.size(); j++) {
+                        String colName = columnsList.get(j);
+                        HeaderConfiguration header = findHeaderByColumnName(inicialHeaderMap, colName);
+                        Object value = null;
+                        if (header != null && header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
+                            value = findValueBySourceField(row, header.getSourceField());
+                        }
+                        if (value == null) {
+                            value = findValueForColumn(row, colName, inicialHeaderMap);
+                        }
+                        if (value != null && header != null && header.getRegexPattern() != null && !header.getRegexPattern().trim().isEmpty()) {
+                            value = applyRegexTransformation(value.toString(), header.getRegexPattern(), header.getHeaderName());
+                        }
+                        sArgs[j + 2] = (value != null && header != null) ? convertValueForUpdate(value, header) : null;
+                    }
+                    stagingRows.add(sArgs);
+                }
+
+                SpUpdateResult sp = runImportUpdateViaSp(tableInicial, sanitizedLinkField, true, columnsList, stagingRows);
+                updatedInInicial = sp.updated();
+                notFoundInInicial = sp.notFound();
+                Set<String> updatedIdentificationCodes = sp.matchedLinks();
+
+                logger.info("📊 [SP] Códigos de identificación actualizados: {}", updatedIdentificationCodes.size());
+                result.put("updatedIdentificationCodes", updatedIdentificationCodes);
+                result.put("inicial", Map.of(
+                        "updatedRows", updatedInInicial,
+                        "notFoundRows", notFoundInInicial,
+                        "failedRows", failedInInicial
+                ));
+            } else {
+            // Paso 2: Construir SQL template (una sola vez)
             StringBuilder setClause = new StringBuilder();
             for (int i = 0; i < columnsList.size(); i++) {
                 if (i > 0) setClause.append(", ");
@@ -1862,6 +2297,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     "notFoundRows", notFoundInInicial,
                     "failedRows", failedInInicial
             ));
+            }
         }
 
         logger.info("✅ Fase 2 completada: {} actualizados, {} no encontrados, {} fallidos en tabla INICIAL",

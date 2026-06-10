@@ -1042,8 +1042,21 @@ public class CustomerSyncService {
             }
         }
 
-        // 2. DELETE en batches de 500 IDs
         List<Long> clientIdList = new ArrayList<>(allClientIds);
+
+        // Subtipos que ESTE sync gestiona (provienen del archivo de cartera).
+        // El DELETE se acota a estos subtipos para NO borrar otros (p. ej. telefono_extra),
+        // administrados por otros flujos.
+        final String[] contactSubtypes = {"telefono_principal", "telefono_secundario", "telefono_trabajo",
+                                          "email", "telefono_referencia_1", "telefono_referencia_2"};
+        final String subtypeInClause = String.join(",", Collections.nCopies(contactSubtypes.length, "?"));
+
+        // Preservar estados de validación existentes ANTES del DELETE.
+        // Evita que cada carga resetee estado_osiptel / estado_whatsapp / estado_contactabilidad /
+        // estado / fecha_importacion de teléfonos ya validados.
+        Map<String, Object[]> preservedStates = loadExistingContactStates(clientIdList, tableName, contactSubtypes);
+
+        // 2. DELETE en batches de 500 IDs (acotado a los subtipos gestionados)
         int deleteBatchSize = 500;
         int totalDeleted = 0;
 
@@ -1054,25 +1067,29 @@ public class CustomerSyncService {
             String placeholders = String.join(",", Collections.nCopies(batch.size(), "?"));
             String deleteSql = "DELETE FROM " + tableName +
                     " WHERE id_cliente IN (" + placeholders + ")" +
+                    " AND subtipo IN (" + subtypeInClause + ")" +
                     " AND (etiqueta IS NULL OR TRIM(LOWER(etiqueta)) <> TRIM(LOWER(?)))";
 
-            Object[] deleteArgs = new Object[batch.size() + 1];
-            for (int j = 0; j < batch.size(); j++) {
-                deleteArgs[j] = batch.get(j);
+            Object[] deleteArgs = new Object[batch.size() + contactSubtypes.length + 1];
+            int a = 0;
+            for (Long id : batch) {
+                deleteArgs[a++] = id;
             }
-            deleteArgs[batch.size()] = AGENT_ADDED_LABEL;
+            for (String st : contactSubtypes) {
+                deleteArgs[a++] = st;
+            }
+            deleteArgs[a] = AGENT_ADDED_LABEL;
 
             int deleted = jdbcTemplate.update(deleteSql, deleteArgs);
             totalDeleted += deleted;
         }
-        logger.debug("Eliminados {} contactos existentes", totalDeleted);
+        logger.debug("Eliminados {} contactos existentes (subtipos gestionados)", totalDeleted);
 
         Set<String> preservedManualContacts = loadPreservedManualContactKeys(clientIdList, tableName);
 
-        // 3. Recopilar todos los contactos a insertar
+        // 3. Recopilar todos los contactos a insertar (preservando estados existentes)
         List<Object[]> contactsToInsert = new ArrayList<>();
-        String[] contactSubtypes = {"telefono_principal", "telefono_secundario", "telefono_trabajo",
-                                    "email", "telefono_referencia_1", "telefono_referencia_2"};
+        java.time.LocalDate today = java.time.LocalDate.now();
 
         for (int i = 0; i < customers.size(); i++) {
             Customer customer = customers.get(i);
@@ -1089,9 +1106,19 @@ public class CustomerSyncService {
                     String contactValue = getStringValue(row, subtype);
                     if (contactValue != null && !contactValue.isEmpty()) {
                         String contactType = subtype.equals("email") ? "email" : "telefono";
-                        if (!preservedManualContacts.contains(buildContactKey(clientId, contactType, contactValue))) {
+                        String contactKey = buildContactKey(clientId, contactType, contactValue);
+                        if (!preservedManualContacts.contains(contactKey)) {
+                            // Recuperar el estado previo si el contacto ya existía (mismo cliente/tipo/valor)
+                            Object[] prev = preservedStates.get(contactKey);
+                            Object fechaImportacion = (prev != null && prev[4] != null) ? prev[4] : today;
+                            String estado         = (prev != null && prev[0] != null) ? (String) prev[0] : "ACTIVE";
+                            String estadoOsiptel  = (prev != null && prev[1] != null) ? (String) prev[1] : "SIN_VALIDAR";
+                            String estadoWhatsapp = (prev != null && prev[2] != null) ? (String) prev[2] : "SIN_VALIDAR";
+                            String estadoContact  = (prev != null && prev[3] != null) ? (String) prev[3] : "NUEVO";
+
                             contactsToInsert.add(new Object[]{
-                                clientId, contactType, subtype, contactValue, subtype
+                                clientId, contactType, subtype, contactValue, subtype,
+                                fechaImportacion, estado, estadoOsiptel, estadoWhatsapp, estadoContact
                             });
                         }
                     }
@@ -1107,7 +1134,7 @@ public class CustomerSyncService {
 
         String insertSql = "INSERT INTO " + tableName +
             " (id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado, estado_osiptel, estado_whatsapp, estado_contactabilidad) " +
-            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE', 'SIN_VALIDAR', 'SIN_VALIDAR', 'NUEVO')";
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         int insertBatchSize = 1000;
         int totalInserted = 0;
@@ -1124,6 +1151,61 @@ public class CustomerSyncService {
 
         logger.debug("Insertados {} contactos", totalInserted);
         return totalInserted;
+    }
+
+    /**
+     * Carga los estados existentes de los contactos gestionados ANTES de un DELETE+INSERT,
+     * para preservar las validaciones (estado_osiptel, estado_whatsapp, estado_contactabilidad),
+     * el estado (ACTIVE/INACTIVE) y la fecha_importacion original entre recargas.
+     *
+     * Clave: buildContactKey(id_cliente, tipo_contacto, valor).
+     * Valor: Object[]{ estado, estado_osiptel, estado_whatsapp, estado_contactabilidad, fecha_importacion }.
+     */
+    private Map<String, Object[]> loadExistingContactStates(List<Long> clientIds, String tableName, String[] subtypes) {
+        Map<String, Object[]> states = new HashMap<>();
+        if (clientIds.isEmpty() || subtypes.length == 0) {
+            return states;
+        }
+
+        int batchSize = 500;
+        for (int i = 0; i < clientIds.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, clientIds.size());
+            List<Long> batch = clientIds.subList(i, end);
+
+            String idPlaceholders = String.join(",", Collections.nCopies(batch.size(), "?"));
+            String subtypePlaceholders = String.join(",", Collections.nCopies(subtypes.length, "?"));
+            String sql = "SELECT id_cliente, tipo_contacto, valor, estado, estado_osiptel, " +
+                    "estado_whatsapp, estado_contactabilidad, fecha_importacion " +
+                    "FROM " + tableName +
+                    " WHERE id_cliente IN (" + idPlaceholders + ")" +
+                    " AND subtipo IN (" + subtypePlaceholders + ")";
+
+            Object[] args = new Object[batch.size() + subtypes.length];
+            int a = 0;
+            for (Long id : batch) {
+                args[a++] = id;
+            }
+            for (String st : subtypes) {
+                args[a++] = st;
+            }
+
+            List<Map<String, Object>> existing = jdbcTemplate.queryForList(sql, args);
+            for (Map<String, Object> r : existing) {
+                Long clientId = ((Number) r.get("id_cliente")).longValue();
+                String contactType = Objects.toString(r.get("tipo_contacto"), "");
+                String value = Objects.toString(r.get("valor"), "");
+                String key = buildContactKey(clientId, contactType, value);
+                // putIfAbsent: si hubiera duplicados (mismo cliente/tipo/valor) conservar el primero.
+                states.putIfAbsent(key, new Object[]{
+                        r.get("estado"),
+                        r.get("estado_osiptel"),
+                        r.get("estado_whatsapp"),
+                        r.get("estado_contactabilidad"),
+                        r.get("fecha_importacion")
+                });
+            }
+        }
+        return states;
     }
 
     /**
