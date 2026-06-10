@@ -396,7 +396,7 @@ Por indicación: el legacy es deficiente en partes; el motor SP debe ser **corre
 ### Caveat de atomicidad (F1)
 `CREATE`/`DROP` de la staging son DDL → **commit implícito**, por lo que `importDataToTableViaSp` no es transaccional como el legacy. Endurecer antes de habilitar en producción (p. ej. transacción interna en el SP alrededor de UPDATE+INSERT, o staging pre-creada por sesión). Mientras tanto el flag queda en `legacy`.
 | **F2.5-b — Estructural (recomendado)** | UNIQUE `(id_cliente,tipo_contacto,valor)` + reconciliación real (upsert sin DELETE, soft-deactivate de ausentes) → elimina además el **churn de `id` (I6)**. **Dedup previo dimensionado: solo 561 filas sobrantes en 547 grupos, 0 con `estado_osiptel` en conflicto** → limpieza trivial y sin pérdida. | pendiente |
-| F3 | Activación gradual + parallel-run (comparar también que `estado_*` NO cambian en recargas) | pendiente |
+| **F3 — Validación / parallel-run (EN CURSO)** | **DB-level (hecho, reversible contra QAS):** `sp_import_upsert` (insert/update/parcial), `sp_import_update` (COALESCE preserva NULL, not_found), y **colación heredada** (join OK en tabla `0900_ai_ci`; colación incorrecta → `ERROR 1267`). **End-to-end:** `scripts/parallel_run_carga.sh` (correr en el HOST; el servicio HTTP 8085 está firewalleado fuera del host). Aserciones de correctitud, reversible. Pendiente: ejecutarlo con deploy legacy y luego con deploy `sp`. | 🟡 DB validado; e2e listo para correr |
 | F4 | (opcional) SP de sync de `clientes` (atomicidad) | pendiente |
 | **F5 (baja prioridad)** | Arreglar P1/P2 del snapshot (periodo de archivado real, distinguir cambio de periodo) | pendiente |
 
