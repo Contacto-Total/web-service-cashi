@@ -971,9 +971,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
      * solo ejecuta el UPDATE/INSERT masivo. Las filas inválidas se cuentan en failedRows y NO
      * llegan al SP. Activado por app.import.engine=sp.
      *
-     * NOTA atomicidad: CREATE/DROP de la tabla staging son DDL → provocan commit implícito,
-     * por lo que este camino no es transaccional como el legacy. Pendiente de endurecer antes
-     * de habilitar en producción (ver doc de migración).
+     * Atomicidad: la staging es TEMPORARY (CREATE/DROP TEMPORARY no provocan commit implícito),
+     * por lo que los writes del SP y el sync de clientes quedan dentro de la @Transactional y
+     * revierten juntos ante un fallo (validado contra QAS con ROLLBACK).
      */
     private Map<String, Object> importDataToTableViaSp(Integer subPortfolioId, LoadType loadType, List<Map<String, Object>> data) {
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
@@ -1080,16 +1080,25 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                         "SELECT LOWER(column_name) cn, column_type ct FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?",
                         rs -> { destColTypes.put(rs.getString("cn"), rs.getString("ct")); }, tableName);
 
-                StringBuilder ddl = new StringBuilder("CREATE TABLE `").append(staging)
+                // Staging TEMPORARY -> NO provoca commit implícito -> todo el flujo (writes del SP
+                // + sync de clientes) queda dentro de la @Transactional de Spring y revierte limpio.
+                StringBuilder ddl = new StringBuilder("CREATE TEMPORARY TABLE `").append(staging)
                         .append("` (__row INT NOT NULL, __existing_id BIGINT NULL");
                 StringBuilder insertCols = new StringBuilder("__row, __existing_id");
                 StringBuilder insertPh = new StringBuilder("?, ?");
+                StringBuilder dataCols = new StringBuilder();   // "`a`, `b`" -> p_cols del SP
+                StringBuilder setClause = new StringBuilder();  // "d.`a`=s.`a`, ..." -> p_set del SP
+                boolean firstCol = true;
                 for (HeaderConfiguration h : headers) {
                     String col = sanitizeColumnName(h.getHeaderName());
                     String type = destColTypes.getOrDefault(col.toLowerCase(), mapDataTypeToSQL(h.getDataType(), h.getFormat()));
                     ddl.append(", `").append(col).append("` ").append(type);
                     insertCols.append(", `").append(col).append("`");
                     insertPh.append(", ?");
+                    if (!firstCol) { dataCols.append(", "); setClause.append(", "); }
+                    dataCols.append("`").append(col).append("`");
+                    setClause.append("d.`").append(col).append("`=s.`").append(col).append("`");
+                    firstCol = false;
                 }
                 ddl.append(", KEY idx_eid (__existing_id)) ENGINE=InnoDB DEFAULT CHARSET=")
                         .append(charset).append(" COLLATE=").append(collation);
@@ -1110,26 +1119,30 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 }
                 jdbcTemplate.batchUpdate(stgInsertSql, batchArgs);
 
-                // CALL sp_import_upsert(staging, dest, OUT inserted, OUT updated)
+                // CALL sp_import_upsert(staging, dest, cols, set, OUT inserted, OUT updated)
+                final String pCols = dataCols.toString();
+                final String pSet = setClause.toString();
                 Map<String, Integer> spOut = jdbcTemplate.execute(connection -> {
-                    CallableStatement cs = connection.prepareCall("{CALL sp_import_upsert(?, ?, ?, ?)}");
+                    CallableStatement cs = connection.prepareCall("{CALL sp_import_upsert(?, ?, ?, ?, ?, ?)}");
                     cs.setString(1, staging);
                     cs.setString(2, tableName);
-                    cs.registerOutParameter(3, Types.INTEGER);
-                    cs.registerOutParameter(4, Types.INTEGER);
+                    cs.setString(3, pCols);
+                    cs.setString(4, pSet);
+                    cs.registerOutParameter(5, Types.INTEGER);
+                    cs.registerOutParameter(6, Types.INTEGER);
                     return cs;
                 }, (CallableStatement cs) -> {
                     cs.execute();
                     Map<String, Integer> m = new HashMap<>();
-                    m.put("inserted", cs.getInt(3));
-                    m.put("updated", cs.getInt(4));
+                    m.put("inserted", cs.getInt(5));
+                    m.put("updated", cs.getInt(6));
                     return m;
                 });
                 insertedRows = spOut.get("inserted");
                 updatedRows = spOut.get("updated");
             } finally {
                 try {
-                    jdbcTemplate.execute("DROP TABLE IF EXISTS `" + staging + "`");
+                    jdbcTemplate.execute("DROP TEMPORARY TABLE IF EXISTS `" + staging + "`");
                 } catch (Exception e) {
                     logger.warn("No se pudo eliminar la tabla staging {}: {}", staging, e.getMessage());
                 }
@@ -1204,16 +1217,26 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     "SELECT LOWER(column_name) cn, column_type ct FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?",
                     rs -> { destColTypes.put(rs.getString("cn"), rs.getString("ct")); }, tableName);
 
-            // __link hereda la colación del destino (vía COLLATE de la tabla) -> el JOIN no choca.
-            StringBuilder ddl = new StringBuilder("CREATE TABLE `").append(staging)
+            // Staging TEMPORARY (no commit implícito -> flujo atómico). __link hereda la colación
+            // del destino (vía COLLATE de la tabla) -> el JOIN no choca entre colaciones.
+            StringBuilder ddl = new StringBuilder("CREATE TEMPORARY TABLE `").append(staging)
                     .append("` (__row INT NOT NULL, __link VARCHAR(255) NULL");
             StringBuilder insertCols = new StringBuilder("__row, __link");
             StringBuilder insertPh = new StringBuilder("?, ?");
+            StringBuilder setClause = new StringBuilder();  // p_set armado en Java (COALESCE o no)
+            boolean firstCol = true;
             for (String col : dataColumns) {
                 String type = destColTypes.getOrDefault(col.toLowerCase(), "VARCHAR(255)");
                 ddl.append(", `").append(col).append("` ").append(type);
                 insertCols.append(", `").append(col).append("`");
                 insertPh.append(", ?");
+                if (!firstCol) setClause.append(", ");
+                if (useCoalesce) {
+                    setClause.append("d.`").append(col).append("`=COALESCE(s.`").append(col).append("`, d.`").append(col).append("`)");
+                } else {
+                    setClause.append("d.`").append(col).append("`=s.`").append(col).append("`");
+                }
+                firstCol = false;
             }
             ddl.append(", KEY idx_link (__link)) ENGINE=InnoDB DEFAULT CHARSET=")
                     .append(charset).append(" COLLATE=").append(collation);
@@ -1221,13 +1244,13 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
             jdbcTemplate.batchUpdate("INSERT INTO `" + staging + "` (" + insertCols + ") VALUES (" + insertPh + ")", stagingRows);
 
-            final int coalesceFlag = useCoalesce ? 1 : 0;
+            final String pSet = setClause.toString();
             Map<String, Integer> spOut = jdbcTemplate.execute(connection -> {
                 CallableStatement cs = connection.prepareCall("{CALL sp_import_update(?, ?, ?, ?, ?, ?)}");
                 cs.setString(1, staging);
                 cs.setString(2, tableName);
                 cs.setString(3, linkColumnName);
-                cs.setInt(4, coalesceFlag);
+                cs.setString(4, pSet);
                 cs.registerOutParameter(5, Types.INTEGER);
                 cs.registerOutParameter(6, Types.INTEGER);
                 return cs;
@@ -1248,7 +1271,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             return new SpUpdateResult(spOut.get("updated"), spOut.get("notFound"), matched);
         } finally {
             try {
-                jdbcTemplate.execute("DROP TABLE IF EXISTS `" + staging + "`");
+                jdbcTemplate.execute("DROP TEMPORARY TABLE IF EXISTS `" + staging + "`");
             } catch (Exception e) {
                 logger.warn("No se pudo eliminar la tabla staging {}: {}", staging, e.getMessage());
             }
