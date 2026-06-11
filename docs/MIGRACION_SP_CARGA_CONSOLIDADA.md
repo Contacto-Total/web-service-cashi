@@ -398,6 +398,26 @@ Por indicación: el legacy es deficiente en partes; el motor SP debe ser **corre
 | **F2.5-b — Estructural (recomendado)** | UNIQUE `(id_cliente,tipo_contacto,valor)` + reconciliación real (upsert sin DELETE, soft-deactivate de ausentes) → elimina además el **churn de `id` (I6)**. **Dedup previo dimensionado: solo 561 filas sobrantes en 547 grupos, 0 con `estado_osiptel` en conflicto** → limpieza trivial y sin pérdida. | pendiente |
 | **F3 — Validación / parallel-run** | **DB-level (reversible):** upsert/update/COALESCE/not_found, colación heredada (join OK en `0900_ai_ci`; incorrecta → `ERROR 1267`), atomicidad TEMPORARY (rollback revierte). **End-to-end en la VM (motor `sp`):** (a) `scripts/parallel_run_carga.sh` (update-complementary) PASA legacy y sp, path `[SP]` confirmado en `logs/app.log`. (b) `scripts/parallel_run_import_daily.sh` sobre **subcartera desechable** (clon de la 27): import-data INSERT (`inserted=2`), UPSERT (`ins=1, upd=1`) e import-daily (ACTUALIZACION `insertedRows=1` + INICIAL update con COALESCE, `sld_mora_asig` preservado) → **PASA** tras V25. Crea/ejercita/elimina todo. | ✅ los 3 caminos SP validados e2e |
 
+### Validación integral e2e — todas las tablas y escenarios (motor `sp`, QAS)
+Sobre subcarteras DESECHABLES (clon de la 27), creando/ejercitando/eliminando todo (incl. histórico). Harnesses en `scripts/`. Resultado: **PASA**.
+
+| Escenario | Tablas | Harness | Resultado |
+|---|---|---|---|
+| import-data INSERT | INICIAL | full | ✅ |
+| import-data UPSERT (update+insert) | INICIAL | full/import_daily | ✅ |
+| match por identity_code / por **NOMBRE** (identity vacío) | INICIAL | edge | ✅ |
+| **regex/sourceField** (DOCUMENTO=`.{8}$` sobre NUM_DOCUM_IDE) | INICIAL | edge | ✅ |
+| numérico inválido → coerción lenient a NULL (igual legacy/SP) | INICIAL | edge | ✅ (comportamiento existente) |
+| sync → creación de **clientes + metodos_contacto** (tel/email) | clientes, metodos_contacto | full | ✅ |
+| **preservación estado_osiptel / estado_whatsapp** al reimportar (fix F2.5-a) | metodos_contacto | full | ✅ 0 reseteados |
+| **preservación telefono_extra** al resync | metodos_contacto | full | ✅ |
+| import-daily fase 1 (ACTUALIZACION) + fase 2 (INICIAL **COALESCE** preserva) | ACTUALIZACION, INICIAL | full/import_daily | ✅ |
+| update-complementary (update + link not-found) | INICIAL | full | ✅ |
+| **snapshot mensual**: requiresConfirmation → archiva a `cashi_historico_db` + trunca origen | INICIAL, histórico | edge | ✅ |
+| colación heredada en tabla `0900_ai_ci`; atomicidad TEMPORARY (rollback) | dinámicas | DB-level | ✅ |
+
+Observaciones: (a) el snapshot archiva con `archivePeriod=now()` (`2026_06`) — coincide cuando el periodo del dato = mes actual; el bug **P1** (archivar con el periodo del dato, no `now()`) sigue pendiente. (b) la coerción lenient de inválidos a NULL es comportamiento existente (no del SP).
+
 ### Bug encontrado en e2e y corregido (V25): SQL_SAFE_UPDATES envenenado
 El harness de import/daily expuso un bug que solo aparece en conexión pooled: la diaria fallaba con `ERROR 1175 (safe update mode... without a WHERE that uses a KEY column)` en `sp_import_upsert`. **Causa raíz:** `sp_limpiar_contactos_invalidos` (V22) hacía `SET SQL_SAFE_UPDATES=1` al final (el default es 0) → dejaba la conexión del pool en safe-update=1; la siguiente carga reusaba esa conexión y el `UPDATE…JOIN … WHERE s.__existing_id IS NOT NULL` del SP (sin WHERE sobre KEY del destino) chocaba. El legacy no lo sufría (usa `WHERE id=?`). **Fix `V25__fix_safe_updates_sp_import.sql`:** los SP de import fijan `SQL_SAFE_UPDATES=0` con save/restore, y `sp_limpiar` restaura el valor previo en vez de forzar 1 (elimina el envenenamiento en la raíz). V25 mantiene las firmas de 6 params → no requiere redeploy del jar. Validado: re-corrida del harness PASA.
 | F4 | (opcional) SP de sync de `clientes` (atomicidad) | pendiente |
