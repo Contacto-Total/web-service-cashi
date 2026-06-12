@@ -42,8 +42,12 @@ public class CustomerSyncService {
     private static final Logger logger = LoggerFactory.getLogger(CustomerSyncService.class);
     private static final String AGENT_ADDED_LABEL = "Agregado por agente";
 
-    /** Motor de sincronización: "legacy" (fila-por-fila) o "sp" (set-based sp_sincronizar_clientes). */
-    @Value("${app.import.engine:legacy}")
+    /**
+     * Motor de sincronización: "sp" (set-based sp_sincronizar_clientes, DEFAULT) o
+     * "legacy" (fila-por-fila). El modo "legacy" está DEPRECADO (lento, N+1) y se
+     * conserva solo para rollback de emergencia.
+     */
+    @Value("${app.import.engine:sp}")
     private String importEngine;
 
     @PersistenceContext
