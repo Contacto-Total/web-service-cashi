@@ -1,5 +1,5 @@
 -- ============================================================================
--- V26 — sp_sync_customers: sincronización de clientes + métodos_contacto SET-BASED.
+-- V26 — sp_sincronizar_clientes: sincronización de clientes + métodos_contacto SET-BASED.
 --
 -- Reemplaza el sync fila-por-fila de CustomerSyncService (que sufría un N+1:
 -- mapColumnsToSystemFields consultaba configuracion_cabeceras por CADA fila ->
@@ -39,11 +39,11 @@
 -- SQL_SAFE_UPDATES: save/restore (no envenenar el pool), igual que V25.
 -- ============================================================================
 
-DROP PROCEDURE IF EXISTS sp_sync_customers;
+DROP PROCEDURE IF EXISTS sp_sincronizar_clientes;
 
 DELIMITER //
 
-CREATE PROCEDURE sp_sync_customers(
+CREATE PROCEDURE sp_sincronizar_clientes(
     IN  p_stg               VARCHAR(128),   -- tabla TEMPORARY canónica (misma conexión)
     IN  p_tenant_id         BIGINT,
     IN  p_tenant_name       VARCHAR(255),
