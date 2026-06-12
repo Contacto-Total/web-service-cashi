@@ -42,7 +42,7 @@ public class CustomerSyncService {
     private static final Logger logger = LoggerFactory.getLogger(CustomerSyncService.class);
     private static final String AGENT_ADDED_LABEL = "Agregado por agente";
 
-    /** Motor de sincronización: "legacy" (fila-por-fila) o "sp" (set-based sp_sync_customers). */
+    /** Motor de sincronización: "legacy" (fila-por-fila) o "sp" (set-based sp_sincronizar_clientes). */
     @Value("${app.import.engine:legacy}")
     private String importEngine;
 
@@ -1278,10 +1278,10 @@ public class CustomerSyncService {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 
-    // ==================== MOTOR SP SET-BASED (sp_sync_customers) ====================
+    // ==================== MOTOR SP SET-BASED (sp_sincronizar_clientes) ====================
 
     /**
-     * Sincroniza clientes + métodos_contacto en operaciones de CONJUNTO vía sp_sync_customers,
+     * Sincroniza clientes + métodos_contacto en operaciones de CONJUNTO vía sp_sincronizar_clientes,
      * eliminando el N+1 del path legacy (mapColumnsToSystemFields por fila ~5 min -> ~1s).
      *
      * Patrón idéntico a sp_import_upsert: Java resuelve el mapeo dinámico (fieldCode -> columna
@@ -1391,10 +1391,10 @@ public class CustomerSyncService {
         }
     }
 
-    /** Invoca sp_sync_customers(staging, jerarquía, OUT created/updated/contacts). */
+    /** Invoca sp_sincronizar_clientes(staging, jerarquía, OUT created/updated/contacts). */
     private int[] callSyncSp(String staging, Tenant tenant, Portfolio portfolio, SubPortfolio subPortfolio) {
         return jdbcTemplate.execute((Connection con) -> {
-            CallableStatement cs = con.prepareCall("{CALL sp_sync_customers(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)}");
+            CallableStatement cs = con.prepareCall("{CALL sp_sincronizar_clientes(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)}");
             cs.setString(1, staging);
             cs.setLong(2, tenant.getId().longValue());
             cs.setString(3, tenant.getTenantName());

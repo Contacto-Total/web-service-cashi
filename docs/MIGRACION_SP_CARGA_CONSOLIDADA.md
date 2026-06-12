@@ -14,9 +14,9 @@ Métodos en alcance (todos en `HeaderConfigurationCommandServiceImpl.java`):
 
 | Método | Líneas hoy | Rol | SP destino |
 |---|---|---|---|
-| `importDataToTable` | 700–960 | UPSERT principal (INICIAL) y Fase 1 diaria (ACTUALIZACION) | `sp_import_upsert` |
-| `importDailyData` Fase 2 | 1758–1865 | UPDATE de INICIAL por link field (con COALESCE) | `sp_import_update` (coalesce=1) |
-| `updateComplementaryDataInTable` | 1368–1505 | UPDATE de columnas existentes por link field | `sp_import_update` (coalesce=0) |
+| `importDataToTable` | 700–960 | UPSERT principal (INICIAL) y Fase 1 diaria (ACTUALIZACION) | `sp_importar_upsert` |
+| `importDailyData` Fase 2 | 1758–1865 | UPDATE de INICIAL por link field (con COALESCE) | `sp_importar_actualizar` (coalesce=1) |
+| `updateComplementaryDataInTable` | 1368–1505 | UPDATE de columnas existentes por link field | `sp_importar_actualizar` (coalesce=0) |
 
 Fuera de alcance (esta iteración): snapshot (ya en SP V13/V14), `CustomerSyncService` (ya batched; candidato a SP fijo en fase posterior), DDL dinámico y helpers de metadatos.
 
@@ -98,10 +98,10 @@ CREATE TABLE cashi_discador_db.stg_<dest>_<sid> (
 
 ## 4. Stored Procedures
 
-### 4.1 `sp_import_upsert` — INICIAL y ACTUALIZACION (Fase 1 diaria)
+### 4.1 `sp_importar_upsert` — INICIAL y ACTUALIZACION (Fase 1 diaria)
 
 ```
-sp_import_upsert(
+sp_importar_upsert(
   IN  p_staging   VARCHAR(128),   -- nombre tabla staging
   IN  p_dest      VARCHAR(128),   -- tabla dinámica destino
   OUT p_inserted  INT,
@@ -131,10 +131,10 @@ PREPARE st FROM @sql; EXECUTE st; SET p_inserted = ROW_COUNT(); DEALLOCATE PREPA
 
 Equivalencia con hoy: `insertedRows = p_inserted`, `updatedRows = p_updated`, `failedRows` lo aporta Java (filas rechazadas en validación). El matching identity→nombre se preserva porque `__existing_id` lo decidió Java.
 
-### 4.2 `sp_import_update` — Complementary y Fase 2 diaria
+### 4.2 `sp_importar_actualizar` — Complementary y Fase 2 diaria
 
 ```
-sp_import_update(
+sp_importar_actualizar(
   IN  p_staging      VARCHAR(128),
   IN  p_dest         VARCHAR(128),
   IN  p_link_col     VARCHAR(128),   -- columna destino para el JOIN
@@ -203,10 +203,10 @@ El frontend (`consolidated-load.component.ts`) lee:
 | Conteo | Fuente nueva |
 |---|---|
 | `failedRows` | Java (validación previa, antes de staging) — **igual que hoy** |
-| `insertedRows` | `sp_import_upsert.p_inserted` |
-| `updatedRows` (upsert) | `sp_import_upsert.p_updated` |
-| `updatedRows` (update) | `sp_import_update.p_updated` |
-| `notFoundRows` | `sp_import_update.p_not_found` |
+| `insertedRows` | `sp_importar_upsert.p_inserted` |
+| `updatedRows` (upsert) | `sp_importar_upsert.p_updated` |
+| `updatedRows` (update) | `sp_importar_actualizar.p_updated` |
+| `notFoundRows` | `sp_importar_actualizar.p_not_found` |
 | `errors[]` | Java (mensajes por fila inválida) — **igual que hoy** |
 
 ---
@@ -382,9 +382,9 @@ Encaja con la decisión **SP-puro**: se implementa como `sp_sync_contactos(stagi
 | Fase | Entregable | Estado |
 |---|---|---|
 | **F2.5-a — Fix quirúrgico (HECHO)** | En `syncAllCustomerContactsBatch`: (1) DELETE acotado a los 6 subtipos gestionados → preserva `telefono_extra` (I7); (2) precarga de estados (`loadExistingContactStates`) + INSERT parametrizado que **preserva** `estado/estado_osiptel/estado_whatsapp/estado_contactabilidad/fecha_importacion` (I1–I5). Compila OK. **Pendiente: probar en QAS.** | ✅ implementado |
-| **F0 — SP de import** | `sp_import_upsert` y `sp_import_update` en `V23__create_sp_import.sql`, **verificados contra `foh_cas_cst` real en QAS** y **creados en la BD QAS** (Flyway inactivo → ejecutados a mano). Fix `group_concat_max_len`. | ✅ hecho |
-| **F1 — Wiring Java upsert (HECHO)** | `importDataToTableViaSp` detrás del flag `app.import.engine` (default `legacy`). Crea staging heredando **colación y tipos reales del destino**, puebla con `batchUpdate`, hace `CALL sp_import_upsert`, lee OUT params, dropea staging, arma el Map con **claves idénticas** y corre el sync igual que legacy. Cubre INICIAL y Fase 1 diaria. Compila OK. | ✅ implementado (flag off) |
-| **F2 — Wiring update (HECHO)** | Fase 2 diaria (COALESCE) y `updateComplementaryDataInTable` (sin COALESCE) conectadas a `sp_import_update` vía helper compartido `runImportUpdateViaSp` (staging hereda colación, `batchUpdate`, `CALL`, OUT params, drop). El helper devuelve también los `__link` que matchearon → alimenta el **sync selectivo** de la diaria. Compila OK. Con el flag en `sp`, los 3 métodos de escritura usan SP. | ✅ implementado (flag off) |
+| **F0 — SP de import** | `sp_importar_upsert` y `sp_importar_actualizar` en `V23__create_sp_import.sql`, **verificados contra `foh_cas_cst` real en QAS** y **creados en la BD QAS** (Flyway inactivo → ejecutados a mano). Fix `group_concat_max_len`. | ✅ hecho |
+| **F1 — Wiring Java upsert (HECHO)** | `importDataToTableViaSp` detrás del flag `app.import.engine` (default `legacy`). Crea staging heredando **colación y tipos reales del destino**, puebla con `batchUpdate`, hace `CALL sp_importar_upsert`, lee OUT params, dropea staging, arma el Map con **claves idénticas** y corre el sync igual que legacy. Cubre INICIAL y Fase 1 diaria. Compila OK. | ✅ implementado (flag off) |
+| **F2 — Wiring update (HECHO)** | Fase 2 diaria (COALESCE) y `updateComplementaryDataInTable` (sin COALESCE) conectadas a `sp_importar_actualizar` vía helper compartido `runImportUpdateViaSp` (staging hereda colación, `batchUpdate`, `CALL`, OUT params, drop). El helper devuelve también los `__link` que matchearon → alimenta el **sync selectivo** de la diaria. Compila OK. Con el flag en `sp`, los 3 métodos de escritura usan SP. | ✅ implementado (flag off) |
 
 **`notFoundRows` en F2 — equivalente al legacy (verificado e2e en QAS):** el SP cuenta `notFoundRows` con un `LEFT JOIN` real (link ausente). Se pensó que divergiría del legacy (que usa `rowsAffected==0`), pero el driver MySQL Connector/J de este deploy devuelve filas **matched** (un UPDATE no-op reporta `updatedRows=1`, no 0), por lo que el `notFound` del legacy ya cuenta solo links ausentes = **mismo resultado que el SP**. No hay divergencia observada; son equivalentes (paridad correcta).
 
@@ -419,7 +419,7 @@ Sobre subcarteras DESECHABLES (clon de la 27), creando/ejercitando/eliminando to
 Observaciones: (a) el snapshot archiva con `archivePeriod=now()` (`2026_06`) — coincide cuando el periodo del dato = mes actual; el bug **P1** (archivar con el periodo del dato, no `now()`) sigue pendiente. (b) la coerción lenient de inválidos a NULL es comportamiento existente (no del SP).
 
 ### Bug encontrado en e2e y corregido (V25): SQL_SAFE_UPDATES envenenado
-El harness de import/daily expuso un bug que solo aparece en conexión pooled: la diaria fallaba con `ERROR 1175 (safe update mode... without a WHERE that uses a KEY column)` en `sp_import_upsert`. **Causa raíz:** `sp_limpiar_contactos_invalidos` (V22) hacía `SET SQL_SAFE_UPDATES=1` al final (el default es 0) → dejaba la conexión del pool en safe-update=1; la siguiente carga reusaba esa conexión y el `UPDATE…JOIN … WHERE s.__existing_id IS NOT NULL` del SP (sin WHERE sobre KEY del destino) chocaba. El legacy no lo sufría (usa `WHERE id=?`). **Fix `V25__fix_safe_updates_sp_import.sql`:** los SP de import fijan `SQL_SAFE_UPDATES=0` con save/restore, y `sp_limpiar` restaura el valor previo en vez de forzar 1 (elimina el envenenamiento en la raíz). V25 mantiene las firmas de 6 params → no requiere redeploy del jar. Validado: re-corrida del harness PASA.
+El harness de import/daily expuso un bug que solo aparece en conexión pooled: la diaria fallaba con `ERROR 1175 (safe update mode... without a WHERE that uses a KEY column)` en `sp_importar_upsert`. **Causa raíz:** `sp_limpiar_contactos_invalidos` (V22) hacía `SET SQL_SAFE_UPDATES=1` al final (el default es 0) → dejaba la conexión del pool en safe-update=1; la siguiente carga reusaba esa conexión y el `UPDATE…JOIN … WHERE s.__existing_id IS NOT NULL` del SP (sin WHERE sobre KEY del destino) chocaba. El legacy no lo sufría (usa `WHERE id=?`). **Fix `V25__fix_safe_updates_sp_import.sql`:** los SP de import fijan `SQL_SAFE_UPDATES=0` con save/restore, y `sp_limpiar` restaura el valor previo en vez de forzar 1 (elimina el envenenamiento en la raíz). V25 mantiene las firmas de 6 params → no requiere redeploy del jar. Validado: re-corrida del harness PASA.
 | F4 | (opcional) SP de sync de `clientes` (atomicidad) | pendiente |
 | **F5 (baja prioridad)** | Arreglar P1/P2 del snapshot (periodo de archivado real, distinguir cambio de periodo) | pendiente |
 
@@ -427,13 +427,13 @@ El harness de import/daily expuso un bug que solo aparece en conexión pooled: l
 
 ---
 
-## §16 — Migración del SYNC de clientes a SP (V26, `sp_sync_customers`)
+## §16 — Migración del SYNC de clientes a SP (V26, `sp_sincronizar_clientes`)
 
 **Motivación.** Tras migrar los 3 imports a SP, el cuello de botella pasó a ser el **sync de clientes** (`CustomerSyncService`). El import por SP tarda ~6 s; el sync tardaba **~5 min** para 4461 filas → causaba 502 en el proxy Apache (`Timeout 300`). Causa raíz: **N+1** — `mapColumnsToSystemFields` consultaba `configuracion_cabeceras`+`definiciones_campos` por CADA fila (con lazy-load de `field_definition`). El UPSERT de clientes y el batch de contactos ya estaban optimizados; solo el mapeo era O(filas).
 
-**Diseño (mismo patrón que `sp_import_upsert`).** Java resuelve el mapeo dinámico `fieldCode → columna foh` **una sola vez** y materializa una **staging TEMPORARY canónica** (nombres fijos, tipos = columnas de `clientes`); el SP `sp_sync_customers` opera 100% set-based sobre esa staging (estático salvo el nombre de la staging). La staging TEMPORARY no provoca commit implícito → todo dentro de la `@Transactional`.
+**Diseño (mismo patrón que `sp_importar_upsert`).** Java resuelve el mapeo dinámico `fieldCode → columna foh` **una sola vez** y materializa una **staging TEMPORARY canónica** (nombres fijos, tipos = columnas de `clientes`); el SP `sp_sincronizar_clientes` opera 100% set-based sobre esa staging (estático salvo el nombre de la staging). La staging TEMPORARY no provoca commit implícito → todo dentro de la `@Transactional`.
 
-Firma: `sp_sync_customers(p_stg, p_tenant_id, p_tenant_name, p_portfolio_id, p_portfolio_name, p_subportfolio_id, p_subportfolio_name, OUT p_cust_created, OUT p_cust_updated, OUT p_contacts_inserted)`.
+Firma: `sp_sincronizar_clientes(p_stg, p_tenant_id, p_tenant_name, p_portfolio_id, p_portfolio_name, p_subportfolio_id, p_subportfolio_name, OUT p_cust_created, OUT p_cust_updated, OUT p_contacts_inserted)`.
 
 **Invariantes preservadas (idénticas al legacy):** (1) salta documento vacío; (2) UPSERT `clientes` por UNIQUE `codigo_identificacion`, jerarquía completa, `id_cliente=documento`, fallback `codigo_identificacion=documento`; (3) reconciliación de `metodos_contacto` SOLO sobre los 6 subtipos gestionados (telefono_principal/secundario/trabajo/referencia_1/referencia_2/email) → NO toca `telefono_extra` ni otros; (4) **preserva** `estado`/`estado_osiptel`/`estado_whatsapp`/`estado_contactabilidad`/`fecha_importacion` de un contacto que reaparece (match por id_cliente+tipo+LOWER(TRIM(valor)), el de MIN(id)); defaults ACTIVE/SIN_VALIDAR/SIN_VALIDAR/NUEVO/CURDATE() si es nuevo; (5) contactos **manuales** (`etiqueta='Agregado por agente'`) no se borran ni se duplican; (6) DELETE acotado a subtipos gestionados y `etiqueta<>'Agregado por agente'`.
 
@@ -447,6 +447,6 @@ Firma: `sp_sync_customers(p_stg, p_tenant_id, p_tenant_name, p_portfolio_id, p_p
 - `telefono_extra` intacto. ✓  Contacto manual sobrevive, no duplica, no se reinserta como gestionado. ✓
 - SP creado en QAS; con 5/500/4461 filas todo OK (escala lineal).
 
-**Wiring Java** (`CustomerSyncService`, detrás del flag `app.import.engine=sp`): `syncViaStoredProcedure(subPortfolio, loadType, filterCodes)` construye el mapeo (1 query), crea la staging canónica, `INSERT … SELECT` desde la tabla foh (con `WHERE codigo IN (...)` si es sync selectivo de la diaria), `CALL sp_sync_customers`, dropea la staging. Branches en `syncCustomersFromSubPortfolio` (full, filterCodes=null) y `syncCustomersByIdentificationCodes` (selectivo). **Compila OK** (verificado en worktree de `qas` en la VM). Pendiente: deploy (build + restart del servicio, lo hace el usuario).
+**Wiring Java** (`CustomerSyncService`, detrás del flag `app.import.engine=sp`): `syncViaStoredProcedure(subPortfolio, loadType, filterCodes)` construye el mapeo (1 query), crea la staging canónica, `INSERT … SELECT` desde la tabla foh (con `WHERE codigo IN (...)` si es sync selectivo de la diaria), `CALL sp_sincronizar_clientes`, dropea la staging. Branches en `syncCustomersFromSubPortfolio` (full, filterCodes=null) y `syncCustomersByIdentificationCodes` (selectivo). **Compila OK** (verificado en worktree de `qas` en la VM). Pendiente: deploy (build + restart del servicio, lo hace el usuario).
 
 > Con el flag `sp` ya activo en QAS, al desplegar este jar el sync también pasa a SP automáticamente. Recomendado además subir `ProxyPass /api … timeout=600` en Apache como red de seguridad, aunque con el sync en ~1 s el 502 deja de ocurrir.

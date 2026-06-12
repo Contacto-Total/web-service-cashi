@@ -964,7 +964,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
     /**
      * Variante de importDataToTable que escribe vía tabla staging + stored procedure
-     * sp_import_upsert (set-based) en lugar del bucle fila-por-fila.
+     * sp_importar_upsert (set-based) en lugar del bucle fila-por-fila.
      *
      * Java conserva TODA la preparación (resolución de cabeceras, regex, conversión/validación
      * de tipos, obligatorios y el matching identity->nombre que produce __existing_id). El SP
@@ -1119,11 +1119,11 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 }
                 jdbcTemplate.batchUpdate(stgInsertSql, batchArgs);
 
-                // CALL sp_import_upsert(staging, dest, cols, set, OUT inserted, OUT updated)
+                // CALL sp_importar_upsert(staging, dest, cols, set, OUT inserted, OUT updated)
                 final String pCols = dataCols.toString();
                 final String pSet = setClause.toString();
                 Map<String, Integer> spOut = jdbcTemplate.execute(connection -> {
-                    CallableStatement cs = connection.prepareCall("{CALL sp_import_upsert(?, ?, ?, ?, ?, ?)}");
+                    CallableStatement cs = connection.prepareCall("{CALL sp_importar_upsert(?, ?, ?, ?, ?, ?)}");
                     cs.setString(1, staging);
                     cs.setString(2, tableName);
                     cs.setString(3, pCols);
@@ -1189,7 +1189,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     private record SpUpdateResult(int updated, int notFound, Set<String> matchedLinks) {}
 
     /**
-     * Ejecuta una actualización masiva por link field vía staging + sp_import_update (set-based).
+     * Ejecuta una actualización masiva por link field vía staging + sp_importar_actualizar (set-based).
      * stagingRows: cada fila = [__row(Integer), __link(String), val_col1, val_col2, ...] alineado a dataColumns.
      * Devuelve {actualizados, no_encontrados, conjunto de __link que matchearon} — los matched sirven
      * para la sincronización selectiva de la carga diaria.
@@ -1246,7 +1246,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
             final String pSet = setClause.toString();
             Map<String, Integer> spOut = jdbcTemplate.execute(connection -> {
-                CallableStatement cs = connection.prepareCall("{CALL sp_import_update(?, ?, ?, ?, ?, ?)}");
+                CallableStatement cs = connection.prepareCall("{CALL sp_importar_actualizar(?, ?, ?, ?, ?, ?)}");
                 cs.setString(1, staging);
                 cs.setString(2, tableName);
                 cs.setString(3, linkColumnName);
@@ -1279,7 +1279,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
-     * Variante SP de updateComplementaryDataInTable: staging + sp_import_update (sin COALESCE).
+     * Variante SP de updateComplementaryDataInTable: staging + sp_importar_actualizar (sin COALESCE).
      * Java conserva la preparación (resolución de columnas, conversión de tipos). Activado por app.import.engine=sp.
      */
     private Map<String, Object> updateComplementaryDataInTableViaSp(Integer subPortfolioId, LoadType loadType,
@@ -2193,7 +2193,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             List<String> columnsList = new ArrayList<>(columnsToUpdateSet);
 
             if ("sp".equalsIgnoreCase(importEngine)) {
-                // ===== Motor SP: staging + sp_import_update con COALESCE =====
+                // ===== Motor SP: staging + sp_importar_actualizar con COALESCE =====
                 List<Object[]> stagingRows = new ArrayList<>();
                 for (int i = 0; i < data.size(); i++) {
                     Map<String, Object> row = data.get(i);
