@@ -121,6 +121,11 @@ public class WspInboxService {
         return msgRepo.findByInstanciaWithRelations(instanciaId);
     }
 
+    @Transactional(readOnly = true)
+    public List<WspMensaje> listarMensajesPorJid(String chatJid, int limit, long before) {
+        return msgRepo.findByJidPaged(chatJid, limit, before);
+    }
+
     // ------------------------------------------------------------------ //
     //  Helpers                                                             //
     // ------------------------------------------------------------------ //

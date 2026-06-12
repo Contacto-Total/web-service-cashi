@@ -13,11 +13,15 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.CallableStatement;
+import java.sql.Connection;
 import java.sql.Date;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.Period;
 import java.time.ZoneId;
@@ -37,6 +41,10 @@ public class CustomerSyncService {
 
     private static final Logger logger = LoggerFactory.getLogger(CustomerSyncService.class);
     private static final String AGENT_ADDED_LABEL = "Agregado por agente";
+
+    /** Motor de sincronización: "legacy" (fila-por-fila) o "sp" (set-based sp_sincronizar_clientes). */
+    @Value("${app.import.engine:legacy}")
+    private String importEngine;
 
     @PersistenceContext
     private final EntityManager entityManager;
@@ -159,6 +167,11 @@ public class CustomerSyncService {
 
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("SubPortfolio no encontrado: " + subPortfolioId));
+
+        // Motor SP set-based (flag app.import.engine=sp): sync completo en 1 round-trip.
+        if ("sp".equalsIgnoreCase(importEngine)) {
+            return syncViaStoredProcedure(subPortfolio, loadType, null);
+        }
 
         Portfolio portfolio = subPortfolio.getPortfolio();
         Tenant tenant = portfolio.getTenant();
@@ -306,6 +319,11 @@ public class CustomerSyncService {
         // 1. Obtener SubPortfolio con sus relaciones
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("SubPortfolio no encontrado: " + subPortfolioId));
+
+        // Motor SP set-based (flag app.import.engine=sp): la staging se filtra a estos codes.
+        if ("sp".equalsIgnoreCase(importEngine)) {
+            return syncViaStoredProcedure(subPortfolio, loadType, identificationCodes);
+        }
 
         Portfolio portfolio = subPortfolio.getPortfolio();
         Tenant tenant = portfolio.getTenant();
@@ -1042,8 +1060,21 @@ public class CustomerSyncService {
             }
         }
 
-        // 2. DELETE en batches de 500 IDs
         List<Long> clientIdList = new ArrayList<>(allClientIds);
+
+        // Subtipos que ESTE sync gestiona (provienen del archivo de cartera).
+        // El DELETE se acota a estos subtipos para NO borrar otros (p. ej. telefono_extra),
+        // administrados por otros flujos.
+        final String[] contactSubtypes = {"telefono_principal", "telefono_secundario", "telefono_trabajo",
+                                          "email", "telefono_referencia_1", "telefono_referencia_2"};
+        final String subtypeInClause = String.join(",", Collections.nCopies(contactSubtypes.length, "?"));
+
+        // Preservar estados de validación existentes ANTES del DELETE.
+        // Evita que cada carga resetee estado_osiptel / estado_whatsapp / estado_contactabilidad /
+        // estado / fecha_importacion de teléfonos ya validados.
+        Map<String, Object[]> preservedStates = loadExistingContactStates(clientIdList, tableName, contactSubtypes);
+
+        // 2. DELETE en batches de 500 IDs (acotado a los subtipos gestionados)
         int deleteBatchSize = 500;
         int totalDeleted = 0;
 
@@ -1054,25 +1085,29 @@ public class CustomerSyncService {
             String placeholders = String.join(",", Collections.nCopies(batch.size(), "?"));
             String deleteSql = "DELETE FROM " + tableName +
                     " WHERE id_cliente IN (" + placeholders + ")" +
+                    " AND subtipo IN (" + subtypeInClause + ")" +
                     " AND (etiqueta IS NULL OR TRIM(LOWER(etiqueta)) <> TRIM(LOWER(?)))";
 
-            Object[] deleteArgs = new Object[batch.size() + 1];
-            for (int j = 0; j < batch.size(); j++) {
-                deleteArgs[j] = batch.get(j);
+            Object[] deleteArgs = new Object[batch.size() + contactSubtypes.length + 1];
+            int a = 0;
+            for (Long id : batch) {
+                deleteArgs[a++] = id;
             }
-            deleteArgs[batch.size()] = AGENT_ADDED_LABEL;
+            for (String st : contactSubtypes) {
+                deleteArgs[a++] = st;
+            }
+            deleteArgs[a] = AGENT_ADDED_LABEL;
 
             int deleted = jdbcTemplate.update(deleteSql, deleteArgs);
             totalDeleted += deleted;
         }
-        logger.debug("Eliminados {} contactos existentes", totalDeleted);
+        logger.debug("Eliminados {} contactos existentes (subtipos gestionados)", totalDeleted);
 
         Set<String> preservedManualContacts = loadPreservedManualContactKeys(clientIdList, tableName);
 
-        // 3. Recopilar todos los contactos a insertar
+        // 3. Recopilar todos los contactos a insertar (preservando estados existentes)
         List<Object[]> contactsToInsert = new ArrayList<>();
-        String[] contactSubtypes = {"telefono_principal", "telefono_secundario", "telefono_trabajo",
-                                    "email", "telefono_referencia_1", "telefono_referencia_2"};
+        java.time.LocalDate today = java.time.LocalDate.now();
 
         for (int i = 0; i < customers.size(); i++) {
             Customer customer = customers.get(i);
@@ -1089,9 +1124,19 @@ public class CustomerSyncService {
                     String contactValue = getStringValue(row, subtype);
                     if (contactValue != null && !contactValue.isEmpty()) {
                         String contactType = subtype.equals("email") ? "email" : "telefono";
-                        if (!preservedManualContacts.contains(buildContactKey(clientId, contactType, contactValue))) {
+                        String contactKey = buildContactKey(clientId, contactType, contactValue);
+                        if (!preservedManualContacts.contains(contactKey)) {
+                            // Recuperar el estado previo si el contacto ya existía (mismo cliente/tipo/valor)
+                            Object[] prev = preservedStates.get(contactKey);
+                            Object fechaImportacion = (prev != null && prev[4] != null) ? prev[4] : today;
+                            String estado         = (prev != null && prev[0] != null) ? (String) prev[0] : "ACTIVE";
+                            String estadoOsiptel  = (prev != null && prev[1] != null) ? (String) prev[1] : "SIN_VALIDAR";
+                            String estadoWhatsapp = (prev != null && prev[2] != null) ? (String) prev[2] : "SIN_VALIDAR";
+                            String estadoContact  = (prev != null && prev[3] != null) ? (String) prev[3] : "NUEVO";
+
                             contactsToInsert.add(new Object[]{
-                                clientId, contactType, subtype, contactValue, subtype
+                                clientId, contactType, subtype, contactValue, subtype,
+                                fechaImportacion, estado, estadoOsiptel, estadoWhatsapp, estadoContact
                             });
                         }
                     }
@@ -1107,7 +1152,7 @@ public class CustomerSyncService {
 
         String insertSql = "INSERT INTO " + tableName +
             " (id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado, estado_osiptel, estado_whatsapp, estado_contactabilidad) " +
-            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE', 'SIN_VALIDAR', 'SIN_VALIDAR', 'NUEVO')";
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         int insertBatchSize = 1000;
         int totalInserted = 0;
@@ -1124,6 +1169,61 @@ public class CustomerSyncService {
 
         logger.debug("Insertados {} contactos", totalInserted);
         return totalInserted;
+    }
+
+    /**
+     * Carga los estados existentes de los contactos gestionados ANTES de un DELETE+INSERT,
+     * para preservar las validaciones (estado_osiptel, estado_whatsapp, estado_contactabilidad),
+     * el estado (ACTIVE/INACTIVE) y la fecha_importacion original entre recargas.
+     *
+     * Clave: buildContactKey(id_cliente, tipo_contacto, valor).
+     * Valor: Object[]{ estado, estado_osiptel, estado_whatsapp, estado_contactabilidad, fecha_importacion }.
+     */
+    private Map<String, Object[]> loadExistingContactStates(List<Long> clientIds, String tableName, String[] subtypes) {
+        Map<String, Object[]> states = new HashMap<>();
+        if (clientIds.isEmpty() || subtypes.length == 0) {
+            return states;
+        }
+
+        int batchSize = 500;
+        for (int i = 0; i < clientIds.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, clientIds.size());
+            List<Long> batch = clientIds.subList(i, end);
+
+            String idPlaceholders = String.join(",", Collections.nCopies(batch.size(), "?"));
+            String subtypePlaceholders = String.join(",", Collections.nCopies(subtypes.length, "?"));
+            String sql = "SELECT id_cliente, tipo_contacto, valor, estado, estado_osiptel, " +
+                    "estado_whatsapp, estado_contactabilidad, fecha_importacion " +
+                    "FROM " + tableName +
+                    " WHERE id_cliente IN (" + idPlaceholders + ")" +
+                    " AND subtipo IN (" + subtypePlaceholders + ")";
+
+            Object[] args = new Object[batch.size() + subtypes.length];
+            int a = 0;
+            for (Long id : batch) {
+                args[a++] = id;
+            }
+            for (String st : subtypes) {
+                args[a++] = st;
+            }
+
+            List<Map<String, Object>> existing = jdbcTemplate.queryForList(sql, args);
+            for (Map<String, Object> r : existing) {
+                Long clientId = ((Number) r.get("id_cliente")).longValue();
+                String contactType = Objects.toString(r.get("tipo_contacto"), "");
+                String value = Objects.toString(r.get("valor"), "");
+                String key = buildContactKey(clientId, contactType, value);
+                // putIfAbsent: si hubiera duplicados (mismo cliente/tipo/valor) conservar el primero.
+                states.putIfAbsent(key, new Object[]{
+                        r.get("estado"),
+                        r.get("estado_osiptel"),
+                        r.get("estado_whatsapp"),
+                        r.get("estado_contactabilidad"),
+                        r.get("fecha_importacion")
+                });
+            }
+        }
+        return states;
     }
 
     /**
@@ -1176,6 +1276,140 @@ public class CustomerSyncService {
 
     private String normalizeContactValue(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    // ==================== MOTOR SP SET-BASED (sp_sincronizar_clientes) ====================
+
+    /**
+     * Sincroniza clientes + métodos_contacto en operaciones de CONJUNTO vía sp_sincronizar_clientes,
+     * eliminando el N+1 del path legacy (mapColumnsToSystemFields por fila ~5 min -> ~1s).
+     *
+     * Patrón idéntico a sp_import_upsert: Java resuelve el mapeo dinámico (fieldCode -> columna
+     * de la tabla foh) UNA sola vez y materializa una tabla TEMPORARY "canónica" con nombres
+     * fijos; el SP opera sobre esa staging (estático). La staging TEMPORARY no provoca commit
+     * implícito -> todo queda dentro de la @Transactional.
+     *
+     * @param filterCodes si != null y no vacío, restringe la staging a esos codigo_identificacion
+     *                    (sync selectivo de la carga diaria); si null, sync completo.
+     */
+    private SyncResult syncViaStoredProcedure(SubPortfolio subPortfolio, LoadType loadType, Set<String> filterCodes) {
+        Portfolio portfolio = subPortfolio.getPortfolio();
+        Tenant tenant = portfolio.getTenant();
+        String srcTable = buildDynamicTableName(
+                tenant.getTenantCode(), portfolio.getPortfolioCode(), subPortfolio.getSubPortfolioCode(), loadType);
+        if (!tableExists(srcTable)) {
+            throw new IllegalArgumentException("La tabla dinámica no existe: " + srcTable);
+        }
+
+        // 1) Mapeo fieldCode -> columna foh (UNA query; sustituye al N+1 del legacy).
+        Map<String, String> fieldToColumn = new HashMap<>();
+        jdbcTemplate.query(
+                "SELECT d.codigo_campo AS fc, cc.nombre_cabecera AS hdr " +
+                "FROM configuracion_cabeceras cc " +
+                "JOIN definiciones_campos d ON d.id = cc.id_definicion_campo " +
+                "WHERE cc.id_subcartera = ? AND cc.tipo_carga = ?",
+                rs -> { fieldToColumn.put(rs.getString("fc"), sanitizeColumnName(rs.getString("hdr"))); },
+                subPortfolio.getId(), loadType.name());
+
+        String docCol = fieldToColumn.get("documento");
+        if (docCol == null) {
+            throw new IllegalArgumentException("No hay cabecera mapeada a 'documento' para la subcartera " + subPortfolio.getId());
+        }
+        String idCol = fieldToColumn.get("codigo_identificacion");
+
+        // Columnas canónicas de la staging: {nombre, tipo SQL, fieldCode origen}.
+        // Los nombres canónicos == fieldCodes (excepto las 3 de identidad, manejadas aparte).
+        String[][] specs = {
+                {"nombre_completo", "VARCHAR(255)", "nombre_completo"},
+                {"primer_nombre", "VARCHAR(255)", "primer_nombre"},
+                {"segundo_nombre", "VARCHAR(255)", "segundo_nombre"},
+                {"primer_apellido", "VARCHAR(255)", "primer_apellido"},
+                {"segundo_apellido", "VARCHAR(255)", "segundo_apellido"},
+                {"fecha_nacimiento", "DATE", "fecha_nacimiento"},
+                {"edad", "INT", "edad"},
+                {"estado_civil", "VARCHAR(255)", "estado_civil"},
+                {"ocupacion", "VARCHAR(255)", "ocupacion"},
+                {"tipo_cliente", "VARCHAR(255)", "tipo_cliente"},
+                {"direccion", "VARCHAR(255)", "direccion"},
+                {"distrito", "VARCHAR(255)", "distrito"},
+                {"provincia", "VARCHAR(255)", "provincia"},
+                {"departamento", "VARCHAR(255)", "departamento"},
+                {"referencia_personal", "VARCHAR(255)", "referencia_personal"},
+                {"numero_cuenta_linea_prestamo", "VARCHAR(255)", "numero_cuenta_linea_prestamo"},
+                {"dias_mora", "INT", "dias_mora"},
+                {"monto_mora", "DOUBLE", "monto_mora"},
+                {"monto_capital", "DOUBLE", "monto_capital"},
+                {"telefono_principal", "VARCHAR(255)", "telefono_principal"},
+                {"telefono_secundario", "VARCHAR(255)", "telefono_secundario"},
+                {"telefono_trabajo", "VARCHAR(255)", "telefono_trabajo"},
+                {"telefono_referencia_1", "VARCHAR(255)", "telefono_referencia_1"},
+                {"telefono_referencia_2", "VARCHAR(255)", "telefono_referencia_2"},
+                {"email", "VARCHAR(255)", "email"}
+        };
+
+        String staging = "stg_sync_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        // codigo_identificacion = COALESCE(NULLIF(identityCol,''), docCol)  (fallback idéntico al legacy)
+        String idExpr = (idCol != null)
+                ? "COALESCE(NULLIF(`" + idCol + "`,''), `" + docCol + "`)"
+                : "`" + docCol + "`";
+
+        StringBuilder ddl = new StringBuilder("CREATE TEMPORARY TABLE `").append(staging).append("` (")
+                .append("codigo_identificacion VARCHAR(50), id_cliente VARCHAR(255), documento VARCHAR(20)");
+        StringBuilder cols = new StringBuilder("codigo_identificacion, id_cliente, documento");
+        StringBuilder sel = new StringBuilder(idExpr).append(", `").append(docCol).append("`, `").append(docCol).append("`");
+        for (String[] s : specs) {
+            ddl.append(", `").append(s[0]).append("` ").append(s[1]);
+            cols.append(", `").append(s[0]).append("`");
+            String foh = fieldToColumn.get(s[2]);
+            sel.append(", ").append(foh != null ? "`" + foh + "`" : "NULL");
+        }
+        ddl.append(") ENGINE=InnoDB");
+
+        String where = "";
+        List<Object> args = new ArrayList<>();
+        if (filterCodes != null && !filterCodes.isEmpty() && idCol != null) {
+            where = " WHERE `" + idCol + "` IN (" + String.join(",", Collections.nCopies(filterCodes.size(), "?")) + ")";
+            args.addAll(filterCodes);
+        }
+
+        try {
+            jdbcTemplate.execute("DROP TEMPORARY TABLE IF EXISTS `" + staging + "`");
+            jdbcTemplate.execute(ddl.toString());
+            jdbcTemplate.update("INSERT INTO `" + staging + "` (" + cols + ") SELECT " + sel +
+                    " FROM `" + srcTable + "`" + where, args.toArray());
+
+            int[] out = callSyncSp(staging, tenant, portfolio, subPortfolio);
+            logger.info("✅ [SP] Sync completado SubPortfolio {}: {} creados, {} actualizados, {} contactos",
+                    subPortfolio.getId(), out[0], out[1], out[2]);
+            return new SyncResult(out[0], out[1], new ArrayList<>());
+        } finally {
+            try {
+                jdbcTemplate.execute("DROP TEMPORARY TABLE IF EXISTS `" + staging + "`");
+            } catch (Exception ignore) {
+                // best-effort; la TEMPORARY muere con la conexión de todos modos
+            }
+        }
+    }
+
+    /** Invoca sp_sincronizar_clientes(staging, jerarquía, OUT created/updated/contacts). */
+    private int[] callSyncSp(String staging, Tenant tenant, Portfolio portfolio, SubPortfolio subPortfolio) {
+        return jdbcTemplate.execute((Connection con) -> {
+            CallableStatement cs = con.prepareCall("{CALL sp_sincronizar_clientes(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)}");
+            cs.setString(1, staging);
+            cs.setLong(2, tenant.getId().longValue());
+            cs.setString(3, tenant.getTenantName());
+            cs.setLong(4, portfolio.getId().longValue());
+            cs.setString(5, portfolio.getPortfolioName());
+            cs.setLong(6, subPortfolio.getId().longValue());
+            cs.setString(7, subPortfolio.getSubPortfolioName());
+            cs.registerOutParameter(8, Types.INTEGER);
+            cs.registerOutParameter(9, Types.INTEGER);
+            cs.registerOutParameter(10, Types.INTEGER);
+            return cs;
+        }, (CallableStatement cs) -> {
+            cs.execute();
+            return new int[]{cs.getInt(8), cs.getInt(9), cs.getInt(10)};
+        });
     }
 
     /**
