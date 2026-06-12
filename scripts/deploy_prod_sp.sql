@@ -40,6 +40,8 @@ BEGIN
     DECLARE v_archived_table VARCHAR(150);
     DECLARE v_records_before BIGINT DEFAULT 0;
     DECLARE v_records_after BIGINT DEFAULT 0;
+    DECLARE v_period VARCHAR(20);
+    DECLARE v_has_periodo INT DEFAULT 0;
     DECLARE v_table_exists INT DEFAULT 0;
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -48,7 +50,19 @@ BEGIN
         SET p_records_archived = 0;
         ROLLBACK;
     END;
-    SET v_archived_table = CONCAT(p_table_name, '_', p_archive_period);
+    -- Derivar período del DATO (no de now()); fallback al parámetro (P1 fix, V28).
+    SET v_period = p_archive_period;
+    SELECT COUNT(*) INTO v_has_periodo FROM information_schema.columns
+      WHERE table_schema = v_main_db AND table_name = p_table_name AND column_name = 'periodo';
+    IF v_has_periodo > 0 THEN
+        SET @maxp = NULL;
+        SET @sql = CONCAT('SELECT MAX(`periodo`) INTO @maxp FROM `', v_main_db, '`.`', p_table_name, '` WHERE `periodo` IS NOT NULL');
+        PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+        IF @maxp IS NOT NULL AND @maxp REGEXP '^[0-9]{6}$' THEN
+            SET v_period = CONCAT(LEFT(@maxp, 4), '_', MID(@maxp, 5, 2));
+        END IF;
+    END IF;
+    SET v_archived_table = CONCAT(p_table_name, '_', v_period);
     SELECT COUNT(*) INTO v_table_exists FROM information_schema.tables
       WHERE table_schema = v_main_db AND table_name = p_table_name;
     IF v_table_exists = 0 THEN
