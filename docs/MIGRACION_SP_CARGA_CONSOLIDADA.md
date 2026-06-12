@@ -424,3 +424,29 @@ El harness de import/daily expuso un bug que solo aparece en conexión pooled: l
 | **F5 (baja prioridad)** | Arreglar P1/P2 del snapshot (periodo de archivado real, distinguir cambio de periodo) | pendiente |
 
 > **Nota:** el fix F2.5-a detiene el reseteo hacia adelante. Las ~13.421 filas ya reseteadas a `SIN_VALIDAR` por cargas previas **no se auto-recuperan**: requieren re-validación OSIPTEL/WhatsApp o una corrección puntual de datos (no se hace automáticamente).
+
+---
+
+## §16 — Migración del SYNC de clientes a SP (V26, `sp_sync_customers`)
+
+**Motivación.** Tras migrar los 3 imports a SP, el cuello de botella pasó a ser el **sync de clientes** (`CustomerSyncService`). El import por SP tarda ~6 s; el sync tardaba **~5 min** para 4461 filas → causaba 502 en el proxy Apache (`Timeout 300`). Causa raíz: **N+1** — `mapColumnsToSystemFields` consultaba `configuracion_cabeceras`+`definiciones_campos` por CADA fila (con lazy-load de `field_definition`). El UPSERT de clientes y el batch de contactos ya estaban optimizados; solo el mapeo era O(filas).
+
+**Diseño (mismo patrón que `sp_import_upsert`).** Java resuelve el mapeo dinámico `fieldCode → columna foh` **una sola vez** y materializa una **staging TEMPORARY canónica** (nombres fijos, tipos = columnas de `clientes`); el SP `sp_sync_customers` opera 100% set-based sobre esa staging (estático salvo el nombre de la staging). La staging TEMPORARY no provoca commit implícito → todo dentro de la `@Transactional`.
+
+Firma: `sp_sync_customers(p_stg, p_tenant_id, p_tenant_name, p_portfolio_id, p_portfolio_name, p_subportfolio_id, p_subportfolio_name, OUT p_cust_created, OUT p_cust_updated, OUT p_contacts_inserted)`.
+
+**Invariantes preservadas (idénticas al legacy):** (1) salta documento vacío; (2) UPSERT `clientes` por UNIQUE `codigo_identificacion`, jerarquía completa, `id_cliente=documento`, fallback `codigo_identificacion=documento`; (3) reconciliación de `metodos_contacto` SOLO sobre los 6 subtipos gestionados (telefono_principal/secundario/trabajo/referencia_1/referencia_2/email) → NO toca `telefono_extra` ni otros; (4) **preserva** `estado`/`estado_osiptel`/`estado_whatsapp`/`estado_contactabilidad`/`fecha_importacion` de un contacto que reaparece (match por id_cliente+tipo+LOWER(TRIM(valor)), el de MIN(id)); defaults ACTIVE/SIN_VALIDAR/SIN_VALIDAR/NUEVO/CURDATE() si es nuevo; (5) contactos **manuales** (`etiqueta='Agregado por agente'`) no se borran ni se duplican; (6) DELETE acotado a subtipos gestionados y `etiqueta<>'Agregado por agente'`.
+
+**Detalle técnico clave.** El UNPIVOT de los 6 subtipos NO usa `UNION ALL` sobre la staging (MySQL prohíbe referenciar una TEMPORARY 2+ veces en la misma sentencia, error 1137); se referencia **una vez** con `CROSS JOIN` a un selector inline de 6 filas + `CASE` para elegir la columna. SQL_SAFE_UPDATES con save/restore (igual que V25). EXIT HANDLER limpia temporales + RESIGNAL.
+
+**Validación (parallel-run reversible en QAS, sub 27, foh_cas_cst real 4461 filas):**
+- **Velocidad: 1.0–1.1 s** (vs ~5 min legacy).
+- 0 creados, 4461 actualizados, **13421 contactos** (idéntico al conteo del log legacy).
+- `metodos` antes = después = 13688 (idempotente).
+- Preservación osiptel/whatsapp: `PERTENECE`/`TIENE` se mantienen (no reset a SIN_VALIDAR). ✓
+- `telefono_extra` intacto. ✓  Contacto manual sobrevive, no duplica, no se reinserta como gestionado. ✓
+- SP creado en QAS; con 5/500/4461 filas todo OK (escala lineal).
+
+**Wiring Java** (`CustomerSyncService`, detrás del flag `app.import.engine=sp`): `syncViaStoredProcedure(subPortfolio, loadType, filterCodes)` construye el mapeo (1 query), crea la staging canónica, `INSERT … SELECT` desde la tabla foh (con `WHERE codigo IN (...)` si es sync selectivo de la diaria), `CALL sp_sync_customers`, dropea la staging. Branches en `syncCustomersFromSubPortfolio` (full, filterCodes=null) y `syncCustomersByIdentificationCodes` (selectivo). **Compila OK** (verificado en worktree de `qas` en la VM). Pendiente: deploy (build + restart del servicio, lo hace el usuario).
+
+> Con el flag `sp` ya activo en QAS, al desplegar este jar el sync también pasa a SP automáticamente. Recomendado además subir `ProxyPass /api … timeout=600` en Apache como red de seguridad, aunque con el sync en ~1 s el 502 deja de ocurrir.

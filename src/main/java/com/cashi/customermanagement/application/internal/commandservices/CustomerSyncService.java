@@ -13,11 +13,15 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.CallableStatement;
+import java.sql.Connection;
 import java.sql.Date;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.Period;
 import java.time.ZoneId;
@@ -37,6 +41,10 @@ public class CustomerSyncService {
 
     private static final Logger logger = LoggerFactory.getLogger(CustomerSyncService.class);
     private static final String AGENT_ADDED_LABEL = "Agregado por agente";
+
+    /** Motor de sincronización: "legacy" (fila-por-fila) o "sp" (set-based sp_sync_customers). */
+    @Value("${app.import.engine:legacy}")
+    private String importEngine;
 
     @PersistenceContext
     private final EntityManager entityManager;
@@ -159,6 +167,11 @@ public class CustomerSyncService {
 
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("SubPortfolio no encontrado: " + subPortfolioId));
+
+        // Motor SP set-based (flag app.import.engine=sp): sync completo en 1 round-trip.
+        if ("sp".equalsIgnoreCase(importEngine)) {
+            return syncViaStoredProcedure(subPortfolio, loadType, null);
+        }
 
         Portfolio portfolio = subPortfolio.getPortfolio();
         Tenant tenant = portfolio.getTenant();
@@ -306,6 +319,11 @@ public class CustomerSyncService {
         // 1. Obtener SubPortfolio con sus relaciones
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("SubPortfolio no encontrado: " + subPortfolioId));
+
+        // Motor SP set-based (flag app.import.engine=sp): la staging se filtra a estos codes.
+        if ("sp".equalsIgnoreCase(importEngine)) {
+            return syncViaStoredProcedure(subPortfolio, loadType, identificationCodes);
+        }
 
         Portfolio portfolio = subPortfolio.getPortfolio();
         Tenant tenant = portfolio.getTenant();
@@ -1258,6 +1276,140 @@ public class CustomerSyncService {
 
     private String normalizeContactValue(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    // ==================== MOTOR SP SET-BASED (sp_sync_customers) ====================
+
+    /**
+     * Sincroniza clientes + métodos_contacto en operaciones de CONJUNTO vía sp_sync_customers,
+     * eliminando el N+1 del path legacy (mapColumnsToSystemFields por fila ~5 min -> ~1s).
+     *
+     * Patrón idéntico a sp_import_upsert: Java resuelve el mapeo dinámico (fieldCode -> columna
+     * de la tabla foh) UNA sola vez y materializa una tabla TEMPORARY "canónica" con nombres
+     * fijos; el SP opera sobre esa staging (estático). La staging TEMPORARY no provoca commit
+     * implícito -> todo queda dentro de la @Transactional.
+     *
+     * @param filterCodes si != null y no vacío, restringe la staging a esos codigo_identificacion
+     *                    (sync selectivo de la carga diaria); si null, sync completo.
+     */
+    private SyncResult syncViaStoredProcedure(SubPortfolio subPortfolio, LoadType loadType, Set<String> filterCodes) {
+        Portfolio portfolio = subPortfolio.getPortfolio();
+        Tenant tenant = portfolio.getTenant();
+        String srcTable = buildDynamicTableName(
+                tenant.getTenantCode(), portfolio.getPortfolioCode(), subPortfolio.getSubPortfolioCode(), loadType);
+        if (!tableExists(srcTable)) {
+            throw new IllegalArgumentException("La tabla dinámica no existe: " + srcTable);
+        }
+
+        // 1) Mapeo fieldCode -> columna foh (UNA query; sustituye al N+1 del legacy).
+        Map<String, String> fieldToColumn = new HashMap<>();
+        jdbcTemplate.query(
+                "SELECT d.codigo_campo AS fc, cc.nombre_cabecera AS hdr " +
+                "FROM configuracion_cabeceras cc " +
+                "JOIN definiciones_campos d ON d.id = cc.id_definicion_campo " +
+                "WHERE cc.id_subcartera = ? AND cc.tipo_carga = ?",
+                rs -> { fieldToColumn.put(rs.getString("fc"), sanitizeColumnName(rs.getString("hdr"))); },
+                subPortfolio.getId(), loadType.name());
+
+        String docCol = fieldToColumn.get("documento");
+        if (docCol == null) {
+            throw new IllegalArgumentException("No hay cabecera mapeada a 'documento' para la subcartera " + subPortfolio.getId());
+        }
+        String idCol = fieldToColumn.get("codigo_identificacion");
+
+        // Columnas canónicas de la staging: {nombre, tipo SQL, fieldCode origen}.
+        // Los nombres canónicos == fieldCodes (excepto las 3 de identidad, manejadas aparte).
+        String[][] specs = {
+                {"nombre_completo", "VARCHAR(255)", "nombre_completo"},
+                {"primer_nombre", "VARCHAR(255)", "primer_nombre"},
+                {"segundo_nombre", "VARCHAR(255)", "segundo_nombre"},
+                {"primer_apellido", "VARCHAR(255)", "primer_apellido"},
+                {"segundo_apellido", "VARCHAR(255)", "segundo_apellido"},
+                {"fecha_nacimiento", "DATE", "fecha_nacimiento"},
+                {"edad", "INT", "edad"},
+                {"estado_civil", "VARCHAR(255)", "estado_civil"},
+                {"ocupacion", "VARCHAR(255)", "ocupacion"},
+                {"tipo_cliente", "VARCHAR(255)", "tipo_cliente"},
+                {"direccion", "VARCHAR(255)", "direccion"},
+                {"distrito", "VARCHAR(255)", "distrito"},
+                {"provincia", "VARCHAR(255)", "provincia"},
+                {"departamento", "VARCHAR(255)", "departamento"},
+                {"referencia_personal", "VARCHAR(255)", "referencia_personal"},
+                {"numero_cuenta_linea_prestamo", "VARCHAR(255)", "numero_cuenta_linea_prestamo"},
+                {"dias_mora", "INT", "dias_mora"},
+                {"monto_mora", "DOUBLE", "monto_mora"},
+                {"monto_capital", "DOUBLE", "monto_capital"},
+                {"telefono_principal", "VARCHAR(255)", "telefono_principal"},
+                {"telefono_secundario", "VARCHAR(255)", "telefono_secundario"},
+                {"telefono_trabajo", "VARCHAR(255)", "telefono_trabajo"},
+                {"telefono_referencia_1", "VARCHAR(255)", "telefono_referencia_1"},
+                {"telefono_referencia_2", "VARCHAR(255)", "telefono_referencia_2"},
+                {"email", "VARCHAR(255)", "email"}
+        };
+
+        String staging = "stg_sync_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        // codigo_identificacion = COALESCE(NULLIF(identityCol,''), docCol)  (fallback idéntico al legacy)
+        String idExpr = (idCol != null)
+                ? "COALESCE(NULLIF(`" + idCol + "`,''), `" + docCol + "`)"
+                : "`" + docCol + "`";
+
+        StringBuilder ddl = new StringBuilder("CREATE TEMPORARY TABLE `").append(staging).append("` (")
+                .append("codigo_identificacion VARCHAR(50), id_cliente VARCHAR(255), documento VARCHAR(20)");
+        StringBuilder cols = new StringBuilder("codigo_identificacion, id_cliente, documento");
+        StringBuilder sel = new StringBuilder(idExpr).append(", `").append(docCol).append("`, `").append(docCol).append("`");
+        for (String[] s : specs) {
+            ddl.append(", `").append(s[0]).append("` ").append(s[1]);
+            cols.append(", `").append(s[0]).append("`");
+            String foh = fieldToColumn.get(s[2]);
+            sel.append(", ").append(foh != null ? "`" + foh + "`" : "NULL");
+        }
+        ddl.append(") ENGINE=InnoDB");
+
+        String where = "";
+        List<Object> args = new ArrayList<>();
+        if (filterCodes != null && !filterCodes.isEmpty() && idCol != null) {
+            where = " WHERE `" + idCol + "` IN (" + String.join(",", Collections.nCopies(filterCodes.size(), "?")) + ")";
+            args.addAll(filterCodes);
+        }
+
+        try {
+            jdbcTemplate.execute("DROP TEMPORARY TABLE IF EXISTS `" + staging + "`");
+            jdbcTemplate.execute(ddl.toString());
+            jdbcTemplate.update("INSERT INTO `" + staging + "` (" + cols + ") SELECT " + sel +
+                    " FROM `" + srcTable + "`" + where, args.toArray());
+
+            int[] out = callSyncSp(staging, tenant, portfolio, subPortfolio);
+            logger.info("✅ [SP] Sync completado SubPortfolio {}: {} creados, {} actualizados, {} contactos",
+                    subPortfolio.getId(), out[0], out[1], out[2]);
+            return new SyncResult(out[0], out[1], new ArrayList<>());
+        } finally {
+            try {
+                jdbcTemplate.execute("DROP TEMPORARY TABLE IF EXISTS `" + staging + "`");
+            } catch (Exception ignore) {
+                // best-effort; la TEMPORARY muere con la conexión de todos modos
+            }
+        }
+    }
+
+    /** Invoca sp_sync_customers(staging, jerarquía, OUT created/updated/contacts). */
+    private int[] callSyncSp(String staging, Tenant tenant, Portfolio portfolio, SubPortfolio subPortfolio) {
+        return jdbcTemplate.execute((Connection con) -> {
+            CallableStatement cs = con.prepareCall("{CALL sp_sync_customers(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)}");
+            cs.setString(1, staging);
+            cs.setLong(2, tenant.getId().longValue());
+            cs.setString(3, tenant.getTenantName());
+            cs.setLong(4, portfolio.getId().longValue());
+            cs.setString(5, portfolio.getPortfolioName());
+            cs.setLong(6, subPortfolio.getId().longValue());
+            cs.setString(7, subPortfolio.getSubPortfolioName());
+            cs.registerOutParameter(8, Types.INTEGER);
+            cs.registerOutParameter(9, Types.INTEGER);
+            cs.registerOutParameter(10, Types.INTEGER);
+            return cs;
+        }, (CallableStatement cs) -> {
+            cs.execute();
+            return new int[]{cs.getInt(8), cs.getInt(9), cs.getInt(10)};
+        });
     }
 
     /**
