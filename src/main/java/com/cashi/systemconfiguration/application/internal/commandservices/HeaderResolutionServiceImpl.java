@@ -394,7 +394,7 @@ public class HeaderResolutionServiceImpl implements HeaderResolutionService {
      */
     private String normalizeHeaderName(String headerName) {
         if (headerName == null) return "";
-        return headerName.toLowerCase()
+        return headerName.toLowerCase().trim()
                 .replaceAll("[\\s_-]+", "_")
                 .replaceAll("[^a-z0-9_áéíóúñ]", "")
                 .replaceAll("á", "a")
