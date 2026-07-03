@@ -114,7 +114,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
 
         String tableInicial = buildTableName(subPortfolio, LoadType.INICIAL);
-        String archivePeriod = YearMonth.now().format(DateTimeFormatter.ofPattern("yyyy_MM"));
+        String archivePeriod = YearMonth.now().minusMonths(1).format(DateTimeFormatter.ofPattern("yyyy_MM"));
         long startTime = System.currentTimeMillis();
 
         try {

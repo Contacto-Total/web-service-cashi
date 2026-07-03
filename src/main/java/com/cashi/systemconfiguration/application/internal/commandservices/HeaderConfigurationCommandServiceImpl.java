@@ -49,9 +49,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     // Tamaño del batch para operaciones de carga de identificadores (previene problemas de memoria)
     private static final int BATCH_SIZE_FOR_IDENTIFIER_LOAD = 10000;
 
-    // Motor de importación: "legacy" (fila por fila, por defecto) | "sp" (staging + stored procedure set-based).
-    // Permite conmutar y hacer rollback inmediato sin redeploy.
-    @Value("${app.import.engine:legacy}")
+    // Motor de importación: "sp" (staging + stored procedure set-based, DEFAULT) | "legacy" (fila por fila).
+    // El modo "legacy" está DEPRECADO; se conserva solo para rollback de emergencia (app.import.engine=legacy).
+    @Value("${app.import.engine:sp}")
     private String importEngine;
 
     public HeaderConfigurationCommandServiceImpl(
