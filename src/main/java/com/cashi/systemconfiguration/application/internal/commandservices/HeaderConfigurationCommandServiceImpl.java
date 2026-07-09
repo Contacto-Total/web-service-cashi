@@ -158,7 +158,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     @Override
     @Transactional
     public HeaderConfiguration updateHeaderConfiguration(Integer id, String displayLabel,
-                                                         String format, Boolean required, LoadType loadType) {
+                                                         String format, Boolean required, LoadType loadType,
+                                                         String regexPattern) {
         HeaderConfiguration headerConfig = headerConfigurationRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Configuración de cabecera no encontrada con ID: " + id));
 
@@ -177,6 +178,10 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         if (loadType != null) {
             headerConfig.setLoadType(loadType);
+        }
+
+        if (regexPattern != null) {
+            headerConfig.setRegexPattern(regexPattern.isBlank() ? null : regexPattern);
         }
 
         return headerConfigurationRepository.save(headerConfig);

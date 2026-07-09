@@ -180,7 +180,8 @@ public class HeaderConfigurationController {
                     resource.displayLabel(),
                     resource.format(),
                     resource.required(),
-                    resource.loadType()
+                    resource.loadType(),
+                    resource.regexPattern()
             );
             var responseResource = HeaderConfigurationResourceFromEntityAssembler.toResourceFromEntity(config);
             return ResponseEntity.ok(responseResource);
