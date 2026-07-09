@@ -15,5 +15,8 @@ public record UpdateHeaderConfigurationResource(
     Boolean required,
 
     @Schema(description = "Tipo de carga", example = "ACTUALIZACION")
-    LoadType loadType
+    LoadType loadType,
+
+    @Schema(description = "Patrón regex para transformar el valor del campo origen", example = "^(\\d{8})$")
+    String regexPattern
 ) {}

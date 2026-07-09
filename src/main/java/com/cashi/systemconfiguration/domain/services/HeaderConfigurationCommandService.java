@@ -29,7 +29,8 @@ public interface HeaderConfigurationCommandService {
      * Actualiza una configuración de cabecera existente
      */
     HeaderConfiguration updateHeaderConfiguration(Integer id, String displayLabel,
-                                                  String format, Boolean required, LoadType loadType);
+                                                  String format, Boolean required, LoadType loadType,
+                                                  String regexPattern);
 
     /**
      * Elimina una configuración de cabecera
