@@ -96,10 +96,12 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         String tableName = buildTableName(subPortfolio, loadType);
 
-        // Validar que el nombre de cabecera no exista para esta subcartera y tipo de carga
-        if (headerConfigurationRepository.existsBySubPortfolioAndHeaderNameAndLoadType(subPortfolio, headerName, loadType)) {
-            throw new IllegalArgumentException("Ya existe una cabecera con el nombre: " + headerName + " para esta subcartera y tipo de carga");
-        }
+        validateHeadersCanBeCreated(
+                subPortfolio,
+                loadType,
+                List.of(new HeaderConfigurationData(fieldDefinitionId, headerName, dataType, displayLabel,
+                        format, required, sourceField, regexPattern))
+        );
 
         HeaderConfiguration headerConfig;
 
@@ -220,11 +222,21 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     @Override
     @Transactional
     public List<HeaderConfiguration> createBulkHeaderConfigurations(Integer subPortfolioId,
-                                                                    LoadType loadType,
-                                                                    List<HeaderConfigurationData> headers) {
+                                                                     LoadType loadType,
+                                                                     List<HeaderConfigurationData> headers) {
         // Validar que la subcartera existe
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada con ID: " + subPortfolioId));
+
+        if (loadType == null) {
+            throw new IllegalArgumentException("El tipo de carga es obligatorio");
+        }
+        if (headers == null || headers.isEmpty()) {
+            throw new IllegalArgumentException("Debe incluir al menos una cabecera para crear");
+        }
+
+        // Validar el lote completo antes de persistir o alterar la tabla dinámica.
+        validateHeadersCanBeCreated(subPortfolio, loadType, headers);
 
         String tableName = buildTableName(subPortfolio, loadType);
         boolean tableExists = dynamicTableExists(tableName);
@@ -232,11 +244,6 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         List<HeaderConfiguration> createdConfigs = new ArrayList<>();
 
         for (HeaderConfigurationData data : headers) {
-            // Validar que el nombre no exista para esta subcartera y tipo de carga
-            if (headerConfigurationRepository.existsBySubPortfolioAndHeaderNameAndLoadType(subPortfolio, data.headerName(), loadType)) {
-                throw new IllegalArgumentException("Ya existe una cabecera con el nombre: " + data.headerName() + " para este tipo de carga");
-            }
-
             HeaderConfiguration headerConfig;
 
             // Si fieldDefinitionId es 0 o null, es un campo personalizado
@@ -298,6 +305,60 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
+     * Evita que nombres equivalentes creen configuraciones duplicadas o que dos nombres
+     * distintos terminen en la misma columna física tras ser sanitizados para MySQL.
+     */
+    private void validateHeadersCanBeCreated(SubPortfolio subPortfolio, LoadType loadType,
+                                             List<HeaderConfigurationData> headers) {
+        List<HeaderConfiguration> existingHeaders = headerConfigurationRepository
+                .findBySubPortfolioAndLoadType(subPortfolio, loadType);
+        Map<String, String> existingNames = new HashMap<>();
+        Map<String, String> existingColumns = new HashMap<>();
+
+        for (HeaderConfiguration existing : existingHeaders) {
+            existingNames.put(normalizeHeaderName(existing.getHeaderName()), existing.getHeaderName());
+            existingColumns.put(sanitizeColumnName(existing.getHeaderName()), existing.getHeaderName());
+        }
+
+        Map<String, String> batchNames = new HashMap<>();
+        Map<String, String> batchColumns = new HashMap<>();
+        for (HeaderConfigurationData header : headers) {
+            if (header == null || header.headerName() == null || header.headerName().trim().isEmpty()) {
+                throw new IllegalArgumentException("El nombre de cabecera es obligatorio");
+            }
+
+            String headerName = header.headerName().trim();
+            String normalizedName = normalizeHeaderName(headerName);
+            if (normalizedName.isEmpty()) {
+                throw new IllegalArgumentException("El nombre de cabecera '" + headerName + "' no contiene caracteres válidos");
+            }
+            String columnName = sanitizeColumnName(headerName);
+
+            String existingName = existingNames.get(normalizedName);
+            if (existingName != null) {
+                throw new IllegalArgumentException("La cabecera '" + headerName + "' duplica la configuración existente '"
+                        + existingName + "' para este tipo de carga");
+            }
+            String existingColumnOwner = existingColumns.get(columnName);
+            if (existingColumnOwner != null) {
+                throw new IllegalArgumentException("La cabecera '" + headerName + "' genera la columna '" + columnName
+                        + "', ya usada por la cabecera existente '" + existingColumnOwner + "'");
+            }
+
+            String batchName = batchNames.putIfAbsent(normalizedName, headerName);
+            if (batchName != null) {
+                throw new IllegalArgumentException("Las cabeceras '" + batchName + "' y '" + headerName
+                        + "' son equivalentes dentro del mismo lote");
+            }
+            String batchColumnOwner = batchColumns.putIfAbsent(columnName, headerName);
+            if (batchColumnOwner != null) {
+                throw new IllegalArgumentException("Las cabeceras '" + batchColumnOwner + "' y '" + headerName
+                        + "' generan la misma columna física '" + columnName + "'");
+            }
+        }
+    }
+
+    /**
      * Crea una tabla dinámica con el formato inq_car_sub basada en las configuraciones de cabecera
      */
     private void createDynamicTableForSubPortfolio(SubPortfolio subPortfolio, LoadType loadType, List<HeaderConfiguration> headers) {
@@ -329,7 +390,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         }
 
         ddl.append("  PRIMARY KEY (id)\n");
-        ddl.append(") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        ddl.append(") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
         try {
             jdbcTemplate.execute(ddl.toString());
@@ -743,6 +804,10 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         List<HeaderConfiguration> headers = allHeaders.stream()
             .filter( h -> {
+                // En carga inicial, los booleanos opcionales ausentes se insertan como 0.
+                if (loadType == LoadType.INICIAL && isOptionalBooleanHeader(h)) {
+                    return true;
+                }
                 if (h.getSourceField() != null && !h.getSourceField().isBlank()) {
                     return excelColumns.contains(normalizeHeaderName(h.getSourceField()));
                 } 
@@ -801,7 +866,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         for (int i = 0; i < data.size(); i++) {
             Map<String, Object> row = data.get(i);
             try {
-                PreparedRowData preparedRow = prepareRowData(row, headers, i + 1);
+                PreparedRowData preparedRow = prepareRowData(row, headers, loadType, i + 1);
 
                 // Extraer valores de identificación del row original
                 String identityValue = extractIdentityValue(row, headers, identityColumnName);
@@ -1004,6 +1069,10 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         List<HeaderConfiguration> headers = allHeaders.stream()
                 .filter(h -> {
+                    // En carga inicial, los booleanos opcionales ausentes se insertan como 0.
+                    if (loadType == LoadType.INICIAL && isOptionalBooleanHeader(h)) {
+                        return true;
+                    }
                     if (h.getSourceField() != null && !h.getSourceField().isBlank()) {
                         return excelColumns.contains(normalizeHeaderName(h.getSourceField()));
                     }
@@ -1045,7 +1114,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         for (int i = 0; i < data.size(); i++) {
             Map<String, Object> row = data.get(i);
             try {
-                PreparedRowData preparedRow = prepareRowData(row, headers, i + 1);
+                PreparedRowData preparedRow = prepareRowData(row, headers, loadType, i + 1);
                 String identityValue = extractIdentityValue(row, headers, identityColumnName);
                 String nameValue = extractIdentityValue(row, headers, nameColumnName);
 
@@ -1505,7 +1574,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
      * Prepara una fila validando y convirtiendo los valores según las configuraciones de cabeceras
      * No inserta en BD, solo valida y prepara los datos
      */
-    private PreparedRowData prepareRowData(Map<String, Object> rowData, List<HeaderConfiguration> headers, int rowNumber) {
+    private PreparedRowData prepareRowData(Map<String, Object> rowData, List<HeaderConfiguration> headers,
+                                           LoadType loadType, int rowNumber) {
         List<Object> values = new ArrayList<>();
 
         for (HeaderConfiguration header : headers) {
@@ -1532,10 +1602,17 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 value = getValueFromRowDataWithAliases(rowData, header);
             }
 
-            // ========== VALIDACIÓN DE CAMPOS OBLIGATORIOS ==========
             boolean isEmpty = value == null ||
                              (value instanceof String && ((String) value).trim().isEmpty());
 
+            // Los booleanos opcionales de la carga inicial se almacenan como false (BIT 0),
+            // incluso cuando la columna no viene en el archivo del proveedor.
+            if (isEmpty && loadType == LoadType.INICIAL && isOptionalBooleanHeader(header)) {
+                value = false;
+                isEmpty = false;
+            }
+
+            // ========== VALIDACIÓN DE CAMPOS OBLIGATORIOS ==========
             // Validar que campos obligatorios tengan valor
             if (header.getRequired() != null && header.getRequired() == 1) {
                 if (isEmpty) {
@@ -1567,6 +1644,14 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         }
 
         return new PreparedRowData(rowNumber, values);
+    }
+
+    private boolean isOptionalBooleanHeader(HeaderConfiguration header) {
+        if (header == null || header.getRequired() != null && header.getRequired() == 1) {
+            return false;
+        }
+        return "BOOLEANO".equalsIgnoreCase(header.getDataType())
+                || "BOOLEAN".equalsIgnoreCase(header.getDataType());
     }
 
     // ==================== MÉTODOS BATCH ELIMINADOS ====================
