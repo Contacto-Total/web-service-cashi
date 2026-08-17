@@ -96,10 +96,12 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         String tableName = buildTableName(subPortfolio, loadType);
 
-        // Validar que el nombre de cabecera no exista para esta subcartera y tipo de carga
-        if (headerConfigurationRepository.existsBySubPortfolioAndHeaderNameAndLoadType(subPortfolio, headerName, loadType)) {
-            throw new IllegalArgumentException("Ya existe una cabecera con el nombre: " + headerName + " para esta subcartera y tipo de carga");
-        }
+        validateHeadersCanBeCreated(
+                subPortfolio,
+                loadType,
+                List.of(new HeaderConfigurationData(fieldDefinitionId, headerName, dataType, displayLabel,
+                        format, required, sourceField, regexPattern))
+        );
 
         HeaderConfiguration headerConfig;
 
@@ -220,11 +222,21 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     @Override
     @Transactional
     public List<HeaderConfiguration> createBulkHeaderConfigurations(Integer subPortfolioId,
-                                                                    LoadType loadType,
-                                                                    List<HeaderConfigurationData> headers) {
+                                                                     LoadType loadType,
+                                                                     List<HeaderConfigurationData> headers) {
         // Validar que la subcartera existe
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada con ID: " + subPortfolioId));
+
+        if (loadType == null) {
+            throw new IllegalArgumentException("El tipo de carga es obligatorio");
+        }
+        if (headers == null || headers.isEmpty()) {
+            throw new IllegalArgumentException("Debe incluir al menos una cabecera para crear");
+        }
+
+        // Validar el lote completo antes de persistir o alterar la tabla dinámica.
+        validateHeadersCanBeCreated(subPortfolio, loadType, headers);
 
         String tableName = buildTableName(subPortfolio, loadType);
         boolean tableExists = dynamicTableExists(tableName);
@@ -232,11 +244,6 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         List<HeaderConfiguration> createdConfigs = new ArrayList<>();
 
         for (HeaderConfigurationData data : headers) {
-            // Validar que el nombre no exista para esta subcartera y tipo de carga
-            if (headerConfigurationRepository.existsBySubPortfolioAndHeaderNameAndLoadType(subPortfolio, data.headerName(), loadType)) {
-                throw new IllegalArgumentException("Ya existe una cabecera con el nombre: " + data.headerName() + " para este tipo de carga");
-            }
-
             HeaderConfiguration headerConfig;
 
             // Si fieldDefinitionId es 0 o null, es un campo personalizado
@@ -295,6 +302,60 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         }
 
         return createdConfigs;
+    }
+
+    /**
+     * Evita que nombres equivalentes creen configuraciones duplicadas o que dos nombres
+     * distintos terminen en la misma columna física tras ser sanitizados para MySQL.
+     */
+    private void validateHeadersCanBeCreated(SubPortfolio subPortfolio, LoadType loadType,
+                                             List<HeaderConfigurationData> headers) {
+        List<HeaderConfiguration> existingHeaders = headerConfigurationRepository
+                .findBySubPortfolioAndLoadType(subPortfolio, loadType);
+        Map<String, String> existingNames = new HashMap<>();
+        Map<String, String> existingColumns = new HashMap<>();
+
+        for (HeaderConfiguration existing : existingHeaders) {
+            existingNames.put(normalizeHeaderName(existing.getHeaderName()), existing.getHeaderName());
+            existingColumns.put(sanitizeColumnName(existing.getHeaderName()), existing.getHeaderName());
+        }
+
+        Map<String, String> batchNames = new HashMap<>();
+        Map<String, String> batchColumns = new HashMap<>();
+        for (HeaderConfigurationData header : headers) {
+            if (header == null || header.headerName() == null || header.headerName().trim().isEmpty()) {
+                throw new IllegalArgumentException("El nombre de cabecera es obligatorio");
+            }
+
+            String headerName = header.headerName().trim();
+            String normalizedName = normalizeHeaderName(headerName);
+            if (normalizedName.isEmpty()) {
+                throw new IllegalArgumentException("El nombre de cabecera '" + headerName + "' no contiene caracteres válidos");
+            }
+            String columnName = sanitizeColumnName(headerName);
+
+            String existingName = existingNames.get(normalizedName);
+            if (existingName != null) {
+                throw new IllegalArgumentException("La cabecera '" + headerName + "' duplica la configuración existente '"
+                        + existingName + "' para este tipo de carga");
+            }
+            String existingColumnOwner = existingColumns.get(columnName);
+            if (existingColumnOwner != null) {
+                throw new IllegalArgumentException("La cabecera '" + headerName + "' genera la columna '" + columnName
+                        + "', ya usada por la cabecera existente '" + existingColumnOwner + "'");
+            }
+
+            String batchName = batchNames.putIfAbsent(normalizedName, headerName);
+            if (batchName != null) {
+                throw new IllegalArgumentException("Las cabeceras '" + batchName + "' y '" + headerName
+                        + "' son equivalentes dentro del mismo lote");
+            }
+            String batchColumnOwner = batchColumns.putIfAbsent(columnName, headerName);
+            if (batchColumnOwner != null) {
+                throw new IllegalArgumentException("Las cabeceras '" + batchColumnOwner + "' y '" + headerName
+                        + "' generan la misma columna física '" + columnName + "'");
+            }
+        }
     }
 
     /**
