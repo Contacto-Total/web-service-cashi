@@ -804,6 +804,10 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         List<HeaderConfiguration> headers = allHeaders.stream()
             .filter( h -> {
+                // En carga inicial, los booleanos opcionales ausentes se insertan como 0.
+                if (loadType == LoadType.INICIAL && isOptionalBooleanHeader(h)) {
+                    return true;
+                }
                 if (h.getSourceField() != null && !h.getSourceField().isBlank()) {
                     return excelColumns.contains(normalizeHeaderName(h.getSourceField()));
                 } 
@@ -862,7 +866,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         for (int i = 0; i < data.size(); i++) {
             Map<String, Object> row = data.get(i);
             try {
-                PreparedRowData preparedRow = prepareRowData(row, headers, i + 1);
+                PreparedRowData preparedRow = prepareRowData(row, headers, loadType, i + 1);
 
                 // Extraer valores de identificación del row original
                 String identityValue = extractIdentityValue(row, headers, identityColumnName);
@@ -1065,6 +1069,10 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         List<HeaderConfiguration> headers = allHeaders.stream()
                 .filter(h -> {
+                    // En carga inicial, los booleanos opcionales ausentes se insertan como 0.
+                    if (loadType == LoadType.INICIAL && isOptionalBooleanHeader(h)) {
+                        return true;
+                    }
                     if (h.getSourceField() != null && !h.getSourceField().isBlank()) {
                         return excelColumns.contains(normalizeHeaderName(h.getSourceField()));
                     }
@@ -1106,7 +1114,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         for (int i = 0; i < data.size(); i++) {
             Map<String, Object> row = data.get(i);
             try {
-                PreparedRowData preparedRow = prepareRowData(row, headers, i + 1);
+                PreparedRowData preparedRow = prepareRowData(row, headers, loadType, i + 1);
                 String identityValue = extractIdentityValue(row, headers, identityColumnName);
                 String nameValue = extractIdentityValue(row, headers, nameColumnName);
 
@@ -1566,7 +1574,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
      * Prepara una fila validando y convirtiendo los valores según las configuraciones de cabeceras
      * No inserta en BD, solo valida y prepara los datos
      */
-    private PreparedRowData prepareRowData(Map<String, Object> rowData, List<HeaderConfiguration> headers, int rowNumber) {
+    private PreparedRowData prepareRowData(Map<String, Object> rowData, List<HeaderConfiguration> headers,
+                                           LoadType loadType, int rowNumber) {
         List<Object> values = new ArrayList<>();
 
         for (HeaderConfiguration header : headers) {
@@ -1593,10 +1602,17 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 value = getValueFromRowDataWithAliases(rowData, header);
             }
 
-            // ========== VALIDACIÓN DE CAMPOS OBLIGATORIOS ==========
             boolean isEmpty = value == null ||
                              (value instanceof String && ((String) value).trim().isEmpty());
 
+            // Los booleanos opcionales de la carga inicial se almacenan como false (BIT 0),
+            // incluso cuando la columna no viene en el archivo del proveedor.
+            if (isEmpty && loadType == LoadType.INICIAL && isOptionalBooleanHeader(header)) {
+                value = false;
+                isEmpty = false;
+            }
+
+            // ========== VALIDACIÓN DE CAMPOS OBLIGATORIOS ==========
             // Validar que campos obligatorios tengan valor
             if (header.getRequired() != null && header.getRequired() == 1) {
                 if (isEmpty) {
@@ -1628,6 +1644,14 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         }
 
         return new PreparedRowData(rowNumber, values);
+    }
+
+    private boolean isOptionalBooleanHeader(HeaderConfiguration header) {
+        if (header == null || header.getRequired() != null && header.getRequired() == 1) {
+            return false;
+        }
+        return "BOOLEANO".equalsIgnoreCase(header.getDataType())
+                || "BOOLEAN".equalsIgnoreCase(header.getDataType());
     }
 
     // ==================== MÉTODOS BATCH ELIMINADOS ====================
