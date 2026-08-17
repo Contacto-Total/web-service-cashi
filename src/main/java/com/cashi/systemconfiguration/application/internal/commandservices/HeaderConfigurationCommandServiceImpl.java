@@ -390,7 +390,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         }
 
         ddl.append("  PRIMARY KEY (id)\n");
-        ddl.append(") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        ddl.append(") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
         try {
             jdbcTemplate.execute(ddl.toString());
