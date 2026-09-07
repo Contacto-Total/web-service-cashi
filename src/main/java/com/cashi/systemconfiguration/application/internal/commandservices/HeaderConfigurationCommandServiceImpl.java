@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.math.BigDecimal;
 import java.sql.CallableStatement;
 import java.sql.Types;
 import java.util.Objects;
@@ -36,6 +37,13 @@ import java.util.*;
 public class HeaderConfigurationCommandServiceImpl implements HeaderConfigurationCommandService {
 
     private static final Logger logger = LoggerFactory.getLogger(HeaderConfigurationCommandServiceImpl.class);
+
+    // Regla de pago cumplido (carga diaria): la columna de deuda total se resuelve por definicion de
+    // campo, no por nombre de cabecera, y la marca solo se escribe en las tablas que YA tienen la
+    // columna pago_cumplido (aqui no se crea ninguna columna).
+    private static final String CAMPO_DEUDA_TOTAL = "deuda_total_actual";
+    private static final String COLUMNA_PAGO_CUMPLIDO = "pago_cumplido";
+    private static final int PAGO_CUMPLIDO_CHUNK = 500;
 
     private final HeaderConfigurationRepository headerConfigurationRepository;
     private final SubPortfolioRepository subPortfolioRepository;
@@ -2422,6 +2430,16 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 "failedRows", failedInInicial
         ));
 
+        // ========== FASE 2.5: Marcar pago_cumplido segun la deuda total recibida ==========
+        result.put("pagoCumplido", applyPagoCumplidoRule(
+                List.of(tableInicial, tableActualizacion),
+                headersInicial,
+                headersActualizacion,
+                inicialHeaderMap,
+                sanitizedLinkField,
+                linkField,
+                data));
+
         // ========== FASE 3: Sincronizar SOLO los clientes actualizados ==========
         @SuppressWarnings("unchecked")
         Set<String> updatedCodes = (Set<String>) result.getOrDefault("updatedIdentificationCodes", new HashSet<>());
@@ -2470,6 +2488,184 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         logger.info("📅 Carga diaria completada para SubPortfolio ID: {}", subPortfolioId);
         return result;
+    }
+
+    /**
+     * Fase 2.5 de la carga diaria: marca pago_cumplido = 1 para los registros que llegan con la deuda
+     * total en cero o negativa, y lo devuelve a 0 cuando el cliente vuelve a tener deuda.
+     *
+     * La columna de deuda se resuelve por la definicion de campo "deuda_total_actual" (Deuda total
+     * actual a pagar) y no por el nombre de la cabecera, para no depender de como se llame en cada cartera.
+     * La marca solo se escribe sobre las tablas que ya tienen la columna pago_cumplido: aqui no se crea
+     * ninguna columna, asi que su presencia es lo que habilita la regla en cada subcartera. Las filas que
+     * no llegan en el archivo, o que llegan sin valor de deuda, no se tocan.
+     */
+    private Map<String, Object> applyPagoCumplidoRule(List<String> targetTables,
+                                                      List<HeaderConfiguration> headersInicial,
+                                                      List<HeaderConfiguration> headersActualizacion,
+                                                      Map<String, HeaderConfiguration> inicialHeaderMap,
+                                                      String sanitizedLinkField,
+                                                      String linkField,
+                                                      List<Map<String, Object>> data) {
+        Map<String, Object> resumen = new LinkedHashMap<>();
+
+        HeaderConfiguration debtHeader = headersInicial.stream()
+                .filter(h -> h.getFieldDefinition() != null
+                        && CAMPO_DEUDA_TOTAL.equalsIgnoreCase(h.getFieldDefinition().getFieldCode()))
+                .findFirst()
+                .orElse(null);
+
+        if (debtHeader == null) {
+            logger.warn("No se aplico la regla de pago cumplido: ninguna cabecera INICIAL esta enlazada a la definicion de campo '{}'",
+                    CAMPO_DEUDA_TOTAL);
+            resumen.put("aplicado", false);
+            resumen.put("motivo", "Ninguna cabecera de carga inicial esta enlazada a la definicion de campo '" + CAMPO_DEUDA_TOTAL + "'");
+            return resumen;
+        }
+
+        String debtColumn = sanitizeColumnName(debtHeader.getHeaderName());
+        logger.info("Regla de pago cumplido: columna de deuda total = {} (definicion '{}')", debtColumn, CAMPO_DEUDA_TOTAL);
+
+        // Si un mismo codigo llega repetido en el archivo, manda la ultima fila.
+        Map<String, Boolean> flagPorLink = new LinkedHashMap<>();
+        int sinValorDeDeuda = 0;
+
+        for (Map<String, Object> row : data) {
+            String linkValue = extractLinkValue(row, linkField, headersActualizacion);
+            if (linkValue == null || linkValue.trim().isEmpty()) {
+                continue;
+            }
+
+            BigDecimal deuda = extractDebtValue(row, debtHeader, debtColumn, inicialHeaderMap);
+            if (deuda == null) {
+                sinValorDeDeuda++;
+                continue;
+            }
+
+            flagPorLink.put(linkValue.trim(), deuda.compareTo(BigDecimal.ZERO) <= 0);
+        }
+
+        Set<String> sinDeuda = new LinkedHashSet<>();
+        Set<String> conDeuda = new LinkedHashSet<>();
+        for (Map.Entry<String, Boolean> entry : flagPorLink.entrySet()) {
+            (entry.getValue() ? sinDeuda : conDeuda).add(entry.getKey());
+        }
+
+        resumen.put("columnaDeuda", debtColumn);
+        resumen.put("codigosEnCeroOMenos", sinDeuda.size());
+        resumen.put("codigosConDeuda", conDeuda.size());
+        resumen.put("filasSinValorDeDeuda", sinValorDeDeuda);
+
+        Map<String, Object> porTabla = new LinkedHashMap<>();
+        for (String table : targetTables) {
+            Set<String> columnas = loadTableColumns(table);
+
+            if (!columnas.contains(COLUMNA_PAGO_CUMPLIDO)) {
+                logger.info("La tabla {} no tiene la columna {}; se omite la marca de pago cumplido", table, COLUMNA_PAGO_CUMPLIDO);
+                porTabla.put(table, Map.of("aplicado", false,
+                        "motivo", "La tabla no tiene la columna " + COLUMNA_PAGO_CUMPLIDO));
+                continue;
+            }
+            if (!columnas.contains(sanitizedLinkField.toLowerCase())) {
+                logger.warn("La tabla {} no tiene la columna de enlace {}; se omite la marca de pago cumplido", table, sanitizedLinkField);
+                porTabla.put(table, Map.of("aplicado", false,
+                        "motivo", "La tabla no tiene la columna de enlace " + sanitizedLinkField));
+                continue;
+            }
+
+            int marcados = updatePagoCumplido(table, sanitizedLinkField, sinDeuda, 1);
+            int desmarcados = updatePagoCumplido(table, sanitizedLinkField, conDeuda, 0);
+            logger.info("pago_cumplido en {}: {} marcados en 1, {} devueltos a 0", table, marcados, desmarcados);
+            porTabla.put(table, Map.of("aplicado", true, "marcados", marcados, "desmarcados", desmarcados));
+        }
+
+        resumen.put("aplicado", true);
+        resumen.put("tablas", porTabla);
+        return resumen;
+    }
+
+    /**
+     * Obtiene el valor de deuda total de una fila del archivo, usando la misma resolucion
+     * (sourceField -> nombre de columna -> regex -> tipo de dato) con la que ese valor se escribe en la
+     * tabla INICIAL, para que la marca y el dato guardado no puedan discrepar.
+     */
+    private BigDecimal extractDebtValue(Map<String, Object> row, HeaderConfiguration debtHeader,
+                                        String debtColumn, Map<String, HeaderConfiguration> inicialHeaderMap) {
+        Object value = null;
+        if (debtHeader.getSourceField() != null && !debtHeader.getSourceField().trim().isEmpty()) {
+            value = findValueBySourceField(row, debtHeader.getSourceField());
+        }
+        if (value == null) {
+            value = findValueForColumn(row, debtColumn, inicialHeaderMap);
+        }
+        if (value == null) {
+            return null;
+        }
+
+        if (debtHeader.getRegexPattern() != null && !debtHeader.getRegexPattern().trim().isEmpty()) {
+            value = applyRegexTransformation(value.toString(), debtHeader.getRegexPattern(), debtHeader.getHeaderName());
+            if (value == null) {
+                return null;
+            }
+        }
+
+        Object converted = convertValueForUpdate(value, debtHeader);
+        if (converted == null) {
+            return null;
+        }
+        if (converted instanceof BigDecimal decimal) {
+            return decimal;
+        }
+        if (converted instanceof Number numero) {
+            return new BigDecimal(numero.toString());
+        }
+
+        String texto = converted.toString().trim();
+        if (texto.isEmpty()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(texto);
+        } catch (NumberFormatException e) {
+            try {
+                return new BigDecimal(texto.replace(",", ""));
+            } catch (NumberFormatException ignored) {
+                logger.debug("Valor de deuda no numerico ('{}') en la columna {}", texto, debtColumn);
+                return null;
+            }
+        }
+    }
+
+    /**
+     * Escribe pago_cumplido en lotes, solo sobre los registros cuyo valor realmente cambia.
+     */
+    private int updatePagoCumplido(String tableName, String linkColumn, Set<String> links, int valor) {
+        if (links.isEmpty()) {
+            return 0;
+        }
+
+        String safeTable = validateAndSanitizeTableName(tableName);
+        String safeLink = sanitizeColumnName(linkColumn);
+        List<String> pendientes = new ArrayList<>(links);
+        int total = 0;
+
+        for (int desde = 0; desde < pendientes.size(); desde += PAGO_CUMPLIDO_CHUNK) {
+            List<String> lote = pendientes.subList(desde, Math.min(desde + PAGO_CUMPLIDO_CHUNK, pendientes.size()));
+            String placeholders = String.join(",", Collections.nCopies(lote.size(), "?"));
+            String sql = "UPDATE " + safeTable + " SET `" + COLUMNA_PAGO_CUMPLIDO + "` = ?"
+                    + " WHERE `" + safeLink + "` IN (" + placeholders + ")"
+                    + " AND (`" + COLUMNA_PAGO_CUMPLIDO + "` IS NULL OR `" + COLUMNA_PAGO_CUMPLIDO + "` <> ?)";
+
+            Object[] args = new Object[lote.size() + 2];
+            args[0] = valor;
+            for (int i = 0; i < lote.size(); i++) {
+                args[i + 1] = lote.get(i);
+            }
+            args[args.length - 1] = valor;
+
+            total += jdbcTemplate.update(sql, args);
+        }
+        return total;
     }
 
     private void reapplyInvalidPhoneContactInactivation(SubPortfolio subPortfolio) {
