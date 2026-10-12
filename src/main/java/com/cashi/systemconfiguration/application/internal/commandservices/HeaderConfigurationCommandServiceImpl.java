@@ -45,6 +45,15 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     private static final String COLUMNA_PAGO_CUMPLIDO = "pago_cumplido";
     private static final int PAGO_CUMPLIDO_CHUNK = 500;
 
+    // Regla de fecha de contención (carga diaria): igual que pago_cumplido, solo se escribe en las tablas
+    // que YA tienen la columna fecha_contencion (se crea al agregar la cabecera FECHA_CONTENCION).
+    private static final String CAMPO_CONTENCION = "estado_contencion";
+    private static final String COLUMNA_CONTENCION = "contencion";
+    private static final String COLUMNA_FECHA_CONTENCION = "fecha_contencion";
+    private static final String COLUMNA_FECHA_PROCESO = "fecha_proceso";
+    private static final String CONTENIDO = "CONTENIDO";
+    private static final String NO_CONTENIDO = "NO CONTENIDO";
+
     private final HeaderConfigurationRepository headerConfigurationRepository;
     private final SubPortfolioRepository subPortfolioRepository;
     private final FieldDefinitionRepository fieldDefinitionRepository;
@@ -2265,6 +2274,16 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             }
         }
 
+        // ========== FASE 1.5: Fecha de contención (antes de que la Fase 2 pise la contención) ==========
+        result.put("fechaContencion", applyFechaContencionRule(
+                tableInicial,
+                headersInicial,
+                inicialHeaderMap,
+                sanitizedLinkField,
+                linkField,
+                headersActualizacion,
+                data));
+
         // ========== BATCH UPDATE OPTIMIZADO ==========
         // Paso 1: Determinar todas las columnas que se pueden actualizar en INICIAL
         Set<String> columnsToUpdateSet = new LinkedHashSet<>();
@@ -2666,6 +2685,163 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             total += jdbcTemplate.update(sql, args);
         }
         return total;
+    }
+
+    /**
+     * Fase 1.5 de la carga diaria: registra el día en que el cliente pasa de NO CONTENIDO a CONTENIDO.
+     *
+     * Para los códigos que llegan CONTENIDO en el archivo, escribe fecha_contencion = FECHA_PROCESO de su fila
+     * solo si en la tabla INICIAL siguen NO CONTENIDO y todavía no tienen fecha; por eso corre antes de que la
+     * Fase 2 actualice la contención. Quien ya estaba CONTENIDO (o sin marca) queda sin fecha: venía contenido.
+     * La fecha nunca se vuelve a tocar.
+     *
+     * Igual que pago_cumplido, solo se escribe en las tablas que ya tienen la columna fecha_contencion: su
+     * presencia (cabecera FECHA_CONTENCION en la carga inicial) es lo que habilita la regla en cada subcartera.
+     * La columna de contención se resuelve por la definición de campo "estado_contencion" o, si no está
+     * enlazada, por la cabecera CONTENCION.
+     */
+    private Map<String, Object> applyFechaContencionRule(String tableInicial,
+                                                         List<HeaderConfiguration> headersInicial,
+                                                         Map<String, HeaderConfiguration> inicialHeaderMap,
+                                                         String sanitizedLinkField,
+                                                         String linkField,
+                                                         List<HeaderConfiguration> headersActualizacion,
+                                                         List<Map<String, Object>> data) {
+        Map<String, Object> resumen = new LinkedHashMap<>();
+
+        Set<String> columnas = loadTableColumns(tableInicial);
+        if (!columnas.contains(COLUMNA_FECHA_CONTENCION)) {
+            resumen.put("aplicado", false);
+            resumen.put("motivo", "La tabla no tiene la columna " + COLUMNA_FECHA_CONTENCION);
+            return resumen;
+        }
+
+        HeaderConfiguration contencionHeader = headersInicial.stream()
+                .filter(h -> h.getFieldDefinition() != null
+                        && CAMPO_CONTENCION.equalsIgnoreCase(h.getFieldDefinition().getFieldCode()))
+                .findFirst()
+                .orElseGet(() -> headersInicial.stream()
+                        .filter(h -> COLUMNA_CONTENCION.equalsIgnoreCase(sanitizeColumnName(h.getHeaderName())))
+                        .findFirst()
+                        .orElse(null));
+        if (contencionHeader == null) {
+            logger.warn("No se aplico la regla de fecha de contencion en {}: no hay cabecera de contencion en la carga inicial",
+                    tableInicial);
+            resumen.put("aplicado", false);
+            resumen.put("motivo", "No hay cabecera de contención en la carga inicial");
+            return resumen;
+        }
+        String contencionColumn = sanitizeColumnName(contencionHeader.getHeaderName());
+        if (!columnas.contains(contencionColumn.toLowerCase()) || !columnas.contains(sanitizedLinkField.toLowerCase())) {
+            resumen.put("aplicado", false);
+            resumen.put("motivo", "La tabla no tiene la columna " + contencionColumn + " o la de enlace " + sanitizedLinkField);
+            return resumen;
+        }
+
+        // Códigos que llegan CONTENIDO, agrupados por su FECHA_PROCESO (si un código se repite, manda la última fila)
+        LocalDate hoy = LocalDate.now();
+        Map<String, LocalDate> fechaPorLink = new LinkedHashMap<>();
+        int sinFechaProceso = 0;
+        for (Map<String, Object> row : data) {
+            String linkValue = extractLinkValue(row, linkField, headersActualizacion);
+            if (linkValue == null || linkValue.trim().isEmpty()) {
+                continue;
+            }
+            Object contencion = contencionHeader.getSourceField() != null && !contencionHeader.getSourceField().isBlank()
+                    ? findValueBySourceField(row, contencionHeader.getSourceField()) : null;
+            if (contencion == null) {
+                contencion = findValueForColumn(row, contencionColumn, inicialHeaderMap);
+            }
+            if (contencion == null || !CONTENIDO.equalsIgnoreCase(contencion.toString().trim())) {
+                fechaPorLink.remove(linkValue.trim());
+                continue;
+            }
+            LocalDate fecha = fechaProceso(findValueForColumn(row, COLUMNA_FECHA_PROCESO, inicialHeaderMap), hoy);
+            if (fecha == null) {
+                sinFechaProceso++;
+                fecha = hoy;
+            }
+            fechaPorLink.put(linkValue.trim(), fecha);
+        }
+
+        Map<LocalDate, List<String>> linksPorFecha = new TreeMap<>();
+        fechaPorLink.forEach((link, fecha) -> linksPorFecha.computeIfAbsent(fecha, f -> new ArrayList<>()).add(link));
+
+        String safeTable = validateAndSanitizeTableName(tableInicial);
+        String safeLink = sanitizeColumnName(sanitizedLinkField);
+        int marcados = 0;
+        for (Map.Entry<LocalDate, List<String>> entry : linksPorFecha.entrySet()) {
+            List<String> links = entry.getValue();
+            for (int desde = 0; desde < links.size(); desde += PAGO_CUMPLIDO_CHUNK) {
+                List<String> lote = links.subList(desde, Math.min(desde + PAGO_CUMPLIDO_CHUNK, links.size()));
+                String placeholders = String.join(",", Collections.nCopies(lote.size(), "?"));
+                String sql = "UPDATE " + safeTable + " SET `" + COLUMNA_FECHA_CONTENCION + "` = ?"
+                        + " WHERE `" + safeLink + "` IN (" + placeholders + ")"
+                        + " AND `" + COLUMNA_FECHA_CONTENCION + "` IS NULL"
+                        + " AND UPPER(TRIM(`" + contencionColumn + "`)) = ?";
+                Object[] args = new Object[lote.size() + 2];
+                args[0] = java.sql.Date.valueOf(entry.getKey());
+                for (int i = 0; i < lote.size(); i++) {
+                    args[i + 1] = lote.get(i);
+                }
+                args[args.length - 1] = NO_CONTENIDO;
+                marcados += jdbcTemplate.update(sql, args);
+            }
+        }
+
+        logger.info("fecha_contencion en {}: {} codigos llegan CONTENIDO, {} pasaron de NO CONTENIDO a CONTENIDO (fechas: {})",
+                tableInicial, fechaPorLink.size(), marcados, linksPorFecha.keySet());
+        resumen.put("aplicado", true);
+        resumen.put("codigosContenidos", fechaPorLink.size());
+        resumen.put("pasaronAContenido", marcados);
+        resumen.put("fechas", linksPorFecha.keySet().stream().map(LocalDate::toString).toList());
+        resumen.put("filasSinFechaProceso", sinFechaProceso);
+        return resumen;
+    }
+
+    /**
+     * FECHA_PROCESO de una fila del archivo diario. Si es ambigua (9/2/2026 puede ser 9 de febrero o 2 de
+     * setiembre) se queda con la lectura que no pasa de hoy y está más cerca de hoy. null si no se puede leer.
+     */
+    private LocalDate fechaProceso(Object valor, LocalDate hoy) {
+        if (valor == null) {
+            return null;
+        }
+        if (valor instanceof LocalDate fecha) {
+            return fecha;
+        }
+        if (valor instanceof java.time.LocalDateTime fechaHora) {
+            return fechaHora.toLocalDate();
+        }
+        if (valor instanceof java.util.Date fecha) {
+            return new java.sql.Date(fecha.getTime()).toLocalDate();
+        }
+        if (valor instanceof Number serial) {
+            // Fecha de Excel como número de serie
+            return LocalDate.of(1899, 12, 30).plusDays(serial.longValue());
+        }
+        String texto = valor.toString().trim();
+        if (texto.isEmpty()) {
+            return null;
+        }
+        List<LocalDate> lecturas = new ArrayList<>();
+        try {
+            lecturas.add(DateParserUtil.parseFlexibleDate(texto, null));
+        } catch (IllegalArgumentException e) {
+            logger.debug("FECHA_PROCESO no se pudo leer: '{}'", texto);
+        }
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^(\\d{1,2})/(\\d{1,2})/(\\d{4})").matcher(texto);
+        if (m.find()) {
+            try {
+                lecturas.add(LocalDate.of(Integer.parseInt(m.group(3)), Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2))));
+            } catch (java.time.DateTimeException ignored) {
+                // No es mes/día
+            }
+        }
+        return lecturas.stream()
+                .filter(f -> !f.isAfter(hoy))
+                .max(Comparator.naturalOrder())
+                .orElse(lecturas.isEmpty() ? null : lecturas.get(0));
     }
 
     private void reapplyInvalidPhoneContactInactivation(SubPortfolio subPortfolio) {
