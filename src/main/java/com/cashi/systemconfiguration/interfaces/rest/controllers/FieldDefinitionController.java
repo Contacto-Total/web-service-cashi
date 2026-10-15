@@ -1,14 +1,18 @@
 package com.cashi.systemconfiguration.interfaces.rest.controllers;
 
+import com.cashi.systemconfiguration.domain.services.FieldDefinitionCommandService;
 import com.cashi.systemconfiguration.domain.services.FieldDefinitionQueryService;
+import com.cashi.systemconfiguration.interfaces.rest.resources.CreateFieldDefinitionResource;
 import com.cashi.systemconfiguration.interfaces.rest.resources.FieldDefinitionResource;
 import com.cashi.systemconfiguration.interfaces.rest.transform.FieldDefinitionResourceFromEntityAssembler;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/system-config/field-definitions")
@@ -16,9 +20,23 @@ import java.util.List;
 public class FieldDefinitionController {
 
     private final FieldDefinitionQueryService queryService;
+    private final FieldDefinitionCommandService commandService;
 
-    public FieldDefinitionController(FieldDefinitionQueryService queryService) {
+    public FieldDefinitionController(FieldDefinitionQueryService queryService, FieldDefinitionCommandService commandService) {
         this.queryService = queryService;
+        this.commandService = commandService;
+    }
+
+    @Operation(summary = "Crear un dato del catálogo para enlazarlo a una cabecera")
+    @PostMapping
+    public ResponseEntity<?> create(@RequestBody CreateFieldDefinitionResource resource) {
+        try {
+            var definition = commandService.crear(resource.fieldName(), resource.dataType());
+            return ResponseEntity.status(HttpStatus.CREATED)
+                    .body(FieldDefinitionResourceFromEntityAssembler.toResourceFromEntity(definition));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
     }
 
     @Operation(summary = "Obtener todas las definiciones de campos activas")

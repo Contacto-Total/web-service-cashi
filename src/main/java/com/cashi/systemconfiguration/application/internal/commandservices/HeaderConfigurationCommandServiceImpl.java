@@ -38,6 +38,9 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
     private static final Logger logger = LoggerFactory.getLogger(HeaderConfigurationCommandServiceImpl.class);
 
+    // Separa las columnas de origen de una cabecera derivada que concatena varias.
+    private static final String SEPARADOR_ORIGEN = "+";
+
     // Regla de pago cumplido (carga diaria): la columna de deuda total se resuelve por definicion de
     // campo, no por nombre de cabecera, y la marca solo se escribe en las tablas que YA tienen la
     // columna pago_cumplido (aqui no se crea ninguna columna).
@@ -178,7 +181,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     @Transactional
     public HeaderConfiguration updateHeaderConfiguration(Integer id, String displayLabel,
                                                          String format, Boolean required, LoadType loadType,
-                                                         String regexPattern) {
+                                                         String regexPattern, Integer fieldDefinitionId) {
         HeaderConfiguration headerConfig = headerConfigurationRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Configuración de cabecera no encontrada con ID: " + id));
 
@@ -203,7 +206,30 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             headerConfig.setRegexPattern(regexPattern.isBlank() ? null : regexPattern);
         }
 
+        if (fieldDefinitionId != null) {
+            headerConfig.setFieldDefinition(fieldDefinitionId == 0 ? null : definicionLibre(headerConfig, fieldDefinitionId));
+        }
+
         return headerConfigurationRepository.save(headerConfig);
+    }
+
+    /**
+     * Dato del catálogo para enlazar a una cabecera existente. Un dato se enlaza a una sola cabecera por
+     * subcartera y tipo de carga: lo resuelven por el enlace las reglas y los filtros de campaña. El tipo de
+     * dato de la cabecera no cambia, porque la columna ya existe en la tabla.
+     */
+    private FieldDefinition definicionLibre(HeaderConfiguration cabecera, Integer fieldDefinitionId) {
+        FieldDefinition definicion = fieldDefinitionRepository.findById(fieldDefinitionId)
+                .orElseThrow(() -> new IllegalArgumentException("Definición de campo no encontrada con ID: " + fieldDefinitionId));
+        headerConfigurationRepository.findBySubPortfolioAndLoadType(cabecera.getSubPortfolio(), cabecera.getLoadType()).stream()
+                .filter(otra -> !otra.getId().equals(cabecera.getId()))
+                .filter(otra -> otra.getFieldDefinition() != null && otra.getFieldDefinition().getId().equals(definicion.getId()))
+                .findFirst()
+                .ifPresent(otra -> {
+                    throw new IllegalArgumentException("El dato «" + definicion.getFieldName()
+                            + "» ya está enlazado a la cabecera " + otra.getHeaderName());
+                });
+        return definicion;
     }
 
     @Override
@@ -826,7 +852,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     return true;
                 }
                 if (h.getSourceField() != null && !h.getSourceField().isBlank()) {
-                    return excelColumns.contains(normalizeHeaderName(h.getSourceField()));
+                    return origenEnArchivo(excelColumns, h.getSourceField());
                 } 
                 if (excelColumns.contains(normalizeHeaderName(h.getHeaderName()))){
                     return true;
@@ -1091,7 +1117,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                         return true;
                     }
                     if (h.getSourceField() != null && !h.getSourceField().isBlank()) {
-                        return excelColumns.contains(normalizeHeaderName(h.getSourceField()));
+                        return origenEnArchivo(excelColumns, h.getSourceField());
                     }
                     if (excelColumns.contains(normalizeHeaderName(h.getHeaderName()))) {
                         return true;
@@ -1535,7 +1561,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             if (sanitizeColumnName(header.getHeaderName()).equals(columnName)) {
                 Object value;
                 if (header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
-                    value = getValueFromRowData(row, header.getSourceField());
+                    value = valorDeOrigen(row, header.getSourceField());
                 } else {
                     value = getValueFromRowDataWithAliases(row, header);
                 }
@@ -1600,7 +1626,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             Object value;
             if (header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
                 // Este campo se deriva de otro mediante transformación (case-insensitive)
-                Object sourceValue = getValueFromRowData(rowData, header.getSourceField());
+                Object sourceValue = valorDeOrigen(rowData, header.getSourceField());
                 if (sourceValue != null) {
                     String sourceStr = sourceValue.toString();
 
@@ -2937,12 +2963,56 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
+     * Columnas de origen de una cabecera derivada. Una sola, o varias unidas con «+» en el orden en que
+     * se concatenan (p. ej. PRIMER_NOMBRE+SEGUNDO_NOMBRE+APELLIDO_PATERNO+APELLIDO_MATERNO).
+     */
+    private List<String> columnasOrigen(String sourceField) {
+        if (sourceField == null) {
+            return List.of();
+        }
+        return Arrays.stream(sourceField.split(java.util.regex.Pattern.quote(SEPARADOR_ORIGEN)))
+                .map(String::trim)
+                .filter(c -> !c.isEmpty())
+                .toList();
+    }
+
+    /** La cabecera derivada se carga si alguna de sus columnas de origen viene en el archivo. */
+    private boolean origenEnArchivo(Set<String> columnasArchivo, String sourceField) {
+        return columnasOrigen(sourceField).stream()
+                .anyMatch(c -> columnasArchivo.contains(normalizeHeaderName(c)));
+    }
+
+    /** Valor de origen de una cabecera derivada: el de su columna, o la unión de varias. */
+    private Object valorDeOrigen(Map<String, Object> row, String sourceField) {
+        return columnasOrigen(sourceField).size() > 1
+                ? valorCompuesto(row, sourceField)
+                : getValueFromRowData(row, sourceField);
+    }
+
+    /**
+     * Une los valores no vacíos de varias columnas de origen con un espacio, en el orden configurado.
+     * Si todas vienen vacías el resultado es null, igual que una columna de origen vacía.
+     */
+    private Object valorCompuesto(Map<String, Object> row, String sourceField) {
+        String unido = columnasOrigen(sourceField).stream()
+                .map(c -> findValueBySourceField(row, c))
+                .filter(Objects::nonNull)
+                .map(v -> v.toString().trim())
+                .filter(v -> !v.isEmpty())
+                .collect(Collectors.joining(" "));
+        return unido.isEmpty() ? null : unido;
+    }
+
+    /**
      * Busca un valor en la fila usando el sourceField especificado.
      * Útil para campos transformados donde el sourceField indica la columna origen (ej: IDENTITY_CODE -> documento)
      */
     private Object findValueBySourceField(Map<String, Object> row, String sourceField) {
         if (sourceField == null || sourceField.trim().isEmpty()) {
             return null;
+        }
+        if (columnasOrigen(sourceField).size() > 1) {
+            return valorCompuesto(row, sourceField);
         }
 
         // Buscar el valor directamente por sourceField

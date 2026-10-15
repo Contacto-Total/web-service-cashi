@@ -18,5 +18,8 @@ public record UpdateHeaderConfigurationResource(
     LoadType loadType,
 
     @Schema(description = "Patrón regex para transformar el valor del campo origen", example = "^(\\d{8})$")
-    String regexPattern
+    String regexPattern,
+
+    @Schema(description = "Dato del catálogo enlazado: null no lo cambia, 0 quita el enlace", example = "1")
+    Integer fieldDefinitionId
 ) {}
