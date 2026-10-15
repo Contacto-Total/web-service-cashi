@@ -30,7 +30,7 @@ public interface HeaderConfigurationCommandService {
      */
     HeaderConfiguration updateHeaderConfiguration(Integer id, String displayLabel,
                                                   String format, Boolean required, LoadType loadType,
-                                                  String regexPattern);
+                                                  String regexPattern, Integer fieldDefinitionId);
 
     /**
      * Elimina una configuración de cabecera

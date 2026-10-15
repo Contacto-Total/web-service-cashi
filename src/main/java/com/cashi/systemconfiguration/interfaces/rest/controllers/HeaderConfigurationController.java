@@ -181,7 +181,8 @@ public class HeaderConfigurationController {
                     resource.format(),
                     resource.required(),
                     resource.loadType(),
-                    resource.regexPattern()
+                    resource.regexPattern(),
+                    resource.fieldDefinitionId()
             );
             var responseResource = HeaderConfigurationResourceFromEntityAssembler.toResourceFromEntity(config);
             return ResponseEntity.ok(responseResource);
