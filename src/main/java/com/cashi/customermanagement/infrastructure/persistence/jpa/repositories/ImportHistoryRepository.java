@@ -23,4 +23,8 @@ public interface ImportHistoryRepository extends JpaRepository<ImportHistory, Lo
     Optional<ImportHistory> findByFileHashAndStatus(String fileHash, String status);
 
     boolean existsByFileHashAndStatus(String fileHash, String status);
+
+    // Última carga diaria manual exitosa de una subcartera (ruta_archivo = CARGA_DIARIA_MANUAL)
+    Optional<ImportHistory> findFirstBySubPortfolioIdAndFilePathAndStatusOrderByProcessedAtDescIdDesc(
+            Long subPortfolioId, String filePath, String status);
 }

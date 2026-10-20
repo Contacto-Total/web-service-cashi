@@ -143,7 +143,8 @@ public class PeriodSnapshotController {
                 info.recordCount(),
                 info.lastLoadDate(),
                 info.lastArchivedDate(),
-                info.hasExistingData()
+                info.hasExistingData(),
+                info.currentFileDate()
             );
 
             return ResponseEntity.ok(response);
@@ -176,9 +177,10 @@ public class PeriodSnapshotController {
     @Operation(summary = "Ejecutar snapshot diario para una subcartera",
             description = "Archiva la tabla de actualización antes de una nueva carga diaria")
     @PostMapping("/subportfolio/{subPortfolioId}/daily-execute")
-    public ResponseEntity<?> executeDailySnapshotForSubPortfolio(@PathVariable Integer subPortfolioId) {
+    public ResponseEntity<?> executeDailySnapshotForSubPortfolio(@PathVariable Integer subPortfolioId,
+                                                                 @RequestParam(required = false) String fileName) {
         try {
-            SnapshotResult result = periodSnapshotService.executeDailySnapshotForSubPortfolio(subPortfolioId.longValue());
+            SnapshotResult result = periodSnapshotService.executeDailySnapshotForSubPortfolio(subPortfolioId.longValue(), fileName);
 
             return ResponseEntity.ok(new SnapshotResultResponse(
                 result.success(),
@@ -238,6 +240,7 @@ public class PeriodSnapshotController {
         long recordCount,
         String lastLoadDate,
         String lastArchivedDate,
-        boolean requiresConfirmation
+        boolean requiresConfirmation,
+        String currentFileDate
     ) {}
 }

@@ -3,6 +3,7 @@ package com.cashi.systemconfiguration.application.internal.commandservices;
 import com.cashi.shared.domain.model.entities.SubPortfolio;
 import com.cashi.shared.domain.model.valueobjects.LoadType;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.SubPortfolioRepository;
+import com.cashi.shared.util.DailyFileDateUtil;
 import com.cashi.systemconfiguration.domain.services.PeriodSnapshotService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,10 +29,13 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
 
     private final JdbcTemplate jdbcTemplate;
     private final SubPortfolioRepository subPortfolioRepository;
+    private final DailyLoadHistoryService dailyLoadHistoryService;
 
-    public PeriodSnapshotServiceImpl(JdbcTemplate jdbcTemplate, SubPortfolioRepository subPortfolioRepository) {
+    public PeriodSnapshotServiceImpl(JdbcTemplate jdbcTemplate, SubPortfolioRepository subPortfolioRepository,
+                                     DailyLoadHistoryService dailyLoadHistoryService) {
         this.jdbcTemplate = jdbcTemplate;
         this.subPortfolioRepository = subPortfolioRepository;
+        this.dailyLoadHistoryService = dailyLoadHistoryService;
     }
 
     @Override
@@ -335,6 +339,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
                 false,
                 0,
                 null,
+                null,
                 null
             );
         }
@@ -342,6 +347,7 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
         long recordCount = getTableRecordCount(tableName);
         String lastLoadDate = getLastLoadDate(tableName);
         Optional<String> lastArchivedDate = getLastArchivedDailyDate(subPortfolioId);
+        Optional<String> currentFileDate = dailyLoadHistoryService.findLastLoadedFileDate(subPortfolioId.intValue());
 
         return new DailyInfo(
             subPortfolioId,
@@ -349,7 +355,8 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
             recordCount > 0,
             recordCount,
             lastLoadDate,
-            lastArchivedDate.orElse(null)
+            lastArchivedDate.orElse(null),
+            currentFileDate.orElse(null)
         );
     }
 
@@ -362,18 +369,48 @@ public class PeriodSnapshotServiceImpl implements PeriodSnapshotService {
 
     @Override
     @Transactional
-    public SnapshotResult executeDailySnapshotForSubPortfolio(Long subPortfolioId) {
+    public SnapshotResult executeDailySnapshotForSubPortfolio(Long subPortfolioId, String newFileName) {
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId.intValue())
                 .orElseThrow(() -> new IllegalArgumentException("Subcartera no encontrada: " + subPortfolioId));
 
         String tableActualizacion = buildTableName(subPortfolio, LoadType.ACTUALIZACION);
-        String archiveDate = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy_MM_dd"));
         long startTime = System.currentTimeMillis();
+
+        // Fecha del archivo nuevo: sin una fecha válida no se archiva nada (la carga también la rechaza)
+        Optional<String> newFileDate = DailyFileDateUtil.extractArchiveDate(newFileName);
+        if (newFileDate.isEmpty()) {
+            return new SnapshotResult(false, 0, null, DailyFileDateUtil.MENSAJE_FECHA_INVALIDA,
+                    System.currentTimeMillis() - startTime);
+        }
+
+        // La tabla histórica lleva la fecha del archivo que hoy está en la tabla diaria, no la de hoy
+        Optional<String> currentFileDate = dailyLoadHistoryService.findLastLoadedFileDate(subPortfolioId.intValue());
+        String archiveDate = currentFileDate.orElseGet(() -> {
+            String hoy = DailyFileDateUtil.toArchiveDate(LocalDate.now());
+            logger.warn("Snapshot diario subcartera {}: no hay carga diaria registrada en historial_importaciones, "
+                    + "se archiva con la fecha actual ({})", subPortfolioId, hoy);
+            return hoy;
+        });
 
         try {
             if (!dynamicTableExists(tableActualizacion)) {
                 return new SnapshotResult(true, 0, archiveDate,
                     "Tabla no existe, nada que archivar", System.currentTimeMillis() - startTime);
+            }
+
+            // Resubida del mismo día: es una corrección, se reemplaza sin archivar la versión anterior
+            if (currentFileDate.isPresent() && currentFileDate.get().equals(newFileDate.get())) {
+                int deleted = jdbcTemplate.update("DELETE FROM `" + tableActualizacion + "` WHERE id > 0");
+                logger.info("Snapshot diario subcartera {}: resubida del {}, {} registros eliminados de {} sin archivar",
+                        subPortfolioId, archiveDate, deleted, tableActualizacion);
+                return new SnapshotResult(
+                    true,
+                    0,
+                    archiveDate,
+                    String.format("Ya existía una carga del %s; se reemplazó por este archivo (%d registros anteriores eliminados, sin archivar).",
+                            archiveDate, deleted),
+                    System.currentTimeMillis() - startTime
+                );
             }
 
             DailyArchiveResult archiveResult = callDailyArchiveStoredProcedure(tableActualizacion, archiveDate);

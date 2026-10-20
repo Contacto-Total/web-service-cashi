@@ -12,6 +12,7 @@ import com.cashi.shared.domain.model.valueobjects.LoadType;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.FieldDefinitionRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.HeaderConfigurationRepository;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.SubPortfolioRepository;
+import com.cashi.shared.util.DailyFileDateUtil;
 import com.cashi.shared.util.DataTypeValidator;
 import com.cashi.shared.util.DateParserUtil;
 import com.cashi.shared.util.SqlSanitizer;
@@ -2223,17 +2224,23 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
      * @param subPortfolioId ID de la subcartera
      * @param data Lista de registros a importar
      * @param linkField Campo de enlace para vincular registros con la tabla inicial
+     * @param fileName Nombre del Excel; su fecha nombra la tabla histórica de esta carga
      * @return Mapa con estadísticas de la operación
      */
     @Override
     @Transactional
-    public Map<String, Object> importDailyData(Integer subPortfolioId, List<Map<String, Object>> data, String linkField) {
+    public Map<String, Object> importDailyData(Integer subPortfolioId, List<Map<String, Object>> data, String linkField,
+                                               String fileName) {
         logger.info("📅 Iniciando carga diaria para SubPortfolio ID: {}, registros: {}, linkField: {}", subPortfolioId, data.size(), linkField);
 
         // Validar linkField
         if (linkField == null || linkField.trim().isEmpty()) {
             throw new IllegalArgumentException("El campo de enlace (linkField) es requerido para la carga diaria.");
         }
+
+        // Validar la fecha del nombre del archivo (el front ya la valida antes del snapshot)
+        LocalDate fechaArchivo = DailyFileDateUtil.extractDate(fileName)
+                .orElseThrow(() -> new IllegalArgumentException(DailyFileDateUtil.MENSAJE_FECHA_INVALIDA));
 
         // Validar que la subcartera existe
         SubPortfolio subPortfolio = subPortfolioRepository.findById(subPortfolioId)
@@ -2298,6 +2305,13 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             if (h.getSourceField() != null && !h.getSourceField().trim().isEmpty()) {
                 inicialHeaderMap.put(h.getSourceField().toLowerCase().trim(), h);
             }
+        }
+
+        // La fecha del nombre del archivo debería ser la FECHA_PROCESO de sus datos: si no, solo se avisa
+        String advertenciaFechaProceso = checkFechaProcesoMatchesFileDate(data, fechaArchivo, inicialHeaderMap);
+        if (advertenciaFechaProceso != null) {
+            logger.warn("Carga diaria subcartera {} ({}): {}", subPortfolioId, fileName, advertenciaFechaProceso);
+            result.put("advertenciaFechaProceso", advertenciaFechaProceso);
         }
 
         // ========== FASE 1.5: Fecha de contención (antes de que la Fase 2 pise la contención) ==========
@@ -2823,6 +2837,28 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         resumen.put("fechas", linksPorFecha.keySet().stream().map(LocalDate::toString).toList());
         resumen.put("filasSinFechaProceso", sinFechaProceso);
         return resumen;
+    }
+
+    /**
+     * Compara la fecha del nombre del archivo con las FECHA_PROCESO de sus filas.
+     * Devuelve el aviso si alguna es distinta; null si coinciden o si el archivo no trae FECHA_PROCESO.
+     */
+    private String checkFechaProcesoMatchesFileDate(List<Map<String, Object>> data, LocalDate fechaArchivo,
+                                                    Map<String, HeaderConfiguration> inicialHeaderMap) {
+        LocalDate hoy = LocalDate.now();
+        Set<LocalDate> distintas = new TreeSet<>();
+        for (Map<String, Object> row : data) {
+            LocalDate fecha = fechaProceso(findValueForColumn(row, COLUMNA_FECHA_PROCESO, inicialHeaderMap), hoy);
+            if (fecha != null && !fecha.equals(fechaArchivo)) {
+                distintas.add(fecha);
+            }
+        }
+        if (distintas.isEmpty()) {
+            return null;
+        }
+        List<String> muestra = distintas.stream().limit(5).map(LocalDate::toString).toList();
+        return "La fecha del nombre del archivo (" + fechaArchivo + ") no coincide con la FECHA_PROCESO de los datos ("
+                + String.join(", ", muestra) + (distintas.size() > muestra.size() ? ", ..." : "") + ")";
     }
 
     /**
