@@ -4,6 +4,7 @@ import com.cashi.shared.domain.model.entities.HeaderAlias;
 import com.cashi.shared.domain.model.entities.HeaderChangeHistory;
 import com.cashi.shared.domain.model.valueobjects.LoadType;
 import com.cashi.shared.infrastructure.persistence.jpa.repositories.FieldDefinitionRepository;
+import com.cashi.systemconfiguration.application.internal.commandservices.DailyLoadHistoryService;
 import com.cashi.systemconfiguration.domain.services.HeaderConfigurationCommandService;
 import com.cashi.systemconfiguration.domain.services.HeaderConfigurationQueryService;
 import com.cashi.systemconfiguration.domain.services.HeaderResolutionService;
@@ -34,16 +35,19 @@ public class HeaderConfigurationController {
     private final HeaderConfigurationQueryService queryService;
     private final HeaderResolutionService resolutionService;
     private final FieldDefinitionRepository fieldDefinitionRepository;
+    private final DailyLoadHistoryService dailyLoadHistoryService;
 
     public HeaderConfigurationController(
             HeaderConfigurationCommandService commandService,
             HeaderConfigurationQueryService queryService,
             HeaderResolutionService resolutionService,
-            FieldDefinitionRepository fieldDefinitionRepository) {
+            FieldDefinitionRepository fieldDefinitionRepository,
+            DailyLoadHistoryService dailyLoadHistoryService) {
         this.commandService = commandService;
         this.queryService = queryService;
         this.resolutionService = resolutionService;
         this.fieldDefinitionRepository = fieldDefinitionRepository;
+        this.dailyLoadHistoryService = dailyLoadHistoryService;
     }
 
     @Operation(summary = "Obtener configuraciones de cabeceras por subcartera")
@@ -446,21 +450,47 @@ public class HeaderConfigurationController {
         try {
             System.out.println("📅 Importando carga diaria: subPortfolioId=" + subPortfolioId
                     + ", rows=" + resource.data().size()
-                    + ", linkField=" + resource.linkField());
+                    + ", linkField=" + resource.linkField()
+                    + ", fileName=" + resource.fileName());
 
-            var result = commandService.importDailyData(subPortfolioId, resource.data(), resource.linkField());
+            var result = commandService.importDailyData(subPortfolioId, resource.data(), resource.linkField(),
+                    resource.fileName());
+
+            // Historial (fuera de la transacción de la carga): su fecha nombra el próximo archivado diario
+            if (result.get("actualizacionError") != null) {
+                dailyLoadHistoryService.recordError(subPortfolioId, resource.fileName(),
+                        String.valueOf(result.get("actualizacionError")));
+            } else {
+                dailyLoadHistoryService.recordSuccess(subPortfolioId, resource.fileName(), importedRows(result));
+            }
 
             System.out.println("✅ Carga diaria completada: " + result);
             return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             System.err.println("❌ Error de validación: " + e.getMessage());
+            dailyLoadHistoryService.recordError(subPortfolioId, resource.fileName(), e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
             System.err.println("❌ Error al importar carga diaria: " + e.getMessage());
             e.printStackTrace();
+            dailyLoadHistoryService.recordError(subPortfolioId, resource.fileName(), e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("message", "Error al importar carga diaria: " + e.getMessage()));
         }
+    }
+
+    /** Filas importadas a la tabla diaria (insertadas + actualizadas) */
+    private Integer importedRows(Map<String, Object> result) {
+        if (!(result.get("actualizacion") instanceof Map<?, ?> actualizacion)) {
+            return null;
+        }
+        int total = 0;
+        for (String key : List.of("insertedRows", "updatedRows")) {
+            if (actualizacion.get(key) instanceof Number n) {
+                total += n.intValue();
+            }
+        }
+        return total;
     }
 
     @Operation(summary = "Actualizar datos complementarios en la tabla dinámica",

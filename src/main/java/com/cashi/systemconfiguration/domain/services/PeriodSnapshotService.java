@@ -86,7 +86,8 @@ public interface PeriodSnapshotService {
         boolean hasExistingData,
         long recordCount,
         String lastLoadDate,
-        String lastArchivedDate
+        String lastArchivedDate,
+        String currentFileDate  // yyyy_MM_dd del archivo que hay hoy en la tabla diaria (de su nombre)
     ) {}
 
     /**
@@ -109,12 +110,14 @@ public interface PeriodSnapshotService {
 
     /**
      * Ejecuta snapshot diario para una subcartera específica.
-     * Archiva la tabla de actualización con fecha del día.
+     * Archiva la tabla de actualización con la fecha del archivo que contiene (tomada de su nombre).
+     * Si el archivo nuevo es del mismo día que el cargado, no archiva: vacía la tabla para reemplazarlo.
      *
      * @param subPortfolioId ID de la subcartera
+     * @param newFileName Nombre del archivo que se va a cargar a continuación
      * @return Resultado de la operación
      */
-    SnapshotResult executeDailySnapshotForSubPortfolio(Long subPortfolioId);
+    SnapshotResult executeDailySnapshotForSubPortfolio(Long subPortfolioId, String newFileName);
 
     /**
      * Obtiene la última fecha de archivo diario para una subcartera.

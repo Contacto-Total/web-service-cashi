@@ -78,9 +78,11 @@ public interface HeaderConfigurationCommandService {
      * @param subPortfolioId ID de la subcartera
      * @param data Lista de registros a importar
      * @param linkField Campo de enlace para vincular registros con la tabla inicial
+     * @param fileName Nombre del Excel; debe traer la fecha (yyyy_MM_dd, yyyy-MM-dd o yyyyMMdd)
      * @return Mapa con estadísticas de la operación
      */
-    java.util.Map<String, Object> importDailyData(Integer subPortfolioId, List<java.util.Map<String, Object>> data, String linkField);
+    java.util.Map<String, Object> importDailyData(Integer subPortfolioId, List<java.util.Map<String, Object>> data, String linkField,
+                                                  String fileName);
 
     record HeaderConfigurationData(
         Integer fieldDefinitionId,
