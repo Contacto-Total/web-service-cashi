@@ -514,6 +514,37 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
+     * La sincronización de clientes busca por código de identificación. Si la carga diaria se enlazó
+     * por otra columna (en Interbank, el CJ de cada deuda), los valores de enlace se traducen a los
+     * códigos de identificación de sus filas; sin esto la sincronización casi no encuentra clientes.
+     */
+    private Set<String> codigosDeIdentificacion(String tableInicial, List<HeaderConfiguration> headersInicial,
+                                                String sanitizedLinkField, Set<String> valoresEnlace) {
+        String columnaCodigo = headersInicial.stream()
+                .filter(h -> h.getFieldDefinition() != null
+                        && "codigo_identificacion".equalsIgnoreCase(h.getFieldDefinition().getFieldCode()))
+                .map(h -> sanitizeColumnName(h.getHeaderName()))
+                .findFirst()
+                .orElse(null);
+        if (columnaCodigo == null || columnaCodigo.equalsIgnoreCase(sanitizedLinkField) || valoresEnlace.isEmpty()) {
+            return valoresEnlace;
+        }
+
+        Set<String> codigos = new HashSet<>();
+        List<String> valores = new ArrayList<>(valoresEnlace);
+        for (int i = 0; i < valores.size(); i += 1000) {
+            List<String> lote = valores.subList(i, Math.min(i + 1000, valores.size()));
+            String sql = "SELECT DISTINCT `" + columnaCodigo + "` FROM `" + tableInicial + "` WHERE `" + sanitizedLinkField
+                    + "` IN (" + String.join(",", Collections.nCopies(lote.size(), "?")) + ")";
+            codigos.addAll(jdbcTemplate.queryForList(sql, String.class, lote.toArray()));
+        }
+        codigos.remove(null);
+        logger.info("🔗 {} valores de enlace ({}) corresponden a {} códigos de identificación ({})",
+                valores.size(), sanitizedLinkField, codigos.size(), columnaCodigo);
+        return codigos;
+    }
+
+    /**
      * Valida y sanitiza un nombre de tabla
      * @throws IllegalArgumentException si el nombre es inválido
      */
@@ -2501,7 +2532,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         // ========== FASE 3: Sincronizar SOLO los clientes actualizados ==========
         @SuppressWarnings("unchecked")
-        Set<String> updatedCodes = (Set<String>) result.getOrDefault("updatedIdentificationCodes", new HashSet<>());
+        Set<String> updatedLinks = (Set<String>) result.getOrDefault("updatedIdentificationCodes", new HashSet<>());
+        Set<String> updatedCodes = codigosDeIdentificacion(tableInicial, headersInicial, sanitizedLinkField, updatedLinks);
         logger.info("📊 Fase 3: Sincronizando {} clientes actualizados desde tabla INICIAL", updatedCodes.size());
 
         if (!updatedCodes.isEmpty()) {

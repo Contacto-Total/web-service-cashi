@@ -1031,6 +1031,11 @@ public class CustomerSyncService {
         contactsCreated += insertContactToProduction(insertSql, clientId, "email", "email", row, preservedManualContacts);
         contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_referencia_1", "telefono", row, preservedManualContacts);
         contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_referencia_2", "telefono", row, preservedManualContacts);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_adicional_1", "telefono", row, preservedManualContacts);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_adicional_2", "telefono", row, preservedManualContacts);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_adicional_3", "telefono", row, preservedManualContacts);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_adicional_4", "telefono", row, preservedManualContacts);
+        contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_adicional_5", "telefono", row, preservedManualContacts);
 
         return contactsCreated;
     }
@@ -1070,7 +1075,9 @@ public class CustomerSyncService {
         // El DELETE se acota a estos subtipos para NO borrar otros (p. ej. telefono_extra),
         // administrados por otros flujos.
         final String[] contactSubtypes = {"telefono_principal", "telefono_secundario", "telefono_trabajo",
-                                          "email", "telefono_referencia_1", "telefono_referencia_2"};
+                                          "email", "telefono_referencia_1", "telefono_referencia_2",
+                                          "telefono_adicional_1", "telefono_adicional_2", "telefono_adicional_3",
+                                          "telefono_adicional_4", "telefono_adicional_5"};
         final String subtypeInClause = String.join(",", Collections.nCopies(contactSubtypes.length, "?"));
 
         // Preservar estados de validación existentes ANTES del DELETE.
@@ -1348,6 +1355,11 @@ public class CustomerSyncService {
                 {"telefono_trabajo", "VARCHAR(255)", "telefono_trabajo"},
                 {"telefono_referencia_1", "VARCHAR(255)", "telefono_referencia_1"},
                 {"telefono_referencia_2", "VARCHAR(255)", "telefono_referencia_2"},
+                {"telefono_adicional_1", "VARCHAR(255)", "telefono_adicional_1"},
+                {"telefono_adicional_2", "VARCHAR(255)", "telefono_adicional_2"},
+                {"telefono_adicional_3", "VARCHAR(255)", "telefono_adicional_3"},
+                {"telefono_adicional_4", "VARCHAR(255)", "telefono_adicional_4"},
+                {"telefono_adicional_5", "VARCHAR(255)", "telefono_adicional_5"},
                 {"email", "VARCHAR(255)", "email"}
         };
 
