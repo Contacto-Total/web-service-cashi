@@ -54,7 +54,8 @@ public class ContactMethod {
 
     /**
      * Subtipo específico del contacto
-     * Para teléfonos: telefono_principal, telefono_secundario, telefono_trabajo, telefono_referencia_1, telefono_referencia_2
+     * Para teléfonos: telefono_principal, telefono_secundario, telefono_trabajo, telefono_referencia_1, telefono_referencia_2,
+     * telefono_adicional_1 a telefono_adicional_5
      * Para email: email
      */
     @Column(name = "subtipo", nullable = false, length = 100)

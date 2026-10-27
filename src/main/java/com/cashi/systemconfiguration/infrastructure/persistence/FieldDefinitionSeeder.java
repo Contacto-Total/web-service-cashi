@@ -438,6 +438,27 @@ public class FieldDefinitionSeeder implements CommandLineRunner {
             "Número de teléfono de segunda referencia",
             "TEXTO", null);
 
+        // Teléfonos del titular que la carga trae además de principal, secundario y trabajo
+        seedField("telefono_adicional_1", "Teléfono Adicional 1",
+            "Otro número de teléfono del titular",
+            "TEXTO", null);
+
+        seedField("telefono_adicional_2", "Teléfono Adicional 2",
+            "Otro número de teléfono del titular",
+            "TEXTO", null);
+
+        seedField("telefono_adicional_3", "Teléfono Adicional 3",
+            "Otro número de teléfono del titular",
+            "TEXTO", null);
+
+        seedField("telefono_adicional_4", "Teléfono Adicional 4",
+            "Otro número de teléfono del titular",
+            "TEXTO", null);
+
+        seedField("telefono_adicional_5", "Teléfono Adicional 5",
+            "Otro número de teléfono del titular",
+            "TEXTO", null);
+
         seedField("periodo_asignacion", "Periodo de Asignación",
             "Periodo en que se asignó la cartera",
             "TEXTO", null);
