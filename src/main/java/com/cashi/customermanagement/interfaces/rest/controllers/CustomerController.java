@@ -271,7 +271,9 @@ public class CustomerController {
     public ResponseEntity<?> searchCustomersAcrossAllTenants(
             @Parameter(description = "Criterio de búsqueda: documento, numero_cuenta, telefono, telefono_principal",
                        required = true, example = "documento") @RequestParam String searchBy,
-            @Parameter(description = "Valor a buscar", required = true, example = "12345678") @RequestParam String value) {
+            @Parameter(description = "Valor a buscar", required = true, example = "12345678") @RequestParam String value,
+            @Parameter(description = "true = solo clientes asignados (no INACTIVE); la Consulta de Cliente no lo envía y muestra todos")
+            @RequestParam(defaultValue = "false") boolean soloAsignados) {
 
         logger.debug("Búsqueda GLOBAL: searchBy={}, value={}", searchBy, value);
 
@@ -281,6 +283,7 @@ public class CustomerController {
                 var customers = customerRepository.findAllByDocumentWithContactMethods(value);
                 System.out.println("✅ Encontrados " + customers.size() + " clientes por documento en todos los tenants");
                 var resources = customers.stream()
+                        .filter(c -> !soloAsignados || asignado(c))
                         .map(assembler::toResourceFromEntity)
                         .toList();
                 yield ResponseEntity.ok(resources);
@@ -290,7 +293,9 @@ public class CustomerController {
                 var contactMethods = contactMethodRepository.findAllByContactTypeAndValueWithCustomer("telefono", value);
                 System.out.println("✅ Encontrados " + contactMethods.size() + " clientes por telefono (todos los tipos) en todos los tenants");
                 var resources = contactMethods.stream()
-                        .map(cm -> assembler.toResourceFromEntity(cm.getCustomer()))
+                        .map(cm -> cm.getCustomer())
+                        .filter(c -> !soloAsignados || asignado(c))
+                        .map(assembler::toResourceFromEntity)
                         .toList();
                 yield ResponseEntity.ok(resources);
             }
@@ -299,7 +304,9 @@ public class CustomerController {
                 var contactMethods = contactMethodRepository.findAllBySubtypeAndValueWithCustomer("telefono_principal", value);
                 System.out.println("✅ Encontrados " + contactMethods.size() + " clientes por telefono_principal en todos los tenants");
                 var resources = contactMethods.stream()
-                        .map(cm -> assembler.toResourceFromEntity(cm.getCustomer()))
+                        .map(cm -> cm.getCustomer())
+                        .filter(c -> !soloAsignados || asignado(c))
+                        .map(assembler::toResourceFromEntity)
                         .toList();
                 yield ResponseEntity.ok(resources);
             }
@@ -308,6 +315,7 @@ public class CustomerController {
                 var customers = customerRepository.findAllByAccountNumberWithContactMethods(value);
                 System.out.println("✅ Encontrados " + customers.size() + " clientes por numero_cuenta en todos los tenants");
                 var resources = customers.stream()
+                        .filter(c -> !soloAsignados || asignado(c))
                         .map(assembler::toResourceFromEntity)
                         .toList();
                 yield ResponseEntity.ok(resources);
@@ -616,5 +624,10 @@ public class CustomerController {
                     System.out.println("❌ Cliente no encontrado con ese teléfono");
                     return ResponseEntity.notFound().build();
                 });
+    }
+
+    /** Cliente vigente en su cartera: el INACTIVE está retirado o desactivado. */
+    private static boolean asignado(com.cashi.customermanagement.domain.model.aggregates.Customer customer) {
+        return customer != null && !"INACTIVE".equals(customer.getStatus());
     }
 }

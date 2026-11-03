@@ -52,6 +52,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     // Regla de fecha de contención (carga diaria): igual que pago_cumplido, solo se escribe en las tablas
     // que YA tienen la columna fecha_contencion (se crea al agregar la cabecera FECHA_CONTENCION).
     private static final String CAMPO_CONTENCION = "estado_contencion";
+    // Definición de campo que marca una subcartera de una fila por deuda (en Interbank, el CJ).
+    private static final String CAMPO_IDENTIFICADOR_DEUDA = "identificador_de_deuda";
     private static final String COLUMNA_CONTENCION = "contencion";
     private static final String COLUMNA_FECHA_CONTENCION = "fecha_contencion";
     private static final String COLUMNA_FECHA_PROCESO = "fecha_proceso";
@@ -66,6 +68,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     private final ContactMethodRepository contactMethodRepository;
     private final CustomerSyncService customerSyncService;
     private final TransactionTemplate transactionTemplate;
+    private final HistorialCarteraService historialCarteraService;
 
     // Tamaño del batch para operaciones de carga de identificadores (previene problemas de memoria)
     private static final int BATCH_SIZE_FOR_IDENTIFIER_LOAD = 10000;
@@ -83,7 +86,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             CustomerRepository customerRepository,
             ContactMethodRepository contactMethodRepository,
             CustomerSyncService customerSyncService,
-            TransactionTemplate transactionTemplate) {
+            TransactionTemplate transactionTemplate,
+            HistorialCarteraService historialCarteraService) {
         this.headerConfigurationRepository = headerConfigurationRepository;
         this.subPortfolioRepository = subPortfolioRepository;
         this.fieldDefinitionRepository = fieldDefinitionRepository;
@@ -92,6 +96,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         this.contactMethodRepository = contactMethodRepository;
         this.customerSyncService = customerSyncService;
         this.transactionTemplate = transactionTemplate;
+        this.historialCarteraService = historialCarteraService;
     }
 
     @Override
@@ -1173,6 +1178,15 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         String identityColumnName = findIdentityColumn(headers, "identity_code", "codigo_identificacion", "cod_cli");
         String nameColumnName = findIdentityColumn(headers, "nombre_cliente", "nombre_completo", "full_name");
 
+        // En una subcartera de una fila por deuda la fila existente se identifica solo por el identificador de deuda:
+        // por código o por nombre, el segundo producto de un cliente pisaría al primero.
+        HistorialCarteraService.ColumnasCartera columnasCartera =
+                loadType == LoadType.INICIAL ? columnasCartera(allHeaders) : null;
+        if (columnasCartera != null) {
+            identityColumnName = columnasCartera.cj();
+            nameColumnName = null;
+        }
+
         Map<String, Integer> existingIdentityCodes = new HashMap<>();
         Map<String, Integer> existingNames = new HashMap<>();
         if (identityColumnName != null && columnExists(tableName, identityColumnName)) {
@@ -1332,7 +1346,37 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             }
         }
 
+        // Altas y retiros de la cartera: después de sincronizar, para que los clientes que llegan ya existan.
+        if (columnasCartera != null && (insertedRows > 0 || updatedRows > 0)) {
+            List<HistorialCarteraService.FilaArchivo> filas = new ArrayList<>();
+            for (Map<String, Object> row : data) {
+                filas.add(new HistorialCarteraService.FilaArchivo(
+                        valorDeCabecera(row, headers, columnasCartera.cj()),
+                        valorDeCabecera(row, headers, columnasCartera.cu()),
+                        valorDeCabecera(row, headers, columnasCartera.documento())));
+            }
+            HistorialCarteraService.Deteccion deteccion = historialCarteraService.registrar(
+                    subPortfolioId, tableName, columnasCartera, filas, LocalDate.now());
+            historialCarteraService.activar(subPortfolioId, deteccion.codigosAActivar());
+            result.put("cartera", deteccion.resumen(insertedRows));
+        }
+
         return result;
+    }
+
+    /** Valor de una columna para una fila del archivo, con la regex de su cabecera. Null si no hay cabecera. */
+    private String valorDeCabecera(Map<String, Object> row, List<HeaderConfiguration> headers, String columnName) {
+        String value = extractIdentityValue(row, headers, columnName);
+        if (value == null) {
+            return null;
+        }
+        for (HeaderConfiguration header : headers) {
+            if (sanitizeColumnName(header.getHeaderName()).equals(columnName)
+                    && header.getRegexPattern() != null && !header.getRegexPattern().trim().isEmpty()) {
+                return applyRegexTransformation(value, header.getRegexPattern(), header.getHeaderName());
+            }
+        }
+        return value;
     }
 
     private record SpUpdateResult(int updated, int notFound, Set<String> matchedLinks) {}
@@ -2395,19 +2439,7 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                     sArgs[0] = i + 1;
                     sArgs[1] = linkValue.trim();
                     for (int j = 0; j < columnsList.size(); j++) {
-                        String colName = columnsList.get(j);
-                        HeaderConfiguration header = findHeaderByColumnName(inicialHeaderMap, colName);
-                        Object value = null;
-                        if (header != null && header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
-                            value = findValueBySourceField(row, header.getSourceField());
-                        }
-                        if (value == null) {
-                            value = findValueForColumn(row, colName, inicialHeaderMap);
-                        }
-                        if (value != null && header != null && header.getRegexPattern() != null && !header.getRegexPattern().trim().isEmpty()) {
-                            value = applyRegexTransformation(value.toString(), header.getRegexPattern(), header.getHeaderName());
-                        }
-                        sArgs[j + 2] = (value != null && header != null) ? convertValueForUpdate(value, header) : null;
+                        sArgs[j + 2] = valorParaInicial(row, columnsList.get(j), inicialHeaderMap);
                     }
                     stagingRows.add(sArgs);
                 }
@@ -2520,6 +2552,31 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 "failedRows", failedInInicial
         ));
 
+        // ========== FASE 2.2: Altas y retiros de la cartera (subcarteras de una fila por deuda) ==========
+        Set<String> codigosAActivar = new HashSet<>();
+        Set<String> codigosAltas = new HashSet<>();
+        HistorialCarteraService.ColumnasCartera columnasCartera = columnasCartera(headersInicial);
+        if (columnasCartera != null && !columnsToUpdateSet.isEmpty()) {
+            if (columnasCartera.cj().equalsIgnoreCase(sanitizedLinkField)) {
+                List<String> columnasInsert = new ArrayList<>();
+                columnasInsert.add(sanitizedLinkField);
+                columnasInsert.addAll(columnsToUpdateSet);
+                List<Object[]> filasInsert = filasParaInicial(data, linkField, headersActualizacion, columnasInsert, inicialHeaderMap);
+
+                HistorialCarteraService.Altas altas = historialCarteraService.insertarCjNuevos(
+                        tableInicial, columnasInsert, filasInsert, columnasCartera.cu());
+                HistorialCarteraService.Deteccion deteccion = historialCarteraService.registrar(
+                        subPortfolioId, tableInicial, columnasCartera,
+                        filasArchivo(columnasInsert, filasInsert, columnasCartera), fechaArchivo);
+                codigosAltas.addAll(altas.codigos());
+                codigosAActivar.addAll(deteccion.codigosAActivar());
+                result.put("cartera", deteccion.resumen(altas.cjAgregados()));
+            } else {
+                logger.warn("Carga diaria subcartera {}: el enlace {} no es el identificador de deuda ({}); "
+                        + "no se registran altas ni retiros", subPortfolioId, sanitizedLinkField, columnasCartera.cj());
+            }
+        }
+
         // ========== FASE 2.5: Marcar pago_cumplido segun la deuda total recibida ==========
         result.put("pagoCumplido", applyPagoCumplidoRule(
                 List.of(tableInicial, tableActualizacion),
@@ -2533,7 +2590,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         // ========== FASE 3: Sincronizar SOLO los clientes actualizados ==========
         @SuppressWarnings("unchecked")
         Set<String> updatedLinks = (Set<String>) result.getOrDefault("updatedIdentificationCodes", new HashSet<>());
-        Set<String> updatedCodes = codigosDeIdentificacion(tableInicial, headersInicial, sanitizedLinkField, updatedLinks);
+        Set<String> updatedCodes = new HashSet<>(codigosDeIdentificacion(tableInicial, headersInicial, sanitizedLinkField, updatedLinks));
+        updatedCodes.addAll(codigosAltas);
         logger.info("📊 Fase 3: Sincronizando {} clientes actualizados desde tabla INICIAL", updatedCodes.size());
 
         if (!updatedCodes.isEmpty()) {
@@ -2564,6 +2622,10 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             result.put("syncCustomersUpdated", 0);
         }
 
+        if (!codigosAActivar.isEmpty()) {
+            historialCarteraService.activar(subPortfolioId, codigosAActivar);
+        }
+
         // Limpiar el set temporal del resultado
         result.remove("updatedIdentificationCodes");
 
@@ -2579,6 +2641,84 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
 
         logger.info("📅 Carga diaria completada para SubPortfolio ID: {}", subPortfolioId);
         return result;
+    }
+
+    /**
+     * Valor de una columna de la tabla INICIAL para una fila del archivo: por sourceField si está configurado, si no
+     * por el nombre de la columna; con la regex y el tipo de su cabecera. Null si la columna no tiene cabecera.
+     */
+    private Object valorParaInicial(Map<String, Object> row, String colName, Map<String, HeaderConfiguration> inicialHeaderMap) {
+        HeaderConfiguration header = findHeaderByColumnName(inicialHeaderMap, colName);
+        Object value = null;
+        if (header != null && header.getSourceField() != null && !header.getSourceField().trim().isEmpty()) {
+            value = findValueBySourceField(row, header.getSourceField());
+        }
+        if (value == null) {
+            value = findValueForColumn(row, colName, inicialHeaderMap);
+        }
+        if (value != null && header != null && header.getRegexPattern() != null && !header.getRegexPattern().trim().isEmpty()) {
+            value = applyRegexTransformation(value.toString(), header.getRegexPattern(), header.getHeaderName());
+        }
+        return (value != null && header != null) ? convertValueForUpdate(value, header) : null;
+    }
+
+    /**
+     * Filas del archivo con sus valores para la tabla INICIAL, en el orden de columnas; columnas[0] es el enlace.
+     * Las filas sin enlace se omiten (la Fase 2 ya las cuenta como fallidas).
+     */
+    private List<Object[]> filasParaInicial(List<Map<String, Object>> data, String linkField,
+                                            List<HeaderConfiguration> headersActualizacion, List<String> columnas,
+                                            Map<String, HeaderConfiguration> inicialHeaderMap) {
+        List<Object[]> filas = new ArrayList<>();
+        for (Map<String, Object> row : data) {
+            String linkValue = extractLinkValue(row, linkField, headersActualizacion);
+            if (linkValue == null || linkValue.trim().isEmpty()) {
+                continue;
+            }
+            Object[] valores = new Object[columnas.size()];
+            valores[0] = linkValue.trim();
+            for (int j = 1; j < columnas.size(); j++) {
+                valores[j] = valorParaInicial(row, columnas.get(j), inicialHeaderMap);
+            }
+            filas.add(valores);
+        }
+        return filas;
+    }
+
+    private static List<HistorialCarteraService.FilaArchivo> filasArchivo(List<String> columnas, List<Object[]> filas,
+                                                                         HistorialCarteraService.ColumnasCartera col) {
+        int iCj = columnas.indexOf(col.cj());
+        int iCu = columnas.indexOf(col.cu());
+        int iDoc = col.documento() != null ? columnas.indexOf(col.documento()) : -1;
+        List<HistorialCarteraService.FilaArchivo> salida = new ArrayList<>();
+        for (Object[] f : filas) {
+            salida.add(new HistorialCarteraService.FilaArchivo(
+                    iCj >= 0 ? Objects.toString(f[iCj], null) : null,
+                    iCu >= 0 ? Objects.toString(f[iCu], null) : null,
+                    iDoc >= 0 ? Objects.toString(f[iDoc], null) : null));
+        }
+        return salida;
+    }
+
+    /**
+     * Columnas de la tabla INICIAL que usa el historial de cartera, por su definición de campo. Null si la subcartera
+     * no enlaza el identificador de deuda o el código del cliente: es de una fila por cliente y no lleva historial.
+     */
+    private HistorialCarteraService.ColumnasCartera columnasCartera(List<HeaderConfiguration> headersInicial) {
+        Map<String, String> porCodigo = new HashMap<>();
+        for (HeaderConfiguration h : headersInicial) {
+            if (h.getFieldDefinition() != null && h.getFieldDefinition().getFieldCode() != null) {
+                porCodigo.putIfAbsent(h.getFieldDefinition().getFieldCode().toLowerCase(), sanitizeColumnName(h.getHeaderName()));
+            }
+        }
+        String cj = porCodigo.get(CAMPO_IDENTIFICADOR_DEUDA);
+        String cu = porCodigo.get("codigo_identificacion");
+        if (cj == null || cu == null) {
+            return null;
+        }
+        return new HistorialCarteraService.ColumnasCartera(cj, cu, porCodigo.get("documento"),
+                porCodigo.get("tipo_producto"), porCodigo.get("moneda"), porCodigo.get("monto_capital"),
+                porCodigo.get("deuda_total_actual"));
     }
 
     /**
