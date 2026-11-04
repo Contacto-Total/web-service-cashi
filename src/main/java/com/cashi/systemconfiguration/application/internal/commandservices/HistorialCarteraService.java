@@ -121,6 +121,66 @@ public class HistorialCarteraService {
     }
 
     /**
+     * Llena con el valor del archivo las columnas indicadas que están vacías (NULL) en CJ que ya estaban en la tabla
+     * dinámica; no pisa un valor guardado. columnas[0] es la columna del CJ. Devuelve los CU de las filas completadas,
+     * que se vuelven a sincronizar y activar.
+     */
+    public Set<String> completarVacias(String tabla, List<String> columnas, List<Object[]> filas,
+                                       List<String> objetivo, String columnaCu) {
+        Set<String> codigos = new LinkedHashSet<>();
+        if (objetivo.isEmpty()) {
+            return codigos;
+        }
+        String colCj = columnas.get(0);
+        StringBuilder vacia = new StringBuilder();
+        for (String c : objetivo) {
+            vacia.append(vacia.length() == 0 ? "" : " OR ").append('`').append(c).append("` IS NULL");
+        }
+        Map<String, String> guardadoPorCj = new HashMap<>();
+        jdbcTemplate.query("SELECT `" + colCj + "` FROM `" + tabla + "` WHERE " + vacia,
+                rs -> {
+                    String guardado = rs.getString(1);
+                    String cj = normalizarCj(guardado);
+                    if (cj != null) {
+                        guardadoPorCj.put(cj, guardado);
+                    }
+                });
+        if (guardadoPorCj.isEmpty()) {
+            return codigos;
+        }
+
+        int indiceCu = columnas.indexOf(columnaCu);
+        int total = 0;
+        for (String c : objetivo) {
+            int i = columnas.indexOf(c);
+            if (i < 0) {
+                continue;
+            }
+            List<Object[]> args = new ArrayList<>();
+            Set<String> vistos = new HashSet<>();
+            for (Object[] f : filas) {
+                String cj = normalizarCj(f[0]);
+                if (cj == null || f[i] == null || !guardadoPorCj.containsKey(cj) || !vistos.add(cj)) {
+                    continue;
+                }
+                args.add(new Object[]{f[i], guardadoPorCj.get(cj)});
+                if (indiceCu >= 0 && limpio(f[indiceCu]) != null) {
+                    codigos.add(limpio(f[indiceCu]));
+                }
+            }
+            if (args.isEmpty()) {
+                continue;
+            }
+            for (int n : jdbcTemplate.batchUpdate("UPDATE `" + tabla + "` SET `" + c + "` = ? WHERE `" + colCj
+                    + "` = ? AND `" + c + "` IS NULL", args)) {
+                total += Math.max(n, 0);
+            }
+        }
+        logger.info("Carga de {}: {} valores vacíos completados en {} ({} clientes)", tabla, total, objetivo, codigos.size());
+        return codigos;
+    }
+
+    /**
      * Compara los CU del archivo con los clientes asignados de la subcartera (filas sin fecha_retiro).
      * Al cliente que no viene le pone fecha_retiro en sus CJ con los datos que tenían, lo borra de la tabla dinámica,
      * lo deja INACTIVE y bloquea sus contactos en campañas activas. Por cada CJ del archivo sin fila vigente abre una
@@ -147,6 +207,7 @@ public class HistorialCarteraService {
         Map<String, List<Long>> vigentesPorCu = new HashMap<>();
         Map<Long, String> cjPorId = new HashMap<>();
         Map<String, String> documentoPorCu = new HashMap<>();
+        Map<String, Long> sinDocumento = new HashMap<>();
         Set<String> cjsVigentes = new HashSet<>();
         jdbcTemplate.query(
                 "SELECT id, codigo_cliente, documento, identificador_deuda FROM cashi_db.historial_cartera "
@@ -161,10 +222,28 @@ public class HistorialCarteraService {
                     cjPorId.put(id, rs.getString("identificador_deuda"));
                     if (rs.getString("documento") != null) {
                         documentoPorCu.putIfAbsent(cu, rs.getString("documento"));
+                    } else {
+                        sinDocumento.put(normalizarCj(rs.getString("identificador_deuda")), id);
                     }
                     cjsVigentes.add(rs.getString("identificador_deuda"));
                 },
                 subcarteraId);
+
+        // Filas vigentes que entraron sin documento: lo toman del archivo.
+        List<Object[]> documentos = new ArrayList<>();
+        for (FilaArchivo f : archivoPorCj.values()) {
+            Long id = sinDocumento.get(f.cj());
+            if (id != null && f.documento() != null) {
+                documentos.add(new Object[]{f.documento(), id});
+                documentoPorCu.putIfAbsent(f.cu(), f.documento());
+            }
+        }
+        if (!documentos.isEmpty()) {
+            jdbcTemplate.batchUpdate(
+                    "UPDATE cashi_db.historial_cartera SET documento = ? WHERE id = ? AND documento IS NULL", documentos);
+            logger.info("Historial de cartera, subcartera {}: {} CJ vigentes completados con su documento",
+                    subcarteraId, documentos.size());
+        }
 
         List<String> retirados = new ArrayList<>(vigentesPorCu.keySet());
         retirados.removeAll(cusArchivo);

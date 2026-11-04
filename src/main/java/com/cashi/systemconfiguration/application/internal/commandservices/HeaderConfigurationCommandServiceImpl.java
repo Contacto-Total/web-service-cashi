@@ -511,11 +511,20 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
     }
 
     /**
+     * Nombres de columna ya sanitizados. La carga diaria los pide por cada celda del archivo y cada cálculo encadena
+     * varias regex: sin guardarlos, una cartera de 150 columnas tarda minutos.
+     */
+    private final Map<String, String> columnasSanitizadas = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
      * Sanitiza el nombre de la columna eliminando caracteres especiales
      * Usa SqlSanitizer para prevenir SQL injection
      */
     private String sanitizeColumnName(String headerName) {
-        return SqlSanitizer.headerToColumnName(headerName);
+        if (headerName == null) {
+            return SqlSanitizer.headerToColumnName(null);
+        }
+        return columnasSanitizadas.computeIfAbsent(headerName, SqlSanitizer::headerToColumnName);
     }
 
     /**
@@ -2561,15 +2570,21 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 List<String> columnasInsert = new ArrayList<>();
                 columnasInsert.add(sanitizedLinkField);
                 columnasInsert.addAll(columnsToUpdateSet);
+                List<String> derivadas = columnasDerivadas(headersInicial, data, columnasInsert);
+                columnasInsert.addAll(derivadas);
                 List<Object[]> filasInsert = filasParaInicial(data, linkField, headersActualizacion, columnasInsert, inicialHeaderMap);
 
                 HistorialCarteraService.Altas altas = historialCarteraService.insertarCjNuevos(
                         tableInicial, columnasInsert, filasInsert, columnasCartera.cu());
+                Set<String> completados = historialCarteraService.completarVacias(
+                        tableInicial, columnasInsert, filasInsert, derivadas, columnasCartera.cu());
                 HistorialCarteraService.Deteccion deteccion = historialCarteraService.registrar(
                         subPortfolioId, tableInicial, columnasCartera,
                         filasArchivo(columnasInsert, filasInsert, columnasCartera), fechaArchivo);
                 codigosAltas.addAll(altas.codigos());
+                codigosAltas.addAll(completados);
                 codigosAActivar.addAll(deteccion.codigosAActivar());
+                codigosAActivar.addAll(completados);
                 result.put("cartera", deteccion.resumen(altas.cjAgregados()));
             } else {
                 logger.warn("Carga diaria subcartera {}: el enlace {} no es el identificador de deuda ({}); "
@@ -2683,6 +2698,34 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             filas.add(valores);
         }
         return filas;
+    }
+
+    /**
+     * Columnas de la tabla INICIAL que se derivan de otra columna del archivo (campo origen), como DOCUMENTO desde
+     * NRO_DOCUMENTO. El archivo no las trae con su nombre, así que no están en las columnas de la Fase 2; sin ellas
+     * un CJ nuevo entra sin documento y su cliente no se crea al sincronizar.
+     */
+    private List<String> columnasDerivadas(List<HeaderConfiguration> headersInicial, List<Map<String, Object>> data,
+                                           List<String> incluidas) {
+        Set<String> yaIncluidas = new HashSet<>();
+        for (String c : incluidas) {
+            yaIncluidas.add(c.toLowerCase());
+        }
+        List<String> derivadas = new ArrayList<>();
+        for (HeaderConfiguration h : headersInicial) {
+            String origen = h.getSourceField();
+            if (origen == null || origen.isBlank()) {
+                continue;
+            }
+            String columna = sanitizeColumnName(h.getHeaderName());
+            if (!yaIncluidas.add(columna.toLowerCase())) {
+                continue;
+            }
+            if (data.stream().anyMatch(row -> findValueBySourceField(row, origen) != null)) {
+                derivadas.add(columna);
+            }
+        }
+        return derivadas;
     }
 
     private static List<HistorialCarteraService.FilaArchivo> filasArchivo(List<String> columnas, List<Object[]> filas,
