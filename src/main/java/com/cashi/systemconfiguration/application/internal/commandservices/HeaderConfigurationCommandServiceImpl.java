@@ -1118,6 +1118,10 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             logger.info("⏭️ Omitiendo sincronización de clientes para ACTUALIZACION (se sincroniza desde INICIAL)");
         }
 
+        if ((insertedRows > 0 || updatedRows > 0) && loadType == LoadType.INICIAL) {
+            darEstadoInicial(subPortfolio, tableName, result);
+        }
+
         return result;
     }
 
@@ -1370,7 +1374,45 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
             result.put("cartera", deteccion.resumen(insertedRows));
         }
 
+        if ((insertedRows > 0 || updatedRows > 0) && loadType == LoadType.INICIAL) {
+            darEstadoInicial(subPortfolio, tableName, result);
+        }
+
         return result;
+    }
+
+    /**
+     * Estado inicial «Nunca gestionado» (NC con detalle SIN GESTION) para los clientes de la tabla que todavía no
+     * tienen estado calculado. Sin él, un cliente que entra por una carga queda fuera de los filtros por tipo de
+     * contacto de campañas y del bot hasta que alguien lo gestiona; su primera gestión lo reemplaza por el real
+     * (sp_actualizar_estado_cliente). No toca a quien ya tiene estado: es único por documento e inquilino.
+     * Un error aquí no detiene la carga.
+     */
+    private void darEstadoInicial(SubPortfolio subPortfolio, String tabla, Map<String, Object> result) {
+        try {
+            Integer tenantId = subPortfolio.getPortfolio().getTenant().getId();
+            Integer carteraId = subPortfolio.getPortfolio().getId();
+            int nuevos = jdbcTemplate.update(
+                    "INSERT IGNORE INTO cashi_discador_db.estado_cliente_calculado ("
+                            + " documento_cliente, id_tenant, id_inquilino, id_cartera, id_subcartera,"
+                            + " ultimo_estado, ultimo_estado_fecha, ultimo_estado_detalle,"
+                            + " mejor_estado_mes, mejor_estado_mes_fecha, mejor_estado_mes_detalle,"
+                            + " mejor_estado_historico, mejor_estado_historico_fecha, mejor_estado_historico_detalle,"
+                            + " fecha_calculo, mes_calculo, anio_calculo) "
+                            + "SELECT DISTINCT d.documento, ?, ?, ?, ?,"
+                            + " 'NC', NOW(), 'SIN GESTION', 'NC', NOW(), 'SIN GESTION', 'NC', NOW(), 'SIN GESTION',"
+                            + " NOW(), MONTH(CURDATE()), YEAR(CURDATE()) "
+                            + "FROM `" + tabla + "` d "
+                            + "WHERE d.documento IS NOT NULL AND d.documento <> '' AND CHAR_LENGTH(d.documento) <= 50",
+                    tenantId, tenantId, carteraId, subPortfolio.getId());
+            logger.info("Estado inicial de clientes, subcartera {}: {} clientes nuevos como Nunca gestionado",
+                    subPortfolio.getId(), nuevos);
+            result.put("estadoInicialClientes", nuevos);
+        } catch (Exception e) {
+            logger.warn("Estado inicial de clientes, subcartera {}: no se pudo registrar: {}",
+                    subPortfolio.getId(), e.getMessage());
+            result.put("estadoInicialError", e.getMessage());
+        }
     }
 
     /** Valor de una columna para una fila del archivo, con la regex de su cabecera. Null si no hay cabecera. */
@@ -2640,6 +2682,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
         if (!codigosAActivar.isEmpty()) {
             historialCarteraService.activar(subPortfolioId, codigosAActivar);
         }
+
+        darEstadoInicial(subPortfolio, tableInicial, result);
 
         // Limpiar el set temporal del resultado
         result.remove("updatedIdentificationCodes");
