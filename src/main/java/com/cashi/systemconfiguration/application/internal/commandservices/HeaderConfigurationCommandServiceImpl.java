@@ -2662,7 +2662,8 @@ public class HeaderConfigurationCommandServiceImpl implements HeaderConfiguratio
                 logger.info("✅ Sincronización selectiva completada: {} clientes creados, {} actualizados",
                         syncResult.getCustomersCreated(), syncResult.getCustomersUpdated());
 
-                reapplyInvalidPhoneContactInactivation(subPortfolio);
+                // La inactivación de teléfonos tipificados no se reaplica aquí: la sincronización conserva el
+                // estado de cada teléfono y la tipificación ya lo inactiva.
 
                 result.put("syncCustomersCreated", syncResult.getCustomersCreated());
                 result.put("syncCustomersUpdated", syncResult.getCustomersUpdated());
