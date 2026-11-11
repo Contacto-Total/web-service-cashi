@@ -22,9 +22,10 @@ import java.util.Set;
  * Asignación de la cartera por cliente en las subcarteras de una fila por deuda (identificador de deuda enlazado).
  *
  * cashi_db.historial_cartera guarda una fila por CJ y por cada vez que estuvo asignado: fecha_ingreso es el archivo
- * en que llegó y fecha_retiro el archivo en que su cliente (CU) ya no vino; mientras está asignado, fecha_retiro va
- * vacía. Un cliente que no viene se borra de la tabla dinámica, queda INACTIVE y sus contactos de campañas activas
- * dejan de marcarse; uno que llega o vuelve queda ACTIVE. Gestiones, promesas y pagos no se tocan.
+ * en que llegó y fecha_retiro el archivo en que ya no vino; mientras está asignado, fecha_retiro va vacía. El banco
+ * retira por CJ: el CJ que no viene sale de la tabla dinámica aunque su cliente siga con otros. El cliente al que no
+ * le queda ningún CJ queda además INACTIVE y sus contactos de campañas activas dejan de marcarse; uno que llega o
+ * vuelve queda ACTIVE. Gestiones, promesas y pagos no se tocan.
  */
 @Service
 public class HistorialCarteraService {
@@ -49,12 +50,13 @@ public class HistorialCarteraService {
     public record Altas(int cjAgregados, Set<String> codigos) {}
 
     /** Resumen de la detección; codigosAActivar se pasan a ACTIVE después de sincronizar clientes. */
-    public record Deteccion(int clientesRetirados, int clientesReingresados, int clientesNuevos,
+    public record Deteccion(int clientesRetirados, int cjRetirados, int clientesReingresados, int clientesNuevos,
                             int contactosBloqueados, Set<String> codigosAActivar) {
 
         public Map<String, Object> resumen(int cjAgregados) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("clientesRetirados", clientesRetirados);
+            m.put("cjRetirados", cjRetirados);
             m.put("clientesReingresados", clientesReingresados);
             m.put("clientesNuevos", clientesNuevos);
             m.put("cjAgregados", cjAgregados);
@@ -181,10 +183,11 @@ public class HistorialCarteraService {
     }
 
     /**
-     * Compara los CU del archivo con los clientes asignados de la subcartera (filas sin fecha_retiro).
+     * Compara los CJ del archivo con los asignados de la subcartera (filas sin fecha_retiro).
      * Al cliente que no viene le pone fecha_retiro en sus CJ con los datos que tenían, lo borra de la tabla dinámica,
-     * lo deja INACTIVE y bloquea sus contactos en campañas activas. Por cada CJ del archivo sin fila vigente abre una
-     * fila con fecha_ingreso; su cliente se activa después de la sincronización.
+     * lo deja INACTIVE y bloquea sus contactos en campañas activas. Al CJ que no viene de un cliente que sí viene le
+     * pone fecha_retiro y lo borra de la tabla dinámica; el cliente sigue ACTIVE. Por cada CJ del archivo sin fila
+     * vigente abre una fila con fecha_ingreso; su cliente se activa después de la sincronización.
      */
     public Deteccion registrar(Integer subcarteraId, String tabla, ColumnasCartera col,
                                List<FilaArchivo> filas, LocalDate fecha) {
@@ -201,7 +204,7 @@ public class HistorialCarteraService {
         }
         if (archivoPorCj.isEmpty()) {
             logger.warn("Historial de cartera, subcartera {}: el archivo no trae CJ ni CU; no se registra nada", subcarteraId);
-            return new Deteccion(0, 0, 0, 0, Set.of());
+            return new Deteccion(0, 0, 0, 0, 0, Set.of());
         }
 
         Map<String, List<Long>> vigentesPorCu = new HashMap<>();
@@ -247,7 +250,22 @@ public class HistorialCarteraService {
 
         List<String> retirados = new ArrayList<>(vigentesPorCu.keySet());
         retirados.removeAll(cusArchivo);
+        Map<String, List<Long>> sueltosPorCu = new HashMap<>();
+        for (Map.Entry<String, List<Long>> e : vigentesPorCu.entrySet()) {
+            if (!cusArchivo.contains(e.getKey())) {
+                continue;
+            }
+            for (Long id : e.getValue()) {
+                if (!archivoPorCj.containsKey(normalizarCj(cjPorId.get(id)))) {
+                    sueltosPorCu.computeIfAbsent(e.getKey(), k -> new ArrayList<>()).add(id);
+                }
+            }
+        }
         int contactos = retirar(subcarteraId, tabla, col, retirados, vigentesPorCu, cjPorId, documentoPorCu, fecha);
+        int cjRetirados = retirarCjs(tabla, col, sueltosPorCu, cjPorId, fecha);
+        for (String cu : retirados) {
+            cjRetirados += vigentesPorCu.get(cu).size();
+        }
 
         List<Object[]> altas = new ArrayList<>();
         Set<String> cusQueLlegan = new LinkedHashSet<>();
@@ -271,10 +289,10 @@ public class HistorialCarteraService {
 
         int reingresados = conHistorial.size();
         int nuevos = cusQueLlegan.size() - reingresados;
-        logger.info("Historial de cartera, subcartera {} ({}): {} clientes retirados, {} reingresados, {} nuevos, "
-                        + "{} CJ con fila nueva, {} contactos bloqueados",
-                subcarteraId, fecha, retirados.size(), reingresados, nuevos, altas.size(), contactos);
-        return new Deteccion(retirados.size(), reingresados, nuevos, contactos, cusQueLlegan);
+        logger.info("Historial de cartera, subcartera {} ({}): {} clientes retirados, {} CJ retirados, {} reingresados, "
+                        + "{} nuevos, {} CJ con fila nueva, {} contactos bloqueados",
+                subcarteraId, fecha, retirados.size(), cjRetirados, reingresados, nuevos, altas.size(), contactos);
+        return new Deteccion(retirados.size(), cjRetirados, reingresados, nuevos, contactos, cusQueLlegan);
     }
 
     /** Pasa a ACTIVE los clientes de la subcartera con esos códigos; se llama después de sincronizarlos. */
@@ -298,34 +316,15 @@ public class HistorialCarteraService {
         if (retirados.isEmpty()) {
             return 0;
         }
-        Map<String, Object[]> datosPorCj = new HashMap<>();
-        String select = "SELECT `" + col.cj() + "` AS cj, " + columnaO(col.producto()) + " AS producto, "
-                + columnaO(col.moneda()) + " AS moneda, " + columnaO(col.capital()) + " AS capital, "
-                + columnaO(col.deudaTotal()) + " AS deuda_total FROM `" + tabla + "` WHERE `" + col.cu() + "` IN (";
-        for (List<String> parte : bloques(retirados)) {
-            jdbcTemplate.query(select + marcadores(parte.size()) + ")",
-                    rs -> {
-                        String cj = normalizarCj(rs.getString("cj"));
-                        if (cj != null) {
-                            datosPorCj.putIfAbsent(cj, new Object[]{rs.getString("producto"), rs.getString("moneda"),
-                                    rs.getBigDecimal("capital"), rs.getBigDecimal("deuda_total")});
-                        }
-                    },
-                    parte.toArray());
-        }
-
+        Map<String, Object[]> datosPorCj = datosEnTabla(tabla, col, retirados);
         List<Object[]> cierres = new ArrayList<>();
         for (String cu : retirados) {
             for (Long id : vigentesPorCu.get(cu)) {
-                Object[] d = datosPorCj.getOrDefault(cjPorId.get(id), new Object[4]);
+                Object[] d = datosPorCj.getOrDefault(normalizarCj(cjPorId.get(id)), new Object[5]);
                 cierres.add(new Object[]{Date.valueOf(fecha), d[0], d[1], d[2], d[3], id});
             }
         }
-        jdbcTemplate.batchUpdate(
-                "UPDATE cashi_db.historial_cartera SET fecha_retiro = ?, producto = COALESCE(?, producto), "
-                        + "moneda = COALESCE(?, moneda), capital = COALESCE(?, capital), "
-                        + "deuda_total = COALESCE(?, deuda_total) WHERE id = ?",
-                cierres);
+        cerrar(cierres);
 
         int contactos = 0;
         for (List<String> parte : bloques(retirados)) {
@@ -354,6 +353,67 @@ public class HistorialCarteraService {
             }
         }
         return contactos;
+    }
+
+    /**
+     * Retira los CJ que no vinieron de clientes que sí vinieron: fecha_retiro con los datos que tenían y fuera de la
+     * tabla dinámica. El cliente no cambia de estado ni sus contactos, porque le quedan otros CJ asignados.
+     */
+    private int retirarCjs(String tabla, ColumnasCartera col, Map<String, List<Long>> sueltosPorCu,
+                           Map<Long, String> cjPorId, LocalDate fecha) {
+        if (sueltosPorCu.isEmpty()) {
+            return 0;
+        }
+        Map<String, Object[]> datosPorCj = datosEnTabla(tabla, col, sueltosPorCu.keySet());
+        List<Object[]> cierres = new ArrayList<>();
+        List<Object[]> borrados = new ArrayList<>();
+        for (List<Long> ids : sueltosPorCu.values()) {
+            for (Long id : ids) {
+                Object[] d = datosPorCj.getOrDefault(normalizarCj(cjPorId.get(id)), new Object[5]);
+                cierres.add(new Object[]{Date.valueOf(fecha), d[0], d[1], d[2], d[3], id});
+                if (d[4] != null) {
+                    borrados.add(new Object[]{d[4]});
+                }
+            }
+        }
+        cerrar(cierres);
+        if (!borrados.isEmpty()) {
+            jdbcTemplate.batchUpdate("DELETE FROM `" + tabla + "` WHERE `" + col.cj() + "` = ?", borrados);
+        }
+        return cierres.size();
+    }
+
+    /**
+     * Producto, moneda, capital, deuda total y el CJ tal como está guardado, por CJ normalizado, de las filas de esos
+     * clientes en la tabla dinámica.
+     */
+    private Map<String, Object[]> datosEnTabla(String tabla, ColumnasCartera col, Collection<String> cus) {
+        Map<String, Object[]> datosPorCj = new HashMap<>();
+        String select = "SELECT `" + col.cj() + "` AS cj, " + columnaO(col.producto()) + " AS producto, "
+                + columnaO(col.moneda()) + " AS moneda, " + columnaO(col.capital()) + " AS capital, "
+                + columnaO(col.deudaTotal()) + " AS deuda_total FROM `" + tabla + "` WHERE `" + col.cu() + "` IN (";
+        for (List<String> parte : bloques(cus)) {
+            jdbcTemplate.query(select + marcadores(parte.size()) + ")",
+                    rs -> {
+                        String guardado = rs.getString("cj");
+                        String cj = normalizarCj(guardado);
+                        if (cj != null) {
+                            datosPorCj.putIfAbsent(cj, new Object[]{rs.getString("producto"), rs.getString("moneda"),
+                                    rs.getBigDecimal("capital"), rs.getBigDecimal("deuda_total"), guardado});
+                        }
+                    },
+                    parte.toArray());
+        }
+        return datosPorCj;
+    }
+
+    /** Cierra las filas del historial: {fecha_retiro, producto, moneda, capital, deuda_total, id}. */
+    private void cerrar(List<Object[]> cierres) {
+        jdbcTemplate.batchUpdate(
+                "UPDATE cashi_db.historial_cartera SET fecha_retiro = ?, producto = COALESCE(?, producto), "
+                        + "moneda = COALESCE(?, moneda), capital = COALESCE(?, capital), "
+                        + "deuda_total = COALESCE(?, deuda_total) WHERE id = ?",
+                cierres);
     }
 
     private Set<String> cusConRetiro(Integer subcarteraId, Set<String> cus) {
