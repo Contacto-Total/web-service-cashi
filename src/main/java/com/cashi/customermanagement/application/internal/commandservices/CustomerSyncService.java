@@ -1022,7 +1022,7 @@ public class CustomerSyncService {
         // Insertar nuevos contactos
         String insertSql = "INSERT INTO metodos_contacto " +
             "(id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado, estado_osiptel, estado_whatsapp, estado_contactabilidad) " +
-            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE', 'SIN_VALIDAR', 'SIN_VALIDAR', 'NUEVO')";
+            "VALUES (?, ?, ?, ?, ?, CURDATE(), 'ACTIVE', 'SIN_VALIDAR', 'SIN_VALIDAR', 'SIN_MARCAR')";
 
         // Crear contactos desde los datos mapeados
         contactsCreated += insertContactToProduction(insertSql, clientId, "telefono_principal", "telefono", row, preservedManualContacts);
@@ -1082,7 +1082,7 @@ public class CustomerSyncService {
 
         // Preservar estados de validación existentes ANTES del DELETE.
         // Evita que cada carga resetee estado_osiptel / estado_whatsapp / estado_contactabilidad /
-        // estado / fecha_importacion de teléfonos ya validados.
+        // fecha_ultimo_resultado / estado / fecha_importacion de teléfonos ya validados.
         Map<String, Object[]> preservedStates = loadExistingContactStates(clientIdList, tableName, contactSubtypes);
 
         // 2. DELETE en batches de 500 IDs (acotado a los subtipos gestionados)
@@ -1143,11 +1143,13 @@ public class CustomerSyncService {
                             String estado         = (prev != null && prev[0] != null) ? (String) prev[0] : "ACTIVE";
                             String estadoOsiptel  = (prev != null && prev[1] != null) ? (String) prev[1] : "SIN_VALIDAR";
                             String estadoWhatsapp = (prev != null && prev[2] != null) ? (String) prev[2] : "SIN_VALIDAR";
-                            String estadoContact  = (prev != null && prev[3] != null) ? (String) prev[3] : "NUEVO";
+                            String estadoContact  = (prev != null && prev[3] != null) ? (String) prev[3] : "SIN_MARCAR";
+                            Object fechaUltimoResultado = prev != null ? prev[5] : null;
 
                             contactsToInsert.add(new Object[]{
                                 clientId, contactType, subtype, contactValue, subtype,
-                                fechaImportacion, estado, estadoOsiptel, estadoWhatsapp, estadoContact
+                                fechaImportacion, estado, estadoOsiptel, estadoWhatsapp, estadoContact,
+                                fechaUltimoResultado
                             });
                         }
                     }
@@ -1162,8 +1164,8 @@ public class CustomerSyncService {
         }
 
         String insertSql = "INSERT INTO " + tableName +
-            " (id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado, estado_osiptel, estado_whatsapp, estado_contactabilidad) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            " (id_cliente, tipo_contacto, subtipo, valor, etiqueta, fecha_importacion, estado, estado_osiptel, estado_whatsapp, estado_contactabilidad, fecha_ultimo_resultado) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         int insertBatchSize = 1000;
         int totalInserted = 0;
@@ -1184,11 +1186,12 @@ public class CustomerSyncService {
 
     /**
      * Carga los estados existentes de los contactos gestionados ANTES de un DELETE+INSERT,
-     * para preservar las validaciones (estado_osiptel, estado_whatsapp, estado_contactabilidad),
-     * el estado (ACTIVE/INACTIVE) y la fecha_importacion original entre recargas.
+     * para preservar las validaciones (estado_osiptel, estado_whatsapp, estado_contactabilidad y
+     * fecha_ultimo_resultado), el estado (ACTIVE/INACTIVE) y la fecha_importacion original entre recargas.
      *
      * Clave: buildContactKey(id_cliente, tipo_contacto, valor).
-     * Valor: Object[]{ estado, estado_osiptel, estado_whatsapp, estado_contactabilidad, fecha_importacion }.
+     * Valor: Object[]{ estado, estado_osiptel, estado_whatsapp, estado_contactabilidad, fecha_importacion,
+     * fecha_ultimo_resultado }.
      */
     private Map<String, Object[]> loadExistingContactStates(List<Long> clientIds, String tableName, String[] subtypes) {
         Map<String, Object[]> states = new HashMap<>();
@@ -1204,7 +1207,7 @@ public class CustomerSyncService {
             String idPlaceholders = String.join(",", Collections.nCopies(batch.size(), "?"));
             String subtypePlaceholders = String.join(",", Collections.nCopies(subtypes.length, "?"));
             String sql = "SELECT id_cliente, tipo_contacto, valor, estado, estado_osiptel, " +
-                    "estado_whatsapp, estado_contactabilidad, fecha_importacion " +
+                    "estado_whatsapp, estado_contactabilidad, fecha_importacion, fecha_ultimo_resultado " +
                     "FROM " + tableName +
                     " WHERE id_cliente IN (" + idPlaceholders + ")" +
                     " AND subtipo IN (" + subtypePlaceholders + ")";
@@ -1230,7 +1233,8 @@ public class CustomerSyncService {
                         r.get("estado_osiptel"),
                         r.get("estado_whatsapp"),
                         r.get("estado_contactabilidad"),
-                        r.get("fecha_importacion")
+                        r.get("fecha_importacion"),
+                        r.get("fecha_ultimo_resultado")
                 });
             }
         }
