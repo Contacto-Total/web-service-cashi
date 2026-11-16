@@ -15,23 +15,15 @@ import java.time.LocalDate;
 @Builder
 public class ContactMethod {
 
-    // Homologado con com.callcenter.model.MetodoContacto (cashi-discador-backend), que lo calcula
-    // desde la tipificación base de cada gestión.
+    // Homologado con com.callcenter.model.MetodoContacto (cashi-discador-backend).
     public enum EstadoContactabilidad {
-        SIN_MARCAR,
-        NO_CONTACTADO,
-        TERCERO_RELACIONADO,
-        CONTACTO_TITULAR,
-        TERCERO_NO_RELACIONADO,
-        NUMERO_INVALIDO,
-        INVALIDO_CONFIRMADO,
-
-        // Estados del cálculo anterior: el recálculo los reemplaza. Siguen aquí mientras la
-        // columna los admita, para poder leer las filas que aún los tengan.
         NUEVO,
+        NO_CONTACTADO,
         INVALIDO,
         CONTACTADO,
-        CONTACTO_TERCERO
+        CONTACTO_TERCERO,
+        CONTACTO_TITULAR,
+        INVALIDO_CONFIRMADO
     }
 
     public enum EstadoOsiptel {
@@ -93,11 +85,14 @@ public class ContactMethod {
     @Column(name = "estado", length = 50)
     private String status;
 
-    /** Resultado de las gestiones del número (ver EstadoContactabilidad). */
+    /**
+     * Estado de contactabilidad unificado, derivado de la ultima tipificacion.
+     * Valores: NUEVO | NO_CONTACTADO | INVALIDO | CONTACTADO | CONTACTO_TERCERO | CONTACTO_TITULAR | INVALIDO_CONFIRMADO.
+     */
     @Column(name = "estado_contactabilidad", length = 30)
     @Enumerated(EnumType.STRING)
     @Builder.Default
-    private EstadoContactabilidad estadoContactabilidad = EstadoContactabilidad.SIN_MARCAR;
+    private EstadoContactabilidad estadoContactabilidad = EstadoContactabilidad.NUEVO;
 
     /**
      * Estado de validacion vs portal Osiptel.
